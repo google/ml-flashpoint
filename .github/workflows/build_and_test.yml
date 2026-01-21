@@ -41,12 +41,14 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         # Clean up apt cache to save space
-        apt-get clean
-        # rm -rf /var/lib/apt/lists/*
+        sudo apt-get clean
+        sudo rm -rf /var/lib/apt/lists/*
         df -h
         # Install python dependencies (with coverage enabled)
         echo -e "\n##### Running pip install #####"
         pip install -e '.[dev]' --config-settings=cmake.args="-DENABLE_COVERAGE=ON"
+
+    - run: df -h
 
     - name: Test with pytest with coverage enabled
       run: |

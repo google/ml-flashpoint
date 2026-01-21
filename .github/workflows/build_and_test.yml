@@ -35,6 +35,8 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
+    - run: df -h
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
@@ -46,18 +48,33 @@ jobs:
         echo -e "\n##### Running pip install #####"
         pip install -e '.[dev]' --config-settings=cmake.args="-DENABLE_COVERAGE=ON"
 
-    - name: Lint with ruff
+    - name: Test with pytest with coverage enabled
       run: |
-        pip install ruff
-        ruff check .
-        ruff format --check .
+        # Run all tests with coverage (Python and C++)
+        echo -e "\n##### Running Python tests with coverage #####"
+        coverage run --source=src/ml_flashpoint --branch -m pytest -v -s
 
-    - name: Lint with clang-format
+    - name: Check Python test coverage
       run: |
-        # Install and run C++ linter
-        echo -e "\n##### Installing and running clang-format linter #####"
-        apt-get update && apt-get install -y clang-format
-        find src -name '*.cpp' -o -name '*.h' | xargs clang-format --dry-run --Werror
+        # Verify python coverage thresholds
+        echo -e "\n##### Verifying Python coverage thresholds #####"
+        coverage report
+
+    - name: Check C++ test coverage
+      run: |
+        # Run C++ coverage check
+        echo -e "\n##### Running C++ coverage check #####"
+        mkdir -p htmlcov/cpp
+        gcovr --root=. \
+          --filter=src/ml_flashpoint \
+          --exclude=".*/_deps/.*" \
+          --gcov-executable=gcov \
+          --txt-metric branch \
+          --html-details htmlcov/cpp/index.html \
+          --xml-pretty -o cxx-coverage.xml \
+          --sort uncovered-number \
+          --gcov-ignore-parse-errors negative_hits.warn \
+          --gcov-ignore-parse-errors suspicious_hits.warn
 
   lint:
     runs-on: ubuntu-latest
@@ -85,45 +102,3 @@ jobs:
         echo -e "\n##### Installing and running clang-format linter #####"
         apt-get update && apt-get install -y clang-format
         find src -name '*.cpp' -o -name '*.h' | xargs clang-format --dry-run --Werror
-
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: [ "3.10" ]
-
-    steps:
-    - uses: actions/checkout@v3
-
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
-      with:
-        python-version: ${{ matrix.python-version }}
-
-    - name: Test with pytest
-      run: |
-        # Run all tests with coverage (Python and C++)
-        echo -e "\n##### Running Python tests with coverage #####"
-        coverage run --source=src/ml_flashpoint --branch -m pytest -v -s
-
-    - name: Check Python test coverage
-      run: |
-        # Verify python coverage thresholds
-        echo -e "\n##### Verifying Python coverage thresholds #####"
-        coverage report
-
-    - name: Check C++ test coverage
-      run: |
-        # Run C++ coverage check
-        echo -e "\n##### Running C++ coverage check #####"
-        mkdir -p htmlcov/cpp
-        gcovr --root=. \
-          --filter=src/ml_flashpoint \
-          --exclude=".*/_deps/.*" \
-          --gcov-executable=gcov \
-          --txt-metric branch \
-          --html-details htmlcov/cpp/index.html \
-          --xml-pretty -o cxx-coverage.xml \
-          --sort uncovered-number \
-          --gcov-ignore-parse-errors negative_hits.warn \
-          --gcov-ignore-parse-errors suspicious_hits.warn

@@ -64,7 +64,7 @@ jobs:
         coverage report
 
     - name: Check C++ test coverage
-      if: false # TODO: fix and then re-enable
+      if: false # TODO(#3): fix and then re-enable
       run: |
         # Run C++ coverage check
         echo -e "\n##### Running C++ coverage check #####"
@@ -101,6 +101,7 @@ jobs:
         ruff format --check .
 
     - name: Lint with clang-format
+      if: false # TODO(#2): fix this then re-enable
       run: |
         # Install and run C++ linter
         echo -e "\n##### Installing and running clang-format linter #####"

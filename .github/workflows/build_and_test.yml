@@ -81,7 +81,7 @@ jobs:
           --gcov-ignore-parse-errors suspicious_hits.warn
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-32core
     strategy:
       matrix:
         python-version: [ "3.10" ]

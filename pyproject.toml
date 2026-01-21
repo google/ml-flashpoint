@@ -1,0 +1,166 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ===================================================================
+# PEP 621: Project Metadata
+# This section defines the core information about your package.
+# This is what will be displayed on PyPI.
+# ===================================================================
+[project]
+name = "ml-flashpoint"
+version = "0.0.0"
+description = "A memory-first, lightning fast, easy-to-use ML checkpointing library."
+
+# Specifies the minimum version of Python required to install and run this package.
+requires-python = ">=3.10"
+
+# A list of core runtime dependencies. These packages will ALWAYS be installed
+# when a user runs `pip install ml-flashpoint`.
+dependencies = [
+    "typing-extensions==4.15.0",
+]
+
+
+# ===================================================================
+# Optional Dependencies (also known as "extras")
+# These are sets of dependencies that can be installed for specific
+# features or use cases. A user installs them with `pip install .[extra_name]`.
+# All dependencies should be sorted in alphabetical order.
+# ===================================================================
+[project.optional-dependencies]
+
+# An extra for users who want to use this library with just PyTorch.
+# Installed via: `pip install ml-flashpoint[pytorch]`
+pytorch = ["torch==2.8.0"]
+# An extra for users who want to use this library with its Megatron-LM adapter.
+# Installed via: `pip install ml-flashpoint[megatron]`
+megatron = ["megatron_core==0.13.1"]
+# An extra for users who want to use this library with NeMo.
+# Installed via: `pip install ml-flashpoint[nemo]`
+nemo = [
+    "lightning==2.4.0",
+    "ml_flashpoint[pytorch]",
+    "nemo_toolkit[all]==2.4.0",
+]
+
+# An extra for generating the documentation site.
+# Installed via: `pip install ml-flashpoint[docs]`
+docs = [
+    # Documentation static-site-generator (mkdocs) with theme support.
+    "mkdocs-material==9.7.0",
+    # Documentation static-site-generator (mkdocs) with theme support. Successor of mkdocs-material.
+    #"zensical==0.0.11",
+]
+
+# Defines a "dev" extra for setting up a development environment.
+# Installed via: `pip install -e .[dev]`
+dev = [
+    # A more advanced assertion framework.
+    "assertpy==1.1",
+    # Adds the optional pytorch dependency set to the development environment.
+    "ml-flashpoint[pytorch,megatron,nemo,docs]",
+    # Our testing framework.
+    "pytest==8.4.1",
+    # A plugin for pytest that generates code coverage reports for Python.
+    "pytest-cov==7.0.0",
+    # C++ testing plugin for pytest (discovers and runs C++ tests alongside Python tests).
+    "pytest-cpp==2.6.0",
+    # A tool for managing C++ code coverage reports, which can be useful for combining with Python coverage.
+    "gcovr==8.4",
+    # Pytest mocking fixture support.
+    "pytest-mock==3.15.0",
+    # A fast Python linter and code formatter.
+    "ruff==0.12.11",
+]
+
+
+# ===================================================================
+# PEP 518: Build System Definition
+# This section tells `pip` what tools are needed to BUILD your package from source.
+# These are NOT runtime dependencies for the end-user.
+# ===================================================================
+[build-system]
+
+# A list of build-time dependencies. `pip` will install these into a temporary,
+# isolated environment just for the duration of the build process.
+requires = [
+    "pybind11==3.0.1",
+    "scikit-build-core==0.11.6",
+]
+
+# The Python object that `pip` will call to execute the build.
+# This points to the build backend provided by scikit-build-core.
+build-backend = "scikit_build_core.build"
+
+
+# ===================================================================
+# Tool-specific Configuration for scikit-build-core
+# This section configures the behavior of the `scikit-build-core` build tool.
+# ===================================================================
+[tool.scikit-build]
+
+# Specifies the minimum version of CMake that must be present on the system.
+cmake.version = ">=3.18"
+
+# For completeness, ensure sdist contains all C++ fetched dependencies as well by running cmake before building.
+sdist.cmake = true
+
+# Explicit, consistent build-dir (instead of using a temp dir, the default) to speed up rebuilds.
+build-dir = "build/{wheel_tag}"
+
+# The path to the directory containing your top-level `CMakeLists.txt` file.
+# This is where the C/C++ part of the build is defined.
+cmake.source-dir = "."
+
+# Tells scikit-build-core where to find the Python package source code.
+# This ensures that all Python files (`.py`) are included in the final
+# installable wheel alongside the compiled C++ code.
+# Searches standard locations by default. For more info, see:
+# https://scikit-build-core.readthedocs.io/en/latest/configuration/index.html#customizing-the-built-wheel
+# wheel.packages = ["src/ml_flashpoint"]
+
+# ===================================================================
+# Tool-specific Configuration for Ruff
+# ===================================================================
+[tool.ruff]
+# Set the maximum line length for both linter and formatter
+line-length = 120
+# Enable Pyflakes, Pycodestyle, and other standard rules
+lint.select = ["E", "F", "W", "I"]
+# Add the format pseudo-linter
+lint.extend-select = ["RUF100"]
+
+# ===================================================================
+# Tool-specific Configuration for pytest
+# ===================================================================
+[tool.pytest.ini_options]
+norecursedirs = [
+    ".git",
+    "build/**/_deps",
+]
+
+# ===================================================================
+# ===================================================================
+# Tool-specific Configuration for python coverage
+# ===================================================================
+[tool.coverage.report]
+fail_under = 90
+
+# ===================================================================
+# Tool-specific Configuration for cxx coverage
+# ===================================================================
+[tool.gcovr]
+fail-under-line = "85"
+#fail-under-branch = "85"
+

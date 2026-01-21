@@ -102,5 +102,5 @@ jobs:
       run: |
         # Install and run C++ linter
         echo -e "\n##### Installing and running clang-format linter #####"
-        apt-get update && apt-get install -y clang-format
+        sudo apt-get update && sudo apt-get install -y clang-format
         find src -name '*.cpp' -o -name '*.h' | xargs clang-format --dry-run --Werror

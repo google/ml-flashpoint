@@ -59,12 +59,55 @@ jobs:
         apt-get update && apt-get install -y clang-format
         find src -name '*.cpp' -o -name '*.h' | xargs clang-format --dry-run --Werror
 
-    - name: Test with pytest with coverage check
-      run: |
-        # Run Python tests with coverage
-        echo -e "\n##### Running Python tests with coverage #####"
-        coverage run --source=src/ml_flashpoint --branch -m pytest -v -s | ts '[%F %T%z]'
+  lint:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [ "3.10" ]
 
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v3
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Lint with ruff
+      run: |
+        pip install ruff
+        ruff check .
+        ruff format --check .
+
+    - name: Lint with clang-format
+      run: |
+        # Install and run C++ linter
+        echo -e "\n##### Installing and running clang-format linter #####"
+        apt-get update && apt-get install -y clang-format
+        find src -name '*.cpp' -o -name '*.h' | xargs clang-format --dry-run --Werror
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [ "3.10" ]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v3
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Test with pytest
+      run: |
+        # Run all tests with coverage (Python and C++)
+        echo -e "\n##### Running Python tests with coverage #####"
+        coverage run --source=src/ml_flashpoint --branch -m pytest -v -s
+
+    - name: Check Python test coverage
+      run: |
         # Verify python coverage thresholds
         echo -e "\n##### Verifying Python coverage thresholds #####"
         coverage report

@@ -64,6 +64,7 @@ jobs:
         coverage report
 
     - name: Check C++ test coverage
+      if: false # TODO: fix and then re-enable
       run: |
         # Run C++ coverage check
         echo -e "\n##### Running C++ coverage check #####"

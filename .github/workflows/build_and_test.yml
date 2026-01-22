@@ -80,7 +80,7 @@ jobs:
           --gcov-ignore-parse-errors negative_hits.warn \
           --gcov-ignore-parse-errors suspicious_hits.warn
 
-  code-lint:
+  lint-code:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -109,8 +109,10 @@ jobs:
         clang-format --version
         find src -name '*.cpp' -o -name '*.h' | xargs clang-format --dry-run --Werror
 
-  pr-lint:
+  lint-conv-commit:
     runs-on: ubuntu-latest
     steps:
     - name: Verify Conventional Commit In Pull Requests
       uses: ytanikin/pr-conventional-commits@1.5.1
+      with:
+        task_types: '["feat","fix","docs","test","ci","refactor","perf","chore","revert"]'

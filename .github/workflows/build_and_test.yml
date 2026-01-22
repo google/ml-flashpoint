@@ -80,8 +80,8 @@ jobs:
           --gcov-ignore-parse-errors negative_hits.warn \
           --gcov-ignore-parse-errors suspicious_hits.warn
 
-  lint:
-    runs-on: ubuntu-24.04-32core
+  code-lint:
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: [ "3.10" ]
@@ -108,3 +108,9 @@ jobs:
         sudo apt-get update && sudo apt-get install -y clang-format
         clang-format --version
         find src -name '*.cpp' -o -name '*.h' | xargs clang-format --dry-run --Werror
+
+  pr-lint:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Verify Conventional Commit In Pull Requests
+      uses: ytanikin/pr-conventional-commits@1.5.1

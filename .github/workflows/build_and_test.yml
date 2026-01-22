@@ -1,0 +1,110 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Build and Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    # Use larger machine with more disk space
+    runs-on: ubuntu-24.04-32core
+    strategy:
+      matrix:
+        python-version: ["3.10"]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v3
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - run: df -h
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        # Clean up apt cache to save space
+        sudo apt-get clean
+        sudo rm -rf /var/lib/apt/lists/*
+        df -h
+        # Install python dependencies (with coverage enabled)
+        echo -e "\n##### Running pip install #####"
+        pip install -e '.[dev]' --config-settings=cmake.args="-DENABLE_COVERAGE=ON"
+
+    - run: df -h
+
+    - name: Test with pytest with coverage enabled
+      run: |
+        # Run all tests with coverage (Python and C++)
+        echo -e "\n##### Running Python tests with coverage #####"
+        coverage run --source=src/ml_flashpoint --branch -m pytest -v -s
+
+    - name: Check Python test coverage
+      run: |
+        # Verify python coverage thresholds
+        echo -e "\n##### Verifying Python coverage thresholds #####"
+        coverage report
+
+    - name: Check C++ test coverage
+      if: false # TODO(#3): fix and then re-enable
+      run: |
+        # Run C++ coverage check
+        echo -e "\n##### Running C++ coverage check #####"
+        mkdir -p htmlcov/cpp
+        gcovr --root=. \
+          --filter=src/ml_flashpoint \
+          --exclude=".*/_deps/.*" \
+          --gcov-executable=gcov \
+          --txt-metric branch \
+          --html-details htmlcov/cpp/index.html \
+          --xml-pretty -o cxx-coverage.xml \
+          --sort uncovered-number \
+          --gcov-ignore-parse-errors negative_hits.warn \
+          --gcov-ignore-parse-errors suspicious_hits.warn
+
+  lint:
+    runs-on: ubuntu-24.04-32core
+    strategy:
+      matrix:
+        python-version: [ "3.10" ]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v3
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Lint with ruff
+      run: |
+        pip install ruff==0.12.11
+        ruff check .
+        ruff format --check .
+
+    - name: Lint with clang-format
+      if: false # TODO(#2): fix this then re-enable
+      run: |
+        # Install and run C++ linter
+        echo -e "\n##### Installing and running clang-format linter #####"
+        sudo apt-get update && sudo apt-get install -y clang-format
+        clang-format --version
+        find src -name '*.cpp' -o -name '*.h' | xargs clang-format --dry-run --Werror

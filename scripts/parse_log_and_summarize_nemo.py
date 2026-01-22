@@ -35,7 +35,7 @@ def parse_log_file(log_file):
         ),
         (
             re.compile(r"\[NeMo [DI] .*? (fully_parallel):\d+ rank:(\d+)\] parallel save sharding, time: ([\d.eE+-]+)"),
-            "parallel save sharding",
+            "parallel_save_sharding",
         ),
         (re.compile(r"\[NeMo [DI] .*? (state_dict_saver):\d+ rank:(\d+)\] .*?, plan time: ([\d.eE+-]+)"), "plan time"),
         (
@@ -51,14 +51,14 @@ def parse_log_file(log_file):
         ),
         (
             re.compile(r"\[NeMo [DI] .*? (filesystem_async):\d+ rank:(\d+)\] D2H and push, time: ([\d.eE+-]+)"),
-            "D2H and push",
+            "D2H_and_push",
         ),
         (
             re.compile(
                 r"\[NeMo I .*? (nemo_logging):\d+ rank:(\d+)\] Global Checkpoint Save :.*? "
                 r"Save duration: ([\d.eE+-]+)s"
             ),
-            "Global Checkpoint Save",
+            "global_checkpoint_save",
         ),
         (
             re.compile(
@@ -70,7 +70,7 @@ def parse_log_file(log_file):
         (re.compile(r"\[NeMo D .*? (async_utils):\d+ rank:(\d+)\].*? takes ([\d.eE+-]+) to finish D2H"), "finish D2H"),
         (
             re.compile(r"\[NeMo D .*? (async_utils):\d+ rank:(\d+)\].*? takes ([\d.eE+-]+) to schedule async ckpt"),
-            "schedule async ckpt",
+            "schedule_async_ckpt",
         ),
         (
             re.compile(
@@ -88,7 +88,7 @@ def parse_log_file(log_file):
         ),
         (
             re.compile(r"\[NeMo [DI] .*? (filesystem_async):\d+ rank:(\d+)\] .*? write\(sync,parallel\): ([\d.eE+-]+)"),
-            "write sync parallel",
+            "write_sync_parallel",
         ),
         (
             re.compile(
@@ -102,7 +102,7 @@ def parse_log_file(log_file):
                 r"\[NeMo D .*? (async_utils):\d+ rank:(\d+)\] "
                 r"TemporalAsyncCaller: Async process join finished after ([\d.eE+-]+)s from forking"
             ),
-            "async process join",
+            "async_process_join",
         ),
         (re.compile(r"\[NeMo D .*? (state_dict_saver):\d+ rank:(\d+)\].*?, gather: ([\d.eE+-]+)"), "gather"),
         (
@@ -118,7 +118,7 @@ def parse_log_file(log_file):
         (re.compile(r"\[NeMo D .*? (utils):\d+ rank:(\d+)\] finalize took ([\d.eE+-]+)s"), "finalize"),
         (
             re.compile(r"\[NeMo I .*? (nemo_logging):\d+ rank:(\d+)\] Async finalization time took ([\d.eE+-]+) s"),
-            "Async finalization time",
+            "async_finalization_time",
         ),
         (
             re.compile(

@@ -34,9 +34,9 @@ These tests were conducted using ML Flashpoint _alongside_ NeMo's recommended ch
 * **Zero-Friction Integration**: Integration points are defined by working backward from actual customer use cases to ensure a seamless developer experience.
 So reach out by raising an issue if there's a framework you want to be supported!
 
-## System Requirements
+## System/Environment Requirements
 
-To use ML Flashpoint, the basic requirements are:
+To use ML Flashpoint, the basic requirements for the training environment are:
 
 1. Python 3.10 or later.
 1. Linux operating system on the training nodes.
@@ -45,9 +45,11 @@ This is enforced so that the pairwise strategy doesn't put a higher memory burde
 1. A `tmpfs` mount is strongly recommended to be used for the container base path, that is separate from `/dev/shm`.
 E.g. a `/tmp` mount, which can be added to `/etc/fstab` on Linux machines to mount it persistently (A3-Mega example):
     1. `tmpfs         /tmp            tmpfs           rw,nosuid,nodev,size=1024G,mode=1777,noswap,huge=within_size   0 0`
-    1. `noswap` is recommended to avoid degrading performance, and the size is typically set to half of the compute node's available host RAM.
-    1. `huge=within_size` is recommended to use huge pages for larger files since checkpoint data is on the order of many GBs.
-    1. The amount of memory needed is at least equal to the checkpoint size per node x 4, to account for replicas and in-progress checkpoints. Typically, `/tmp` is set to 50% of host RAM (higher is OK).
+    1. `huge=within_size` is recommended to use huge pages for any files large enough, since checkpoint data is on the order of many GBs.
+    1. `noswap` is recommended to avoid degrading performance.
+   This can be omitted if you prefer to allow transparent disk swapping to accommodate more checkpoint storage than can fit in memory, at the cost of poorer checkpointing performance.
+    1. The amount of memory needed is at least equal to the checkpoint size per node x 4, to account for replicas and in-progress checkpoints. 
+   Typically, `/tmp` is set to 50% of host RAM (higher is OK).
 1. The base container specified for ML Flashpoint should be specific to the running job ID, which will store all checkpoints for that job, and will be used for recovery in that particular job.
 The job ID is important to include in the path because it ensures that different training jobs do not conflict, and that recovery is done correctly.
     * The assumption is that a new job ID is assigned for every new training job, and that it is reused when a job is resumed or re-queued due to an interruption.

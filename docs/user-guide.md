@@ -24,8 +24,6 @@ pip install -e ml-flashpoint[nemo]
 
 See the project's [README](http://cs/h/cloud-mlnet/ml-flashpoint/+/main:README.md) and [pyproject.toml](http://cs/h/cloud-mlnet/ml-flashpoint/+/main:pyproject.toml) for the latest and more detailed info.
 
-If you don't have permission, [contact us](troubleshooting.md#contact).
-
 ## Frameworks
 
 ### NeMo 2.0 & Pytorch Lightning

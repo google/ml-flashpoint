@@ -1,3 +1,7 @@
+# Pre-GitHub Migration Releases
+
+These are releases that were created prior to migrating to GitHub, for historical purposes.
+
 ## v0.0.3
 
 _Release Notes: v0.0.2 -> 5e049c394923573331c2ed53e4f1cfeb8fd5d655_

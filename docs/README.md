@@ -21,6 +21,8 @@ ML Flashpoint saves checkpoints to shared memory, to be able to recover when the
 Replication has not been observed to have any negative impact on ongoing training or overall job time.
 See the [overview](overview.md) for more detail.
 
+### Performance
+
 In some tests on 4 [A3-Mega](https://docs.cloud.google.com/compute/docs/accelerator-optimized-machines#a3-mega-vms) nodes for Gemma 27B and Llama 70B pre-training for just 300 steps, we see improvements averaging **3-6%** for overall job time, with peaks of **5-10%** improvements.
 These tests were conducted using ML Flashpoint _alongside_ NeMo's recommended checkpointing (as you would in production), where NeMo's default checkpointing used a 7-10 TB [Filestore](https://cloud.google.com/filestore) instance.
 
@@ -37,6 +39,7 @@ So reach out by raising an issue if there's a framework you want to be supported
 To use ML Flashpoint, the basic requirements are:
 
 1. Python 3.10 or later.
+1. Linux operating system on the training nodes.
 1. An even number of training nodes, to use the pairwise replication strategy.
 This is enforced so that the pairwise strategy doesn't put a higher memory burden on one node than the others, and so the general capacity requirements are roughly consistent across nodes.
 1. A `tmpfs` mount is strongly recommended to be used for the container base path, that is separate from `/dev/shm`.
@@ -51,7 +54,7 @@ The job ID is important to include in the path because it ensures that different
     * The recovery logic typically (when configured correctly) always checks at job start whether some complete checkpoint is available in the job's checkpoint container, and if so will load it and resume from there.
 1. When a job recovers after some interruption, it should _reuse all the same machines_ it initially used that are still healthy, only replacing machines that need to be replaced.
 (If a process can be restarted without replacing the machine, recovery will be even quicker.)
-Given checkpointing state is kept in-memory, this is essential to take advantage of ML Flashpoint checkpoints and be able to recover from it.
+Given checkpointing state is kept in-memory, this is essential to take advantage of ML Flashpoint checkpoints and be able to recover from them.
 If the job is resumed or re-queued on a different set of nodes, or with a different job ID, there will be no ML Flashpoint state to recover from, forcing a fallback to the long-term storage checkpoints, which is slower.
 
 ## Framework Layers

@@ -7,7 +7,9 @@ Below are instructions for using ML Flashpoint with the different frameworks sup
 You can install from source:
 
 ```bash
-git clone "sso://cloud-mlnet/ml-flashpoint"
+# Clone the repo
+git clone https://github.com/google/ml-flashpoint.git
+# Install in editable mode
 pip install -e ml-flashpoint
 ```
 

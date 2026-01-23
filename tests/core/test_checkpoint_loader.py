@@ -14,8 +14,10 @@
 
 import dataclasses
 import io
+import json
 import logging
 import pickle
+import struct
 import tempfile
 from pathlib import Path
 from typing import Dict, Tuple
@@ -34,6 +36,7 @@ from torch.distributed.checkpoint.planner import (
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.checkpoint_loader import DefaultMLFlashpointCheckpointLoader, MLFlashpointCheckpointLoader
+from ml_flashpoint.core.defaults import MAGIC_BYTES
 from ml_flashpoint.replication.replication_manager import ReplicationManager
 
 _LOGGER = logging.getLogger(__name__)
@@ -308,6 +311,65 @@ class TestReadTensor:
         # Act & Assert
         with pytest.raises(IndexError):
             self.loader.read_tensor(buffer_slice, req)
+
+    def test_read_tensor_optimized_format(self):
+        """test_read_tensor detects magic bytes and uses zero-copy path."""
+        # Arrange
+        tensor = torch.tensor([1, 2, 3], dtype=torch.int32)
+
+        # Manually create optimized format buffer
+        metadata = {
+            "dtype": "int32",
+            "shape": list(tensor.shape),
+        }
+        json_bytes = json.dumps(metadata).encode("utf-8")
+        header_len = len(json_bytes)
+        # MAGIC_BYTES + LEN + JSON + DATA
+        buffer_data = MAGIC_BYTES + struct.pack("<I", header_len) + json_bytes
+
+        # Get raw bytes (tensor.numpy().tobytes() works for CPU tensors)
+        raw_data = tensor.numpy().tobytes()
+        buffer_data += raw_data
+
+        buffer_slice = io.BytesIO(buffer_data)
+
+        req = ReadItem(
+            type=LoadItemType.TENSOR,
+            storage_index=0,
+            storage_offsets=(0,),
+            lengths=(len(buffer_data),),
+            dest_index=(0,),
+            dest_offsets=(0,),
+        )
+
+        # Act
+        result_tensor = self.loader.read_tensor(buffer_slice, req)
+
+        # Assert
+        assert torch.equal(result_tensor, tensor)
+
+    def test_read_tensor_fallback_legacy(self):
+        """test_read_tensor falls back to torch.load if magic bytes missing."""
+        # Arrange
+        tensor = torch.tensor([4, 5, 6], dtype=torch.float32)
+        buffer = io.BytesIO()
+        torch.save(tensor, buffer)
+        buffer.seek(0)
+
+        req = ReadItem(
+            type=LoadItemType.TENSOR,
+            storage_index=0,
+            storage_offsets=(0,),
+            lengths=(buffer.getbuffer().nbytes,),
+            dest_index=(0,),
+            dest_offsets=(0,),
+        )
+
+        # Act
+        result_tensor = self.loader.read_tensor(buffer, req)
+
+        # Assert
+        assert torch.equal(result_tensor, tensor)
 
     @pytest.mark.skip(reason="Test skipped until it is setup properly.")
     def test_read_tensor_with_weights_only_behavior(self):

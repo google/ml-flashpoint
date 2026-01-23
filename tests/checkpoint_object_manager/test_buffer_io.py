@@ -274,6 +274,67 @@ class TestWriteOperations:
         )
 
 
+class TestGetBufferSlice:
+    def test_get_buffer_slice_returns_correct_view(self, writable_buffer_obj):
+        """Test: get_buffer_slice returns a valid memoryview into the buffer."""
+        bio = BufferIO(writable_buffer_obj)
+        # Write some initial data
+        bio.write(b"prefix")
+        assert bio.tell() == 6
+
+        # Get a slice of 10 bytes
+        mv = bio.get_buffer_slice(10)
+        assert isinstance(mv, memoryview)
+        assert len(mv) == 10
+        assert not mv.readonly
+
+        # Write to the slice
+        mv[:] = b"0123456789"
+
+        # Verify position advanced
+        assert bio.tell() == 16
+
+        # Verify data in buffer
+        bio.seek(6)
+        data = bio.read(10)
+        assert data == b"0123456789"
+
+    def test_get_buffer_slice_validates_size(self, writable_buffer_obj):
+        """Test: get_buffer_slice raises ValueError for invalid sizes."""
+        bio = BufferIO(writable_buffer_obj)
+
+        # Negative size
+        with pytest.raises(ValueError, match="Size must be non-negative"):
+            bio.get_buffer_slice(-1)
+
+        # Size exceeding capacity
+        capacity = len(memoryview(writable_buffer_obj)) - METADATA_SIZE
+        with pytest.raises(ValueError, match="exceeds buffer capacity"):
+            bio.get_buffer_slice(capacity + 1)
+
+    def test_get_buffer_slice_updates_metadata(self, writable_buffer_obj):
+        """Test: getting a slice updates the len_written_data metadata."""
+        bio = BufferIO(writable_buffer_obj)
+        bio.get_buffer_slice(5)
+
+        # Check metadata
+        meta = BufferMetadataType.from_buffer(memoryview(writable_buffer_obj))
+        assert meta.len_written_data == 5
+
+    def test_get_buffer_slice_on_readonly_raises_error(self, readonly_buffer_obj):
+        """Test: calling get_buffer_slice on readonly buffer raises error."""
+        bio = BufferIO(readonly_buffer_obj)
+        with pytest.raises(TypeError, match="Operation 'write' is not supported in read-only mode"):
+            bio.get_buffer_slice(10)
+
+    def test_get_buffer_slice_on_closed_raises_error(self, writable_buffer_obj):
+        """Test: calling get_buffer_slice on closed buffer raises error."""
+        bio = BufferIO(writable_buffer_obj)
+        bio.close()
+        with pytest.raises(ValueError, match="I/O operation on a closed BufferIO object"):
+            bio.get_buffer_slice(10)
+
+
 class TestReadOperations:
     def test_read_successful_and_updates_position(self, writable_buffer_obj):
         """

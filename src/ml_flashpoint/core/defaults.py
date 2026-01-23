@@ -18,6 +18,9 @@ DIRTY_MARKER_SUFFIX = "unfinished"
 GLOBAL_RANK_PATTERN = re.compile(r"src(\d+)")
 COMMON_STATE_FNAME = "common.pt"
 
+# Magic bytes to identify our custom tensor format (8 bytes)
+MAGIC_BYTES = b"MLF_TENS"
+
 
 def default_metadata_object_name() -> str:
     """Returns the default object name for metadata files (i.e. filename).

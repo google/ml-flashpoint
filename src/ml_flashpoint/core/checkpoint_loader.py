@@ -15,10 +15,12 @@
 import abc
 import fcntl
 import io
+import json
 import logging
 import os
 import pickle
 import re
+import struct
 from collections import defaultdict
 from pathlib import Path
 from typing import IO, List, Optional, Tuple, TypeVar, cast
@@ -42,6 +44,7 @@ from ml_flashpoint.core.defaults import (
     COMMON_STATE_FNAME,
     DIRTY_MARKER_SUFFIX,
     GLOBAL_RANK_PATTERN,
+    MAGIC_BYTES,
     default_metadata_object_name,
 )
 from ml_flashpoint.core.mlf_logging import get_logger
@@ -168,10 +171,35 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         Returns:
             torch.Tensor: read tensor.
         """
-        tensor = cast(
-            torch.Tensor,
-            torch.load(cast(IO[bytes], buffer_slice), map_location="cpu", weights_only=True),
-        )
+        # Peek at magic bytes
+        pos = buffer_slice.tell()
+        magic = buffer_slice.read(len(MAGIC_BYTES))
+        buffer_slice.seek(pos)
+
+        if magic == MAGIC_BYTES:
+            # New optimized format
+            buffer_slice.seek(pos + len(MAGIC_BYTES))
+
+            # Read header length
+            len_bytes = buffer_slice.read(4)
+            header_len = struct.unpack("<I", len_bytes)[0]
+
+            # Read header
+            json_bytes = buffer_slice.read(header_len)
+            metadata = json.loads(json_bytes.decode("utf-8"))
+
+            tensor_dtype = getattr(torch, metadata["dtype"])
+            tensor_shape = metadata["shape"]
+            data_bytes = buffer_slice.read()
+            tensor = torch.frombuffer(data_bytes, dtype=tensor_dtype)
+            tensor = tensor.reshape(tensor_shape)
+        else:
+            # Fallback to legacy torch.load
+            tensor = cast(
+                torch.Tensor,
+                torch.load(cast(IO[bytes], buffer_slice), map_location="cpu", weights_only=True),
+            )
+
         return narrow_tensor_by_index(tensor, req.storage_offsets, req.lengths)
 
     def _try_retrieve_object_if_missing(self, checkpoint_object_id: CheckpointObjectId) -> bool:

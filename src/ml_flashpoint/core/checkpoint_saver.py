@@ -16,10 +16,12 @@ import abc
 import concurrent.futures
 import dataclasses
 import io
+import json
 import logging
 import os
 import pickle
 import queue
+import struct
 import threading
 from typing import Callable, Optional, Protocol, Union
 
@@ -33,7 +35,7 @@ from typing_extensions import override
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.checkpoint_object_manager.object_manager import object_manager_ext
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
-from ml_flashpoint.core.defaults import DIRTY_MARKER_SUFFIX, default_metadata_object_name
+from ml_flashpoint.core.defaults import DIRTY_MARKER_SUFFIX, MAGIC_BYTES, default_metadata_object_name
 from ml_flashpoint.core.mlf_logging import get_logger
 from ml_flashpoint.core.utils import log_execution_time
 from ml_flashpoint.replication.replication_manager import ReplicationManager
@@ -294,6 +296,7 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         ckpt_obj_manager: CheckpointObjectManager,
         replication_manager: ReplicationManager,
         initial_buffer_size_bytes: int = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
+        use_optimized_save: bool = True,
     ):
         """Initializes the DefaultMLFlashpointCheckpointSaver.
 
@@ -307,6 +310,8 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
                 across nodes.
             initial_buffer_size_bytes: The initial buffer size in bytes to use
                 for writing data.
+            use_optimized_save: Whether to use the optimized zero-copy tensor saving.
+                Defaults to True.
         """
         self._global_rank_getter = global_rank_getter
         self._local_rank_getter = local_rank_getter
@@ -314,6 +319,7 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         self._chkpt_obj_manager = ckpt_obj_manager
         self._replication_manager = replication_manager
         self._initial_buffer_size_bytes = initial_buffer_size_bytes
+        self._use_optimized_save = use_optimized_save
 
     @override
     @log_execution_time(logger=_LOGGER, name="initialize_checkpoint")
@@ -618,7 +624,10 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
                     for tensor_item, tensor in tensor_tuples:
                         write_start_offset = buffer_io_writer.tell()
 
-                        torch.save(tensor, buffer_io_writer)
+                        if self._use_optimized_save:
+                            self._save_tensor_optimized(tensor, buffer_io_writer)
+                        else:
+                            torch.save(tensor, buffer_io_writer)
 
                         num_bytes_written = buffer_io_writer.tell() - write_start_offset
                         item_storage_data = _StorageInfo(
@@ -690,3 +699,47 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
                     siblings_to_delete.add(full_path)
 
         return object_manager_ext.delete_directories_async(list(siblings_to_delete))
+
+    def _save_tensor_optimized(self, tensor: torch.Tensor, buffer_io_writer):
+        """Saves a tensor to the buffer using a zero-copy approach where possible.
+
+        NOTE: This method saves the tensor's data in a C-contiguous format,
+        regardless of its original memory layout (stride).
+        The stride information is not saved.
+
+        Format:
+        [8 bytes MAGIC] [4 bytes HEADER_LEN] [HEADER_BYTES (JSON)] [RAW_BYTES]
+
+        Args:
+            tensor: The tensor to save.
+            buffer_io_writer: The BufferIO instance to write to.
+        """
+        # Metadata
+        metadata = {
+            "dtype": str(tensor.dtype).replace("torch.", ""),
+            "shape": list(tensor.shape),
+        }
+        json_bytes = json.dumps(metadata).encode("utf-8")
+        header_len = len(json_bytes)
+
+        # Write Header (Magic + Len + JSON)
+        # using struct pack for length (unsigned int)
+        header_data = MAGIC_BYTES + struct.pack("<I", header_len) + json_bytes
+        buffer_io_writer.write(header_data)
+
+        # Write Data (Zero Copy)
+        num_bytes = tensor.numel() * tensor.element_size()
+
+        # Get a writable slice of the underlying C++ buffer
+        try:
+            dest_mv = buffer_io_writer.get_buffer_slice(num_bytes)
+        except AttributeError:
+            _LOGGER.exception("BufferIO does not support get_buffer_slice, try to disable use_optimized_save.")
+            raise
+
+        # Create a tensor wrapper around the buffer slice
+        dest_tensor = torch.frombuffer(dest_mv, dtype=tensor.dtype, count=tensor.numel())
+        dest_tensor = dest_tensor.reshape(tensor.shape)
+
+        # Perform the actual copy.
+        dest_tensor.copy_(tensor)

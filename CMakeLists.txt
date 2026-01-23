@@ -77,4 +77,4 @@ endif()
 add_subdirectory(src/ml_flashpoint/checkpoint_object_manager/buffer_object)
 add_subdirectory(src/ml_flashpoint/checkpoint_object_manager/object_manager)
 add_subdirectory(src/ml_flashpoint/replication/transfer_service)
-add_subdirectory(src/ml_flashpoint/example_cpp)
+

@@ -23,7 +23,7 @@ See the [overview](overview.md) for more detail.
 
 ### Performance
 
-In some tests on 4 [A3-Mega](https://docs.cloud.google.com/compute/docs/accelerator-optimized-machines#a3-mega-vms) nodes for Gemma 27B and Llama 70B pre-training for just 300 steps, we see improvements averaging **3-6%** for overall job time, with peaks of **5-10%** improvements.
+In some tests on a [Vertex AI Training Cluster](https://docs.cloud.google.com/vertex-ai/docs/training/training-clusters/overview) with 4 [A3-Mega](https://docs.cloud.google.com/compute/docs/accelerator-optimized-machines#a3-mega-vms) nodes for Gemma 27B and Llama 70B pre-training over just 300 steps, we see improvements averaging **3-6%** for overall job time, with peaks of **5-10%** improvements.
 These tests were conducted using ML Flashpoint _alongside_ NeMo's recommended checkpointing (as you would in production), where NeMo's default checkpointing used a 7-10 TB [Filestore](https://cloud.google.com/filestore) instance.
 
 ## Design Philosophy

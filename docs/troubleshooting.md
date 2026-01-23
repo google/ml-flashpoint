@@ -35,4 +35,4 @@ To quickly disable ML Flashpoint:
 
 ## Contact
 
-To raise bugs, questions or feature requests, please create a GitHub issue.
+To raise bugs, questions or feature requests, please see if there is already an [issue](https://github.com/google/ml-flashpoint/issues) for it, and if not, create a [new one](https://github.com/google/ml-flashpoint/issues/new/choose).

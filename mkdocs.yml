@@ -14,7 +14,7 @@
 
 # yaml-language-server: $schema=https://squidfunk.github.io/mkdocs-material/schema.json
 
-site_name: ML Flashpoint Docs
+site_name: ML Flashpoint Docs [WIP]
 site_url: https://google.github.io/ml-flashpoint
 
 nav:
@@ -23,7 +23,6 @@ nav:
   - "Overview": overview.md
   # Keep Troubleshooting at the end.
   - "Troubleshooting": troubleshooting.md
-  - "Changelog": changelog.md
 
 theme:
   name: material

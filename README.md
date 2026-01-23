@@ -2,6 +2,9 @@
 
 A memory-first, lightning-fast, ready-to-use ML checkpointing library.
 
+For using the library, check out the [user documentation](https://google.github.io/ml-flashpoint). 
+Below you will find development instructions for contributors.
+
 ## Installation
 
 This library defines core dependencies, as well as additional optional dependencies for specific adapters, to avoid polluting consumers with unnecessary dependencies.
@@ -41,7 +44,9 @@ As of this writing, the project uses Python 3.10, due to limitations in NeMo's d
 
 To confirm, see which versions of python come up when tab-completing `python` in your shell.
 
-Follow the instructions here to install `pyenv`, and specify `3.10` as the version to install: go/g3doc-tfx-environment-setup#pyenv
+You could install `pyenv` to manage different Python versions: https://github.com/pyenv/pyenv?tab=readme-ov-file#installation.
+
+And then install the desired Python version with it e.g. `pyenv install 3.10`.
 
 ### Build and Installation
 
@@ -120,10 +125,9 @@ feat(adapter/nemo): implement the callback to trigger MLFlashpoint checkpoints
 
 We use release tags of the form `vX.Y.Z` for production releases, following [semver](https://semver.org/), starting with [zerover](https://0ver.org/).
 
-Currently, tags must be created in the Gerrit UI at `<cloud-mlnet-review base URL>/admin/repos/ml-flashpoint/tags`.
-**Make sure to follow the expected format, and create from a commit on main (see requirements below).**
+Releases should be created as GitHub Releases, which can be done [here](https://github.com/google/ml-flashpoint/releases/new).
 
-The helper script `create_release.py` will generate release notes that can be added to our docs releases page, until we migrate to GitHub and can create releases there directly.
+The helper script `create_release.py` will generate release notes that can be added to the Release.
 
 Command: `./scripts/create_release.py`.
 Add `-h` for help.
@@ -141,3 +145,5 @@ User documentation is all maintained in the `docs/` directory, and is generated 
 See the `.example-syntax.md` file for guidance on certain supported syntax.
 
 When making changes, you can view them locally via `mkdocs serve`.
+
+Once changes are merged to `main`, they are automatically deployed to the documentation site, available at https://google.github.io/ml-flashpoint.

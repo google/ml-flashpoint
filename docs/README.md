@@ -21,7 +21,10 @@ ML Flashpoint saves checkpoints to shared memory, to be able to recover when the
 Replication has not been observed to have any negative impact on ongoing training or overall job time.
 See the [overview](overview.md) for more detail.
 
-In some tests on 4 [A3-Mega](https://docs.cloud.google.com/compute/docs/accelerator-optimized-machines#a3-mega-vms) nodes for Gemma 27B and Llama 70B pre-training for just 300 steps, we see improvements averaging **3-6%** for overall job time, with peaks of **5-10%** improvements.
+### Performance
+
+In some tests on a [Vertex AI Training Cluster](https://docs.cloud.google.com/vertex-ai/docs/training/training-clusters/overview) with 4 [A3-Mega](https://docs.cloud.google.com/compute/docs/accelerator-optimized-machines#a3-mega-vms) nodes for Gemma 27B and Llama 70B pre-training over just 300 steps, we see improvements averaging **3-6%** for overall job time, with peaks of **5-10%** improvements.
+These improvements only account for checkpoint save efficiency - checkpoint load times were 7-10x faster for Gemma 27B on the same training cluster.
 These tests were conducted using ML Flashpoint _alongside_ NeMo's recommended checkpointing (as you would in production), where NeMo's default checkpointing used a 7-10 TB [Filestore](https://cloud.google.com/filestore) instance.
 
 ## Design Philosophy
@@ -32,26 +35,29 @@ These tests were conducted using ML Flashpoint _alongside_ NeMo's recommended ch
 * **Zero-Friction Integration**: Integration points are defined by working backward from actual customer use cases to ensure a seamless developer experience.
 So reach out by raising an issue if there's a framework you want to be supported!
 
-## System Requirements
+## System/Environment Requirements
 
-To use ML Flashpoint, the basic requirements are:
+To use ML Flashpoint, the basic requirements for the training environment are:
 
 1. Python 3.10 or later.
+1. Linux operating system on the training nodes.
 1. An even number of training nodes, to use the pairwise replication strategy.
 This is enforced so that the pairwise strategy doesn't put a higher memory burden on one node than the others, and so the general capacity requirements are roughly consistent across nodes.
 1. A `tmpfs` mount is strongly recommended to be used for the container base path, that is separate from `/dev/shm`.
 E.g. a `/tmp` mount, which can be added to `/etc/fstab` on Linux machines to mount it persistently (A3-Mega example):
     1. `tmpfs         /tmp            tmpfs           rw,nosuid,nodev,size=1024G,mode=1777,noswap,huge=within_size   0 0`
-    1. `noswap` is recommended to avoid degrading performance, and the size is typically set to half of the compute node's available host RAM.
-    1. `huge=within_size` is recommended to use huge pages for larger files since checkpoint data is on the order of many GBs.
-    1. The amount of memory needed is at least equal to the checkpoint size per node x 4, to account for replicas and in-progress checkpoints. Typically, `/tmp` is set to 50% of host RAM (higher is OK).
+    1. `huge=within_size` is recommended to use huge pages for any files large enough, since checkpoint data is on the order of many GBs.
+    1. `noswap` is recommended to avoid degrading performance.
+   This can be omitted if you prefer to allow transparent disk swapping to accommodate more checkpoint storage than can fit in memory, at the cost of poorer checkpointing performance.
+    1. The amount of memory needed is at least equal to the checkpoint size per node x 4, to account for replicas and in-progress checkpoints. 
+   Typically, `/tmp` is set to 50% of host RAM (higher is OK).
 1. The base container specified for ML Flashpoint should be specific to the running job ID, which will store all checkpoints for that job, and will be used for recovery in that particular job.
 The job ID is important to include in the path because it ensures that different training jobs do not conflict, and that recovery is done correctly.
     * The assumption is that a new job ID is assigned for every new training job, and that it is reused when a job is resumed or re-queued due to an interruption.
     * The recovery logic typically (when configured correctly) always checks at job start whether some complete checkpoint is available in the job's checkpoint container, and if so will load it and resume from there.
 1. When a job recovers after some interruption, it should _reuse all the same machines_ it initially used that are still healthy, only replacing machines that need to be replaced.
 (If a process can be restarted without replacing the machine, recovery will be even quicker.)
-Given checkpointing state is kept in-memory, this is essential to take advantage of ML Flashpoint checkpoints and be able to recover from it.
+Given checkpointing state is kept in-memory, this is essential to take advantage of ML Flashpoint checkpoints and be able to recover from them.
 If the job is resumed or re-queued on a different set of nodes, or with a different job ID, there will be no ML Flashpoint state to recover from, forcing a fallback to the long-term storage checkpoints, which is slower.
 
 ## Framework Layers

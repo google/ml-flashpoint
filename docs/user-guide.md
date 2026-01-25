@@ -115,9 +115,14 @@ Below are instructions for setting up ML Flashpoint checkpointing, which you sho
 #### Save Strategy
 
 First create a `MemoryStorageWriter`  instance as outlined in [PyTorch DCP](#pytorch-dcp).
-Then use that to instantiate the Megatron save strategy:
+Then use that to instantiate the Megatron save strategy.
 
 ```python
+from ml_flashpoint.adapter.pytorch.memory_storage_writer import MemoryStorageWriter
+from ml_flashpoint.adapter.megatron.save_strategies import (
+    MLFlashpointMegatronAsyncSaveStrategy,
+)
+
 # Instantiate the MemoryStorageWriter
 memory_storage_writer = MemoryStorageWriter(...)
 
@@ -138,12 +143,18 @@ Instantiate the singleton `ReplicationManager` with a singleton `CheckpointObjec
 Also create an `MLFlashpointCheckpointLoader` with those dependencies, and use these instances to create the load strategy:
 
 ```python
+from ml_flashpoint.adapter.megatron.load_strategies import MLFlashpointMegatronLoadStrategy
+from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
+from ml_flashpoint.core.checkpoint_loader import DefaultMLFlashpointCheckpointLoader
+from ml_flashpoint.replication.replication_manager import ReplicationManager
+
+
 # Initialize dependencies (shared singletons)
 checkpoint_object_manager = CheckpointObjectManager()
 replication_manager = ReplicationManager()
 replication_manager.initialize(checkpoint_object_manager)
 
-checkpoint_loader = MLFlashpointCheckpointLoader(
+checkpoint_loader = DefaultMLFlashpointCheckpointLoader(
     checkpoint_object_manager=checkpoint_object_manager,
     replication_manager=replication_manager,
 )
@@ -158,6 +169,8 @@ mlflashpoint_load_strategy = MLFlashpointMegatronLoadStrategy(
 Now you can use the load strategy with Megatron-LM's `dist_checkpointing.load` function directly:
 
 ```python
+from megatron.core import dist_checkpointing as mcore_dist_checkpointing
+
 # First determine if an ML Flashpoint checkpoint is available, using the base container path you've configured
 local_checkpoint_container = checkpoint_loader.get_latest_complete_checkpoint(checkpoint_base_container)
 

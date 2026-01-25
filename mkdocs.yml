@@ -53,7 +53,7 @@ plugins:
         python:
           options:
             docstring_style: google # Matches project convention
-            show_source: true
+            show_source: false
             show_root_heading: true
             show_root_full_path: false
 

@@ -47,6 +47,15 @@ plugins:
   # - nav-weight # To allow specifying nav_weight: <int> at the top of a doc for ordering
   # To enable generating documentation that can be served from a local filesystem.
   # - offline
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google # Matches project convention
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
 
 markdown_extensions:
   - admonition

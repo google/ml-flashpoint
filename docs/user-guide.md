@@ -15,7 +15,7 @@ pip install -e ml-flashpoint
 
 This assumes you are managing your own dependencies for PyTorch, Megatron-LM, NeMo, etc.
 
-To install with adapter specific dependencies, specify the adapter of interest, such as `nemo`, `megatron`, `pytorch`:
+To install with this library's adapter-specific dependencies, specify the adapter of interest, such as `nemo`, `megatron`, `pytorch`:
 
 ```bash
 # Example for the NeMo adapter.
@@ -28,7 +28,7 @@ See the project's [README](http://cs/h/cloud-mlnet/ml-flashpoint/+/main:README.m
 
 ### NeMo 2.0 & Pytorch Lightning
 
-Code: Check out the `adapter/nemo` package.
+Code: See the `ml_flashpoint.adapter.nemo` package.
 
 !!! note
 
@@ -55,7 +55,9 @@ mlflashpoint_base_path = _get_my_mlf_base_path()
 os.makedirs(mlflashpoint_base_path, exist_ok=True)
 ```
 
-2. Configure the callback, to trigger saves periodically.
+See the [system requirements](README.md#systemenvironment-requirements) for how to set up the filesystem to use.
+
+2. Configure the callback to trigger saves periodically.
 ```python
 # Add this callback to your Trainer's callbacks.
 callbacks.append(
@@ -77,13 +79,13 @@ auto_resume = nemo.lightning.AutoResume(...)
 # ML Flashpoint APIs below (and its AutoResume), to initialize replication.
 trainer.strategy.setup_environment()
 
-# Wrap the trainer and AutoResume to configure ML Flashpoint.
+# Wrap the trainer and AutoResume to configure ML Flashpoint using the provided helper.
 auto_resume = wrap_trainer_and_auto_resume_with_mlflashpoint(
     trainer=trainer, # The PyTorch Lightning Trainer
     flashpoint_base_container=mlflashpoint_base_path,
     async_save=not args.sync_save,
     default_auto_resume=auto_resume, # Optional
-    # always_save_context=True, # Optional, defaults to False
+    # always_save_context=False, # Optional, defaults to False
     # write_thread_count=1, # Optional, defaults to 1
     # initial_write_buffer_size_bytes=DESIRED_NUM_BYTES, # Optional, defaults to 16 GB
 )
@@ -95,7 +97,7 @@ A complete recipe example that puts this all together can be found [here](http:/
 
 Limitations:
 
-1. Must use the `MegatronStrategy` as the strategy for your PyTorch Lightning Trainer.
+1. You must use the `MegatronStrategy` as the strategy for your PyTorch Lightning Trainer.
 Other strategies have not been tested.
 1. Ensure that the `base_container` for ML Flashpoint is job-specific (i.e. has a job ID in it), and on some ramdisk path (e.g. tmpfs).
 The job ID should be unique across jobs, but sticky (reused) when a job is interrupted and restarted/rescheduled (so it can recover from the latest checkpoint available for that particular job).
@@ -105,8 +107,79 @@ This reduces blocking time by avoiding duplicate work, at the cost of having a l
 
 ### Megatron-LM
 
-Check out the `adapter/megatron` package.
+Code: See the `ml_flashpoint.adapter.megatron` package.
+
+The Megatron strategies depend on the PyTorch DCP implementations.
+Below are instructions for setting up ML Flashpoint checkpointing, which you should configure alongside regular checkpointing to long-term storage.
+
+#### Save Strategy
+
+First create a `MemoryStorageWriter`  instance as outlined in [PyTorch DCP](#pytorch-dcp).
+Then use that to instantiate the Megatron save strategy:
+
+```python
+# Instantiate the MemoryStorageWriter
+memory_storage_writer = MemoryStorageWriter(...)
+
+# Use it to instantiate the Save Strategy
+megatron_save_strategy = MLFlashpointMegatronAsyncSaveStrategy(
+    storage_writer=memory_storage_writer,
+)
+```
+
+Because Megatron's `dist_checkpointing.save()` function writes "common" data only on global rank 0, which does not align with local checkpointing, you can orchestrate saves using the save strategy the same way it's done in [`MLFlashpointCheckpointIO.save_checkpoint()`](https://github.com/google/ml-flashpoint/blob/b9767583520106f59743b9e8050769523cfbef6e/src/ml_flashpoint/adapter/nemo/checkpoint_io.py#L137-L171) in the `adapter.nemo` package.
+You'll notice that the logic there aims to mimic `dist_checkpointing.save`, but it saves common data on each node (via local rank 0) as opposed to solely on the coordinator node (global rank 0).
+
+Use this strategy on a more frequent interval than your regular long-term storage checkpointing strategy.
+
+#### Load Strategy
+
+Instantiate the singleton `ReplicationManager` with a singleton `CheckpointObjectManager`, and make sure to `initialize()` the `ReplicationManager` before using it.
+Also create an `MLFlashpointCheckpointLoader` with those dependencies, and use these instances to create the load strategy:
+
+```python
+# Initialize dependencies (shared singletons)
+checkpoint_object_manager = CheckpointObjectManager()
+replication_manager = ReplicationManager()
+replication_manager.initialize(checkpoint_object_manager)
+
+checkpoint_loader = MLFlashpointCheckpointLoader(
+    checkpoint_object_manager=checkpoint_object_manager,
+    replication_manager=replication_manager,
+)
+
+# Instantiate the Load Strategy with the dependencies
+mlflashpoint_load_strategy = MLFlashpointMegatronLoadStrategy(
+    replication_manager=replication_manager,
+    checkpoint_loader=checkpoint_loader,
+)
+```
+
+Now you can use the load strategy with Megatron-LM's `dist_checkpointing.load` function directly:
+
+```python
+# First determine if an ML Flashpoint checkpoint is available, using the base container path you've configured
+local_checkpoint_container = checkpoint_loader.get_latest_complete_checkpoint(checkpoint_base_container)
+
+if local_container is None:
+    # Load using your regular sharded strategy from your long-term storage path
+    state_dict = mcore_dist_checkpointing.load(
+        sharded_state_dict=sharded_state_dict,
+        checkpoint_dir=str(long_term_storage_path),
+        sharded_strategy=regular_megatron_load_strategy,
+        common_strategy=TorchCommonLoadStrategy(),
+    )
+else:
+    # Given the existing load function doesn't do anything rank-specific,
+    # it is suitable for us to use directly.
+    state_dict = mcore_dist_checkpointing.load(
+        sharded_state_dict=sharded_state_dict,
+        checkpoint_dir=str(local_checkpoint_container),
+        sharded_strategy=mlflashpoint_load_strategy,
+        common_strategy=TorchCommonLoadStrategy(),
+    )
+```
 
 ### PyTorch DCP
 
-Check out the `adapter/pytorch` package.
+Code: See the `ml_flashpoint.adapter.pytorch` package.

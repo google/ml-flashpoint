@@ -59,6 +59,8 @@ nemo = [
 docs = [
     # Documentation static-site-generator (mkdocs) with theme support.
     "mkdocs-material==9.7.0",
+    # For collecting source code and docstrings into documentation.
+    "mkdocstrings-python==2.0.1",
     # Documentation static-site-generator (mkdocs) with theme support. Successor of mkdocs-material.
     #"zensical==0.0.11",
 ]

@@ -19,4 +19,4 @@ _Describe any existing or possible workarounds_.
 
 ## Who (use cases)
 
-_Describe particular use cases if possible, including organization/company where relevant, expected usage and impact_.
+_Describe particular use cases if possible, including organization/company where relevant, expected usage and impact, to help us prioritize_.

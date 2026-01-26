@@ -127,7 +127,7 @@ class MLFlashpointCheckpointIO(AsyncCompatibleCheckpointIO):
 
         Returns:
             An `Optional[MegatronAsyncRequest]` if `async_save` is `True` and the save is successful,
-            otherwise `None`.
+                otherwise `None`.
         """
         if not _is_ml_flashpoint_checkpoint(self.flashpoint_base_dir, path):
             _LOGGER.info("Fallback to alternative checkpoint io.")

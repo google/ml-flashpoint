@@ -35,7 +35,7 @@ This is expected to further improve with additional optimizations.
 These improvements only account for checkpoint save efficiency, representing a "worst case" in the sense that checkpointing purely adds overhead and isn't actually used.
 Any job interruptions will also benefit from the improved checkpoint recovery times.
 
-While [ML runtime goodput](https://cloud.google.com/blog/products/ai-machine-learning/goodput-metric-as-measure-of-ml-productivity) is important, we focus on overall job time as an end-to-end metric, as it is simpler, most transparent and accounts for actual cost.
+While [ML runtime goodput](https://cloud.google.com/blog/products/ai-machine-learning/goodput-metric-as-measure-of-ml-productivity) is important, we focus on overall job time as an end-to-end metric, as it is simpler and allows for straightforward _total_ cost comparisons.
 Goodput can be misleading if improvements to unproductive time actually worsen productive time, and the change in total evaluation period (job time) is not taken into account.
 
 ## Design Philosophy

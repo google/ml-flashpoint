@@ -28,7 +28,7 @@ See the project's [README](http://cs/h/cloud-mlnet/ml-flashpoint/+/main:README.m
 
 ### NeMo 2.0 & Pytorch Lightning
 
-Code: See the `ml_flashpoint.adapter.nemo` package.
+Code: See the [`ml_flashpoint.adapter.nemo`](https://github.com/google/ml-flashpoint/tree/main/src/ml_flashpoint/adapter/nemo) package.
 
 !!! note
 
@@ -107,7 +107,7 @@ This reduces blocking time by avoiding duplicate work, at the cost of having a l
 
 ### Megatron-LM
 
-Code: See the `ml_flashpoint.adapter.megatron` package.
+Code: See the [`ml_flashpoint.adapter.megatron`](https://github.com/google/ml-flashpoint/tree/main/src/ml_flashpoint/adapter/megatron) package.
 
 The Megatron strategies depend on the PyTorch DCP implementations.
 Below are instructions for setting up ML Flashpoint checkpointing, which you should configure alongside regular checkpointing to long-term storage.
@@ -195,4 +195,4 @@ else:
 
 ### PyTorch DCP
 
-Code: See the `ml_flashpoint.adapter.pytorch` package.
+Code: See the [`ml_flashpoint.adapter.pytorch`](https://github.com/google/ml-flashpoint/tree/main/src/ml_flashpoint/adapter/pytorch) package.

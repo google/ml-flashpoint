@@ -23,9 +23,19 @@ See the [overview](overview.md) for more detail.
 
 ### Performance
 
-In some tests on a [Vertex AI Training Cluster](https://docs.cloud.google.com/vertex-ai/docs/training/training-clusters/overview) with 4 [A3-Mega](https://docs.cloud.google.com/compute/docs/accelerator-optimized-machines#a3-mega-vms) nodes for Gemma 27B and Llama 70B pre-training over just 300 steps, we see improvements averaging **3-6%** for overall job time, with peaks of **5-10%** improvements.
-These improvements only account for checkpoint save efficiency - checkpoint load times were 7-10x faster for Gemma 27B on the same training cluster.
+We performed some tests on a [Vertex AI Training Cluster](https://docs.cloud.google.com/vertex-ai/docs/training/training-clusters/overview) with 4 [A3-Mega](https://docs.cloud.google.com/compute/docs/accelerator-optimized-machines#a3-mega-vms) nodes for Gemma 27B and Llama 70B pre-training over just 300 steps and observed the improvements listed below.
 These tests were conducted using ML Flashpoint _alongside_ NeMo's recommended checkpointing (as you would in production), where NeMo's default checkpointing used a 7-10 TB [Filestore](https://cloud.google.com/filestore) instance.
+
+Observations when comparing the hybrid of ML Flashpoint (every 5 steps) and NeMo checkpointing (every 50 steps) to just NeMo's regular checkpointing (every 10 steps):
+* Data write times that are up to 20-30x faster, with little to no optimization.
+This is expected to further improve with additional optimizations.
+* Total checkpoint recovery times that are ~7-10x faster (includes the time it takes to do checkpoint detection, cross-node coordination, replication, read into model state and be ready to resume training).
+* For _async_ checkpointing: improvements averaging **3-6%** for _overall job time_, with peaks of **5-10%** improvements.
+These improvements only account for checkpoint save efficiency, representing a "worst case" in the sense that checkpointing purely adds overhead and isn't actually used.
+Any job interruptions will also benefit from the improved checkpoint recovery times.
+
+While [ML runtime goodput](https://cloud.google.com/blog/products/ai-machine-learning/goodput-metric-as-measure-of-ml-productivity) is important, we focus on overall job time as an end-to-end metric, as it is most transparent and accounts for actual cost.
+Goodput can be misleading if improvements to unproductive time actually worsen productive time.
 
 ## Design Philosophy
 

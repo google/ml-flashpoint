@@ -7,7 +7,7 @@ labels: "enhancement"
 
 ## What
 
-_Describe the feature being requested, with as much detail as needed._
+_Describe the feature being requested, with as much detail as you can._
 
 ## Why
 

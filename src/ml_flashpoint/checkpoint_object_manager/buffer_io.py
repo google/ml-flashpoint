@@ -323,7 +323,7 @@ class BufferIO:
         self._check_validity()
         return self._pos
 
-    def get_buffer_slice(self, size: int) -> memoryview:
+    def next_buffer_slice(self, size: int) -> memoryview:
         """Returns a writable memoryview slice of the buffer at the current position.
 
         This allows for zero-copy operations into the buffer (e.g., direct tensor copy).

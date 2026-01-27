@@ -15,12 +15,11 @@
 import builtins
 import concurrent.futures
 import io
-import json
 import os
 import pickle
 import shutil
-import struct
 import tempfile
+from typing import Any
 
 import pytest
 import torch
@@ -34,37 +33,24 @@ from torch.distributed.checkpoint.planner import (
 )
 
 from ml_flashpoint.checkpoint_object_manager.buffer_io import BufferIO
+from ml_flashpoint.checkpoint_object_manager.buffer_metadata import TensorHeader
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.checkpoint_object_manager.object_manager import object_manager_ext
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
-from ml_flashpoint.core.checkpoint_saver import DefaultMLFlashpointCheckpointSaver, WriteItemResolver
-from ml_flashpoint.core.defaults import MAGIC_BYTES
+from ml_flashpoint.core.checkpoint_saver import DefaultMLFlashpointCheckpointSaver, WriteItemResolver, WriteResult
 from ml_flashpoint.replication.replication_manager import ReplicationManager
 
 
-def _load_tensor_maybe_optimized(data):
-    if isinstance(data, bytes):
-        data = io.BytesIO(data)
-
-    pos = data.tell()
-    magic = data.read(8)
-    data.seek(pos)
-
-    if magic == MAGIC_BYTES:
-        data.seek(pos + 8)
-        len_bytes = data.read(4)
-        header_len = struct.unpack("<I", len_bytes)[0]
-        json_bytes = data.read(header_len)
-        metadata = json.loads(json_bytes)
-
-        dtype = getattr(torch, metadata["dtype"])
-        shape = metadata["shape"]
-
+def _load_tensor_maybe_optimized(data: io.BytesIO, header: TensorHeader = None):
+    """Loads a tensor, handling both optimized and legacy formats."""
+    # If header is provided (Manifest), use it
+    if header is not None:
         raw_data = data.read()
-        tensor = torch.frombuffer(bytearray(raw_data), dtype=dtype).reshape(shape)
+        tensor = torch.frombuffer(bytearray(raw_data), dtype=header.dtype).reshape(header.shape)
         return tensor.clone()
-    else:
-        return torch.load(data, weights_only=False)
+
+    # Fallback to torch.load (legacy)
+    return torch.load(data, weights_only=False)
 
 
 class StubWriteItemResolver(WriteItemResolver):
@@ -98,8 +84,21 @@ class TestDefaultMLFlashpointCheckpointSaver:
             chunk=None, properties=torchdistmeta.TensorProperties(dtype=tensor.dtype), size=tensor.shape
         )
 
-    def test_write_data_with_optimized_save_true(
-        self, chkpt_object_manager, replication_manager, temp_dir_path, mocker
+    @pytest.mark.parametrize(
+        "tensor_data",
+        [
+            torch.tensor([1, 2, 3], dtype=torch.int32),
+            torch.tensor([[1, 2], [3, 4]], dtype=torch.float32),
+            torch.tensor([[[1], [2]], [[3], [4]]], dtype=torch.float16),
+            torch.tensor([1, 2, 3], dtype=torch.int64),
+            torch.tensor([1.5, 2.5], dtype=torch.bfloat16),
+            torch.tensor([[1.0, 2.0, 3.0]], dtype=torch.float32),
+            torch.tensor([], dtype=torch.float32),
+            torch.tensor([[[]]], dtype=torch.int32),
+        ],
+    )
+    def test_save_optimized_tensor_format_if_enabled(
+        self, chkpt_object_manager, replication_manager, temp_dir_path, mocker, tensor_data
     ):
         # Given
         saver = DefaultMLFlashpointCheckpointSaver(
@@ -111,7 +110,6 @@ class TestDefaultMLFlashpointCheckpointSaver:
             use_optimized_save=True,
         )
         checkpoint_id = CheckpointContainerId(os.path.join(temp_dir_path, "ckpt_opt_true"))
-        tensor_data = torch.tensor([1, 2, 3], dtype=torch.int32)
         item_index = MetadataIndex(fqn="item_0")
         resolver = StubWriteItemResolver({item_index: tensor_data})
         write_items = [
@@ -132,8 +130,25 @@ class TestDefaultMLFlashpointCheckpointSaver:
         buffer_io = chkpt_object_manager.get_buffer(object_id)
         assert buffer_io is not None
         with buffer_io:
-            magic = buffer_io.read(8)
-            assert magic == b"MLF_TENS"
+            # Verify manifest
+            assert hasattr(buffer_io, "_metadata")
+            manifest = buffer_io._metadata.tensor_manifest
+            # Find the header (key should be offset)
+            assert 0 in manifest
+            header = manifest[0]
+            # Verify header contents are as expected
+            assert header.dtype == tensor_data.dtype
+            assert header.shape == tensor_data.shape
+
+            # Verify data
+            buffer_io.seek(0)
+            data = buffer_io.read()
+            if tensor_data.numel() > 0:
+                loaded_tensor = torch.frombuffer(bytearray(data), dtype=tensor_data.dtype).reshape(tensor_data.shape)
+            else:
+                loaded_tensor = torch.empty(tensor_data.shape, dtype=tensor_data.dtype)
+
+            assert torch.equal(loaded_tensor, tensor_data)
 
     def test_write_data_with_optimized_save_false(self, chkpt_object_manager, replication_manager, temp_dir_path):
         # Given
@@ -167,8 +182,9 @@ class TestDefaultMLFlashpointCheckpointSaver:
         buffer_io = chkpt_object_manager.get_buffer(object_id)
         assert buffer_io is not None
         with buffer_io:
-            magic = buffer_io.read(8)
-            assert magic != MAGIC_BYTES
+            # Just verify it can be loaded with torch.load
+            # Or verify it's NOT empty?
+            assert buffer_io.read(1)  # Not empty
 
             # Reset position for loading
             buffer_io.seek(0)
@@ -738,42 +754,53 @@ class TestDefaultMLFlashpointCheckpointSaver:
             assert len(bucket.tensor_data) == 0
             assert bucket.bytesio_data[0][1].getvalue() == data_binary
 
-        def test_save_tensor_optimized_writes_correct_header_and_data(self, saver, chkpt_object_manager, mocker):
+        @pytest.mark.parametrize(
+            "tensor",
+            [
+                torch.tensor([1, 2, 3], dtype=torch.int32),
+                torch.tensor([[1, 2], [3, 4]], dtype=torch.float32),
+                torch.tensor([[[1], [2]], [[3], [4]]], dtype=torch.float16),
+                torch.tensor([1, 2, 3], dtype=torch.int64),
+                torch.tensor([1.5, 2.5], dtype=torch.bfloat16),
+                torch.tensor([[1.0, 2.0, 3.0]], dtype=torch.float32),
+                torch.tensor([], dtype=torch.float32),
+                torch.tensor([[[]]], dtype=torch.int32),
+            ],
+        )
+        def test_save_tensor_optimized_writes_correct_header_and_data(
+            self, saver, chkpt_object_manager, mocker, tensor
+        ):
             """Test that _save_tensor_optimized writes the expected zero-copy format."""
             # Given
-            tensor = torch.tensor([1, 2, 3], dtype=torch.int32)
             buffer_io_mock = mocker.MagicMock(spec=BufferIO)
             # Create a real memory view for the mock to return so torch.frombuffer works
             real_buffer = bytearray(tensor.nbytes)
-            buffer_io_mock.get_buffer_slice.return_value = memoryview(real_buffer)
+            buffer_io_mock.next_buffer_slice.return_value = memoryview(real_buffer)
 
             # When
-            saver._save_tensor_optimized(tensor, buffer_io_writer=buffer_io_mock)
+            header = saver._save_tensor_optimized(tensor, buffer_io_writer=buffer_io_mock)
 
             # Then
-            # 1. Verify Header Write
-            buffer_io_mock.write.assert_called_once()
-            header_bytes = buffer_io_mock.write.call_args[0][0]
+            # 1. Verify Header Return
+            assert header is not None
+            assert header.dtype == tensor.dtype
+            assert header.shape == tensor.shape
 
-            # Parse header manually to verify
-            magic = header_bytes[:8]
-            assert magic == b"MLF_TENS"
+            # 2. Verify No Header Write (Inline)
+            buffer_io_mock.write.assert_not_called()
 
-            len_bytes = header_bytes[8:12]
-            header_len = struct.unpack("<I", len_bytes)[0]
-
-            json_bytes = header_bytes[12:]
-            assert len(json_bytes) == header_len
-
-            metadata = json.loads(json_bytes)
-            assert metadata["dtype"] == "int32"
-            assert metadata["shape"] == [3]
-
-            # 2. Verify Data Copy
-            buffer_io_mock.get_buffer_slice.assert_called_once_with(tensor.nbytes)
+            # 3. Verify Data Copy
+            if tensor.nbytes > 0:
+                buffer_io_mock.next_buffer_slice.assert_called_once_with(tensor.nbytes)
+            else:
+                buffer_io_mock.next_buffer_slice.assert_not_called()
 
             # Verify data in our side-buffer matches
-            written_tensor = torch.frombuffer(real_buffer, dtype=torch.int32)
+            if tensor.nbytes > 0:
+                written_tensor = torch.frombuffer(real_buffer, dtype=tensor.dtype).reshape(tensor.shape)
+            else:
+                written_tensor = torch.empty(tensor.shape, dtype=tensor.dtype)
+
             assert torch.equal(written_tensor, tensor)
 
         @pytest.mark.parametrize("bucket_count", [1, 2])
@@ -1221,6 +1248,11 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 assert os.path.exists(obj_id.data)
 
                 with chkpt_object_manager.get_buffer(obj_id) as buffer_reader:
+                    # Get manifest
+                    manifest = {}
+                    if hasattr(buffer_reader, "_metadata") and hasattr(buffer_reader._metadata, "tensor_manifest"):
+                        manifest = buffer_reader._metadata.tensor_manifest
+
                     current_offset = 0
                     for res in results:
                         # Assert that offsets are sequential within each file
@@ -1234,7 +1266,8 @@ class TestDefaultMLFlashpointCheckpointSaver:
                             assert loaded_bytes == expected_bytes1
                         else:  # Tensor items
                             tensor_bytes = buffer_reader.read(sinfo.length)
-                            loaded_tensor = _load_tensor_maybe_optimized(tensor_bytes)
+                            header = manifest.get(sinfo.offset)
+                            loaded_tensor = _load_tensor_maybe_optimized(io.BytesIO(tensor_bytes), header=header)
                             if res.index == item_index0:
                                 assert torch.equal(loaded_tensor, expected_tensor0)
                             elif res.index == item_index2:
@@ -1341,8 +1374,19 @@ class TestDefaultMLFlashpointCheckpointSaver:
 
             # Additionally, assert that the content of the file has changed from the preexisting content
             object_id = CheckpointObjectId.from_container(checkpoint_id, write_buckets[0].object_name)
+            # Verify
             with chkpt_object_manager.get_buffer(object_id) as buffer_reader:
-                loaded_tensor = _load_tensor_maybe_optimized(buffer_reader.read())
+                # Get manifest
+                manifest = {}
+                if hasattr(buffer_reader, "_metadata") and hasattr(buffer_reader._metadata, "tensor_manifest"):
+                    manifest = buffer_reader._metadata.tensor_manifest
+
+                # Check data
+                buffer_reader.seek(0)
+                data_from_file = buffer_reader.read()
+                # Use BytesIO
+                header = manifest.get(0)
+                loaded_tensor = _load_tensor_maybe_optimized(io.BytesIO(data_from_file), header=header)
                 assert torch.equal(loaded_tensor, tensor_data)
 
         @pytest.mark.parametrize("thread_count", [0, -1, -5])
@@ -1478,25 +1522,49 @@ class TestDefaultMLFlashpointCheckpointSaver:
 
         @staticmethod
         def _assert_write_result(
-            result,
-            checkpoint_id,
-            expected_index,
-            expected_tensor,
-            expected_object_name,
-            expected_offset,
-            chkpt_obj_manager,
+            write_result: WriteResult,
+            checkpoint_id: CheckpointContainerId,
+            expected_index: MetadataIndex,
+            expected_data: Any,
+            expected_path: str,
+            expected_offset: int,
+            checkpoint_object_manager: CheckpointObjectManager,
         ):
-            assert result.index == expected_index
-            assert result.storage_data.relative_path == expected_object_name
-            assert result.size_in_bytes > 0
-            assert result.storage_data.offset == expected_offset
+            """Helper to assert that a WriteResult matches expectations."""
+            assert write_result.index == expected_index
+            assert write_result.storage_data.relative_path == expected_path
+            assert write_result.storage_data.offset == expected_offset
 
-            object_id = CheckpointObjectId.from_container(checkpoint_id, result.storage_data.relative_path)
-            assert os.path.exists(object_id.data)
-            with chkpt_obj_manager.get_buffer(object_id) as buffer_reader:
-                buffer_reader.seek(result.storage_data.offset)
-                loaded_tensor = _load_tensor_maybe_optimized(buffer_reader.read(result.storage_data.length))
-                assert torch.equal(loaded_tensor, expected_tensor)
+            obj_id = CheckpointObjectId.from_container(checkpoint_id, expected_path)
+            assert os.path.exists(obj_id.data)
+
+            with checkpoint_object_manager.get_buffer(obj_id) as buffer_reader:
+                buffer_reader.seek(expected_offset)
+
+                # Check for manifest
+                manifest = {}
+                if hasattr(buffer_reader, "_metadata") and hasattr(buffer_reader._metadata, "tensor_manifest"):
+                    manifest = buffer_reader._metadata.tensor_manifest
+
+                # Better: check write_result type if available, but WriteResult only has index/size/storage_data.
+                # We can check expected_data type.
+                if isinstance(expected_data, (bytes, io.BytesIO)):
+                    data_len = write_result.size_in_bytes
+                    loaded_bytes = buffer_reader.read(data_len)
+                    if isinstance(expected_data, io.BytesIO):
+                        assert loaded_bytes == expected_data.getvalue()
+                    else:
+                        assert loaded_bytes == expected_data
+                else:
+                    # Tensor
+                    data_len = write_result.size_in_bytes
+                    tensor_bytes = buffer_reader.read(data_len)
+
+                    # Get header from manifest if available
+                    header = manifest.get(expected_offset)
+
+                    loaded_tensor = _load_tensor_maybe_optimized(io.BytesIO(tensor_bytes), header=header)
+                    assert torch.equal(loaded_tensor, expected_data)
 
     class TestWriteMetadata:
         @staticmethod

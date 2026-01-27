@@ -15,12 +15,10 @@
 import abc
 import fcntl
 import io
-import json
 import logging
 import os
 import pickle
 import re
-import struct
 from collections import defaultdict
 from pathlib import Path
 from typing import IO, List, Optional, Tuple, TypeVar, cast
@@ -38,13 +36,13 @@ from torch.distributed.checkpoint.planner import (
 from torch.distributed.checkpoint.utils import _create_file_view
 from typing_extensions import override
 
+from ml_flashpoint.checkpoint_object_manager.buffer_metadata import TensorHeader
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.defaults import (
     COMMON_STATE_FNAME,
     DIRTY_MARKER_SUFFIX,
     GLOBAL_RANK_PATTERN,
-    MAGIC_BYTES,
     default_metadata_object_name,
 )
 from ml_flashpoint.core.mlf_logging import get_logger
@@ -161,46 +159,34 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
             _LOGGER.exception("Error reading metadata from '%s'", metadata_path)
             raise
 
-    def read_tensor(self, buffer_slice: IO[bytes], req: ReadItem) -> torch.Tensor:
+    def read_tensor(
+        self, buffer_slice: IO[bytes], req: ReadItem, header: Optional[TensorHeader] = None
+    ) -> torch.Tensor:
         """Read tensor from file slice.
 
         Args:
             buffer_slice (IO[bytes]): file slice to read from.
             req (ReadItem): read item.
+            header (Optional[TensorHeader]): TensorHeader if available from manifest.
 
         Returns:
             torch.Tensor: read tensor.
         """
-        # Peek at magic bytes
-        pos = buffer_slice.tell()
-        magic = buffer_slice.read(len(MAGIC_BYTES))
-        buffer_slice.seek(pos)
+        if header is not None:
+            # Optimized path (Zero Copy)
+            tensor = torch.frombuffer(buffer_slice.read(), dtype=header.dtype).reshape(header.shape)
+            return narrow_tensor_by_index(tensor, req.storage_offsets, req.lengths)
 
-        if magic == MAGIC_BYTES:
-            # New optimized format
-            buffer_slice.seek(pos + len(MAGIC_BYTES))
-
-            # Read header length
-            len_bytes = buffer_slice.read(4)
-            header_len = struct.unpack("<I", len_bytes)[0]
-
-            # Read header
-            json_bytes = buffer_slice.read(header_len)
-            metadata = json.loads(json_bytes.decode("utf-8"))
-
-            tensor_dtype = getattr(torch, metadata["dtype"])
-            tensor_shape = metadata["shape"]
-            data_bytes = buffer_slice.read()
-            tensor = torch.frombuffer(data_bytes, dtype=tensor_dtype)
-            tensor = tensor.reshape(tensor_shape)
-        else:
-            # Fallback to legacy torch.load
+        try:
+            # Fallback to legacy torch.load (e.g. for non-optimized tensors or legacy format)
             tensor = cast(
                 torch.Tensor,
                 torch.load(cast(IO[bytes], buffer_slice), map_location="cpu", weights_only=True),
             )
-
-        return narrow_tensor_by_index(tensor, req.storage_offsets, req.lengths)
+            return narrow_tensor_by_index(tensor, req.storage_offsets, req.lengths)
+        except Exception:
+            _LOGGER.exception("Failed to load tensor using torch.load, and no header provided (not optimized).")
+            raise
 
     def _try_retrieve_object_if_missing(self, checkpoint_object_id: CheckpointObjectId) -> bool:
         """Attempts to retrieve a checkpoint object from peer nodes if it is missing locally.
@@ -298,6 +284,11 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
             raise FileNotFoundError(error_msg)
 
         with self._checkpoint_object_manager.get_buffer(checkpoint_object_id) as stream:
+            # Try to read manifest from buffer metadata
+            tensor_manifest = {}
+            if hasattr(stream, "_metadata") and hasattr(stream._metadata, "tensor_manifest"):
+                tensor_manifest = stream._metadata.tensor_manifest
+
             for req in read_items:
                 item_md = storage_data[req.storage_index]
                 buffer_slice = cast(IO[bytes], _create_file_view(stream, item_md.offset, item_md.length))
@@ -306,7 +297,9 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
                     read_bytes.seek(0)
                     planner.load_bytes(req, read_bytes)
                 else:
-                    tensor = self.read_tensor(buffer_slice, req)
+                    # Check manifest for header
+                    header = tensor_manifest.get(item_md.offset)
+                    tensor = self.read_tensor(buffer_slice, req, header=header)
                     target_tensor = planner.resolve_tensor(req).detach()
                     assert target_tensor.size() == tensor.size(), (
                         f"req {req.storage_index} mismatch sizes {target_tensor.size()} vs {tensor.size()}"

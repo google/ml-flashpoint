@@ -849,3 +849,39 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         assert isinstance(trainer.strategy.checkpoint_io, MLFlashpointCheckpointIO)
         # Verify that the load strategy uses the passed checkpoint loader
         assert trainer.strategy.checkpoint_io.load_strategy.checkpoint_loader is mock_loader
+
+    @pytest.mark.parametrize("use_optimized_save", [True, False])
+    def test_use_optimized_save_flag_passed_to_wrap_trainer_checkpoint_io_with_mlflashpoin(
+        self, mocker, mock_ckpt_obj_manager, mock_replication_manager, use_optimized_save
+    ):
+        """Tests that the use_optimized_save flag is forwarded correctly."""
+        # Given
+        trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.callbacks = [mocker.MagicMock(spec=MLFlashpointCheckpointCallback)]
+        trainer.strategy = mocker.MagicMock(spec=nl_strategies.MegatronStrategy)
+        original_checkpoint_io = mocker.MagicMock(spec=MegatronCheckpointIO)
+        trainer.strategy.checkpoint_io = original_checkpoint_io
+        base_container = "/test_base_container"
+
+        # Patch the saver to check the arguments passed to it
+        mock_saver = mocker.patch(
+            "ml_flashpoint.adapter.nemo.wrapper_util.DefaultMLFlashpointCheckpointSaver",
+        )
+
+        # When
+        wrap_trainer_checkpoint_io_with_mlflashpoint(
+            trainer,
+            base_container,
+            mock_ckpt_obj_manager,
+            mock_replication_manager,
+            async_save=True,
+            checkpoint_loader=mocker.MagicMock(spec=DefaultMLFlashpointCheckpointLoader),
+            use_optimized_save=use_optimized_save,
+        )
+
+        # Then
+        assert isinstance(trainer.strategy.checkpoint_io, MLFlashpointCheckpointIO)
+        # Verify that the saver was initialized with the correct flag
+        mock_saver.assert_called_once()
+        _, kwargs = mock_saver.call_args
+        assert kwargs["use_optimized_save"] == use_optimized_save

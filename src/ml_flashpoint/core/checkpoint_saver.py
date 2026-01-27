@@ -16,12 +16,10 @@ import abc
 import concurrent.futures
 import dataclasses
 import io
-import json
 import logging
 import os
 import pickle
 import queue
-import struct
 import threading
 from typing import Callable, Optional, Protocol, Union
 
@@ -32,10 +30,11 @@ from torch.distributed.checkpoint.planner import WriteItem, WriteItemType
 from torch.distributed.checkpoint.storage import WriteResult
 from typing_extensions import override
 
+from ml_flashpoint.checkpoint_object_manager.buffer_metadata import TensorHeader
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.checkpoint_object_manager.object_manager import object_manager_ext
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
-from ml_flashpoint.core.defaults import DIRTY_MARKER_SUFFIX, MAGIC_BYTES, default_metadata_object_name
+from ml_flashpoint.core.defaults import DIRTY_MARKER_SUFFIX, default_metadata_object_name
 from ml_flashpoint.core.mlf_logging import get_logger
 from ml_flashpoint.core.utils import log_execution_time
 from ml_flashpoint.replication.replication_manager import ReplicationManager
@@ -595,73 +594,66 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
             results_from_threads: A queue to put `(List[WriteResult], Exception)` tuples into.
             replicate_after_write: Whether to trigger async replication of each object after it is written.
         """
-        while not object_write_bucket_queue.empty():
+        while True:
             try:
-                write_bucket_to_process: ObjectWriteBucket = object_write_bucket_queue.get_nowait()  # Non-blocking get
+                write_bucket_to_process = object_write_bucket_queue.get_nowait()
             except queue.Empty:
                 break
 
-            full_object_id, object_name, byteio_tuples, tensor_tuples = (
-                write_bucket_to_process.object_id,
-                write_bucket_to_process.object_name,
-                write_bucket_to_process.bytesio_data,
-                write_bucket_to_process.tensor_data,
-            )
-
             try:
-                thread_bucket_results: list[WriteResult] = []
-
-                # Set overwrite to True, in case we are recovering from a previous checkpoint.
-                # Example: we may recover from step 6, while step 7/8 may be there but unfinished or not selected
-                # for some reason, so when we come here to write checkpoints for them, we want to overwrite whatever
-                # exists instead of failing.
-                with self._chkpt_obj_manager.create_buffer(
-                    full_object_id,
-                    self._initial_buffer_size_bytes,
-                    overwrite=True,
-                ) as buffer_io_writer:
-                    # First write tensors.
-                    for tensor_item, tensor in tensor_tuples:
-                        write_start_offset = buffer_io_writer.tell()
-
-                        if self._use_optimized_save:
-                            self._save_tensor_optimized(tensor, buffer_io_writer)
-                        else:
-                            torch.save(tensor, buffer_io_writer)
-
-                        num_bytes_written = buffer_io_writer.tell() - write_start_offset
-                        item_storage_data = _StorageInfo(
-                            relative_path=object_name, offset=write_start_offset, length=num_bytes_written
-                        )
-                        write_result = WriteResult(
-                            index=tensor_item.index, size_in_bytes=num_bytes_written, storage_data=item_storage_data
-                        )
-                        thread_bucket_results.append(write_result)
-
-                    # Then write ByteIO objects.
-                    for byteio_item, data in byteio_tuples:
-                        data.seek(0)  # to be safe? maybe unnecessary
-                        write_start_offset = buffer_io_writer.tell()
-
-                        buffer_io_writer.write(data.read())
-
-                        num_bytes_written = buffer_io_writer.tell() - write_start_offset
-                        item_storage_data = _StorageInfo(
-                            relative_path=object_name, offset=write_start_offset, length=num_bytes_written
-                        )
-                        write_result = WriteResult(
-                            index=byteio_item.index, size_in_bytes=num_bytes_written, storage_data=item_storage_data
-                        )
-                        thread_bucket_results.append(write_result)
-
-                results_from_threads.put((thread_bucket_results, None))
+                results = self._process_write_bucket(write_bucket_to_process)
+                results_from_threads.put((results, None))
                 if replicate_after_write:
-                    self.async_replicate_object(full_object_id)
+                    self.async_replicate_object(write_bucket_to_process.object_id)
             except Exception as e:
-                _LOGGER.exception("Error in writer thread for object '%s'", full_object_id)
+                _LOGGER.exception("Error in writer thread for object '%s'", write_bucket_to_process.object_id)
                 results_from_threads.put((None, e))
-            finally:
-                object_write_bucket_queue.task_done()
+
+            object_write_bucket_queue.task_done()
+
+    def _process_write_bucket(self, bucket: ObjectWriteBucket) -> list[WriteResult]:
+        # Recovering from previous checkpoint requires overwrite=True
+        with self._chkpt_obj_manager.create_buffer(
+            bucket.object_id, self._initial_buffer_size_bytes, overwrite=True
+        ) as buffer_writer:
+            results = []
+            manifest: dict[int, TensorHeader] = {}
+
+            # Write Tensors
+            for item, tensor in bucket.tensor_data:
+                offset = buffer_writer.tell()
+                if self._use_optimized_save:
+                    manifest[offset] = self._save_tensor_optimized(tensor, buffer_writer)
+                else:
+                    torch.save(tensor, buffer_writer)
+
+                length = buffer_writer.tell() - offset
+                results.append(
+                    WriteResult(
+                        index=item.index,
+                        size_in_bytes=length,
+                        storage_data=_StorageInfo(bucket.object_name, offset, length),
+                    )
+                )
+
+            if manifest:
+                buffer_writer._metadata.tensor_manifest = manifest
+
+            # Write ByteIO
+            for item, data in bucket.bytesio_data:
+                data.seek(0)
+                offset = buffer_writer.tell()
+                buffer_writer.write(data.read())
+                length = buffer_writer.tell() - offset
+                results.append(
+                    WriteResult(
+                        index=item.index,
+                        size_in_bytes=length,
+                        storage_data=_StorageInfo(bucket.object_name, offset, length),
+                    )
+                )
+
+            return results
 
     @log_execution_time(logger=_LOGGER, name="_remove_older_checkpoints")
     def _remove_older_checkpoints(
@@ -715,31 +707,27 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
             buffer_io_writer: The BufferIO instance to write to.
         """
         # Metadata
-        metadata = {
-            "dtype": str(tensor.dtype).replace("torch.", ""),
-            "shape": list(tensor.shape),
-        }
-        json_bytes = json.dumps(metadata).encode("utf-8")
-        header_len = len(json_bytes)
-
-        # Write Header (Magic + Len + JSON)
-        # using struct pack for length (unsigned int)
-        header_data = MAGIC_BYTES + struct.pack("<I", header_len) + json_bytes
-        buffer_io_writer.write(header_data)
+        tensor_header = TensorHeader(
+            shape=tensor.shape,
+            dtype=tensor.dtype,
+            device=tensor.device,
+        )
 
         # Write Data (Zero Copy)
         num_bytes = tensor.numel() * tensor.element_size()
 
         # Get a writable slice of the underlying C++ buffer
-        try:
-            dest_mv = buffer_io_writer.get_buffer_slice(num_bytes)
-        except AttributeError:
-            _LOGGER.exception("BufferIO does not support get_buffer_slice, try to disable use_optimized_save.")
-            raise
+        if num_bytes > 0:
+            try:
+                dest_mv = buffer_io_writer.next_buffer_slice(num_bytes)
+            except AttributeError:
+                _LOGGER.exception("BufferIO does not support get_buffer_slice, try to disable use_optimized_save.")
+                raise
 
-        # Create a tensor wrapper around the buffer slice
-        dest_tensor = torch.frombuffer(dest_mv, dtype=tensor.dtype, count=tensor.numel())
-        dest_tensor = dest_tensor.reshape(tensor.shape)
+            # Create a tensor wrapper around the buffer slice
+            dest_tensor = torch.frombuffer(dest_mv, dtype=tensor.dtype, count=tensor.numel()).reshape(tensor.shape)
 
-        # Perform the actual copy.
-        dest_tensor.copy_(tensor)
+            # Perform the actual copy.
+            dest_tensor.copy_(tensor)
+
+        return tensor_header

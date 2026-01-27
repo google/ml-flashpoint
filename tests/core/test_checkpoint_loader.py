@@ -14,10 +14,8 @@
 
 import dataclasses
 import io
-import json
 import logging
 import pickle
-import struct
 import tempfile
 from pathlib import Path
 from typing import Dict, Tuple
@@ -33,10 +31,10 @@ from torch.distributed.checkpoint.planner import (
     ReadItem,
 )
 
+from ml_flashpoint.checkpoint_object_manager.buffer_metadata import TensorHeader
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.checkpoint_loader import DefaultMLFlashpointCheckpointLoader, MLFlashpointCheckpointLoader
-from ml_flashpoint.core.defaults import MAGIC_BYTES
 from ml_flashpoint.replication.replication_manager import ReplicationManager
 
 _LOGGER = logging.getLogger(__name__)
@@ -318,19 +316,13 @@ class TestReadTensor:
         tensor = torch.tensor([1, 2, 3], dtype=torch.int32)
 
         # Manually create optimized format buffer
-        metadata = {
-            "dtype": "int32",
-            "shape": list(tensor.shape),
-        }
-        json_bytes = json.dumps(metadata).encode("utf-8")
-        header_len = len(json_bytes)
-        # MAGIC_BYTES + LEN + JSON + DATA
-        buffer_data = MAGIC_BYTES + struct.pack("<I", header_len) + json_bytes
+        tensor_header = TensorHeader(
+            shape=tensor.shape,
+            dtype=tensor.dtype,
+            device=tensor.device,
+        )
 
-        # Get raw bytes (tensor.numpy().tobytes() works for CPU tensors)
-        raw_data = tensor.numpy().tobytes()
-        buffer_data += raw_data
-
+        buffer_data = tensor.numpy().tobytes()
         buffer_slice = io.BytesIO(buffer_data)
 
         req = ReadItem(
@@ -343,7 +335,8 @@ class TestReadTensor:
         )
 
         # Act
-        result_tensor = self.loader.read_tensor(buffer_slice, req)
+        # Pass header explicitly simulating manifest lookup
+        result_tensor = self.loader.read_tensor(buffer_slice, req, header=tensor_header)
 
         # Assert
         assert torch.equal(result_tensor, tensor)

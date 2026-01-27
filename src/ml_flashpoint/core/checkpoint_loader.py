@@ -292,7 +292,7 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         self, checkpoint_base_container: CheckpointContainerId
     ) -> Optional[CheckpointContainerId]:
         """
-        Step 1: call get_candidate_checkpoints to get all existing checkpoint containers cross
+        Step 1: call get_candidate_checkpoints to get all existing checkpoint containers across
             all ranks as candidates and sorted in a descending order by step
         Step 2: traverse the candidate checkpoints and for each checkpoint, for each candidate:
             - call get_checkpoint_objects_by_rank to get all existing checkpoint objects cross

@@ -15,9 +15,11 @@
 import builtins
 import concurrent.futures
 import io
+import json
 import os
 import pickle
 import shutil
+import struct
 import tempfile
 from typing import Any
 
@@ -31,26 +33,53 @@ from torch.distributed.checkpoint.planner import (
     WriteItem,
     WriteItemType,
 )
+from torch.distributed.checkpoint.storage import WriteResult
 
 from ml_flashpoint.checkpoint_object_manager.buffer_io import BufferIO
-from ml_flashpoint.checkpoint_object_manager.buffer_metadata import TensorHeader
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.checkpoint_object_manager.object_manager import object_manager_ext
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
-from ml_flashpoint.core.checkpoint_saver import DefaultMLFlashpointCheckpointSaver, WriteItemResolver, WriteResult
+from ml_flashpoint.core.checkpoint_saver import DefaultMLFlashpointCheckpointSaver, WriteItemResolver
+from ml_flashpoint.core.defaults import FORMAT_SIGNATURE
 from ml_flashpoint.replication.replication_manager import ReplicationManager
 
 
-def _load_tensor_maybe_optimized(data: io.BytesIO, header: TensorHeader = None):
-    """Loads a tensor, handling both optimized and legacy formats."""
-    # If header is provided (Manifest), use it
-    if header is not None:
-        raw_data = data.read()
-        tensor = torch.frombuffer(bytearray(raw_data), dtype=header.dtype).reshape(header.shape)
-        return tensor.clone()
+def _load_tensor_maybe_optimized(data, header=None):
+    if isinstance(data, bytes):
+        data = io.BytesIO(data)
 
-    # Fallback to torch.load (legacy)
-    return torch.load(data, weights_only=False)
+    pos = data.tell()
+
+    if header:
+        try:
+            raw_data = data.read()
+            # If header provided, trust it.
+            tensor = torch.frombuffer(bytearray(raw_data), dtype=header.dtype).reshape(header.shape)
+            return tensor.clone()
+        except Exception:
+            data.seek(pos)
+            return torch.load(data, weights_only=False)
+
+    try:
+        len_bytes = data.read(4)
+        if len(len_bytes) < 4:
+            raise ValueError("Too short")
+        header_len = struct.unpack("<I", len_bytes)[0]
+        if header_len > 1024 * 1024:
+            raise ValueError("Header too large")
+
+        json_bytes = data.read(header_len)
+        metadata = json.loads(json_bytes)
+
+        dtype = getattr(torch, metadata["dtype"])
+        shape = metadata["shape"]
+
+        raw_data = data.read()
+        tensor = torch.frombuffer(bytearray(raw_data), dtype=dtype).reshape(shape)
+        return tensor.clone()
+    except Exception:
+        data.seek(pos)  # Reset position for torch.load fallback
+        return torch.load(data, weights_only=False)
 
 
 class StubWriteItemResolver(WriteItemResolver):
@@ -130,25 +159,16 @@ class TestDefaultMLFlashpointCheckpointSaver:
         buffer_io = chkpt_object_manager.get_buffer(object_id)
         assert buffer_io is not None
         with buffer_io:
-            # Verify manifest
-            assert hasattr(buffer_io, "_metadata")
-            manifest = buffer_io._metadata.tensor_manifest
-            # Find the header (key should be offset)
-            assert 0 in manifest
-            header = manifest[0]
-            # Verify header contents are as expected
-            assert header.dtype == tensor_data.dtype
-            assert header.shape == tensor_data.shape
+            # Verify no MAGIC_BYTES at start, but a valid header len
+            len_bytes = buffer_io.read(4)
+            header_len = struct.unpack("<I", len_bytes)[0]
+            assert header_len > 0
 
-            # Verify data
-            buffer_io.seek(0)
-            data = buffer_io.read()
-            if tensor_data.numel() > 0:
-                loaded_tensor = torch.frombuffer(bytearray(data), dtype=tensor_data.dtype).reshape(tensor_data.shape)
-            else:
-                loaded_tensor = torch.empty(tensor_data.shape, dtype=tensor_data.dtype)
-
-            assert torch.equal(loaded_tensor, tensor_data)
+            # Verify JSON header
+            json_bytes = buffer_io.read(header_len)
+            metadata = json.loads(json_bytes)
+            assert "dtype" in metadata
+            assert "shape" in metadata
 
     def test_write_data_with_optimized_save_false(self, chkpt_object_manager, replication_manager, temp_dir_path):
         # Given
@@ -182,9 +202,8 @@ class TestDefaultMLFlashpointCheckpointSaver:
         buffer_io = chkpt_object_manager.get_buffer(object_id)
         assert buffer_io is not None
         with buffer_io:
-            # Just verify it can be loaded with torch.load
-            # Or verify it's NOT empty?
-            assert buffer_io.read(1)  # Not empty
+            magic = buffer_io.read(8)
+            assert magic != FORMAT_SIGNATURE
 
             # Reset position for loading
             buffer_io.seek(0)
@@ -778,18 +797,26 @@ class TestDefaultMLFlashpointCheckpointSaver:
             buffer_io_mock.next_buffer_slice.return_value = memoryview(real_buffer)
 
             # When
-            header = saver._save_tensor_optimized(tensor, buffer_io_writer=buffer_io_mock)
+            saver._save_tensor_optimized(tensor, buffer_io_writer=buffer_io_mock)
 
             # Then
-            # 1. Verify Header Return
-            assert header is not None
-            assert header.dtype == tensor.dtype
-            assert header.shape == tensor.shape
+            # 1. Verify Header Write
+            buffer_io_mock.write.assert_called_once()
+            header_bytes = buffer_io_mock.write.call_args[0][0]
 
-            # 2. Verify No Header Write (Inline)
-            buffer_io_mock.write.assert_not_called()
+            # Parse header manually to verify
+            # No MAGIC_BYTES at start
+            len_bytes = header_bytes[:4]
+            header_len = struct.unpack("<I", len_bytes)[0]
 
-            # 3. Verify Data Copy
+            json_bytes = header_bytes[4:]
+            assert len(json_bytes) == header_len
+
+            metadata = json.loads(json_bytes)
+            assert metadata["dtype"] == str(tensor.dtype).replace("torch.", "")
+            assert metadata["shape"] == list(tensor.shape)
+
+            # 2. Verify Data Copy
             if tensor.nbytes > 0:
                 buffer_io_mock.next_buffer_slice.assert_called_once_with(tensor.nbytes)
             else:

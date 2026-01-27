@@ -13,21 +13,8 @@
 # limitations under the License.
 
 import ctypes
-import dataclasses
-import pickle
-
-import torch
 
 METADATA_SIZE = 4096
-
-
-@dataclasses.dataclass
-class TensorHeader:
-    """Header information for a stored tensor."""
-
-    shape: torch.Size
-    dtype: torch.dtype
-    device: torch.device
 
 
 class BufferMetadataType(ctypes.LittleEndianStructure):
@@ -36,28 +23,23 @@ class BufferMetadataType(ctypes.LittleEndianStructure):
     _pack_ = 1
     _fields_ = [
         ("len_written_data", ctypes.c_uint64),
-        ("reserved", ctypes.c_uint8 * (METADATA_SIZE - ctypes.sizeof(ctypes.c_uint64))),
+        # 8 bytes for MAGIC_BYTES to identify the file format version
+        ("format_signature", ctypes.c_char * 8),
+        # Pad the rest of the structure to reach METADATA_SIZE
+        (
+            "reserved",
+            ctypes.c_uint8 * (METADATA_SIZE - ctypes.sizeof(ctypes.c_uint64) - 8),
+        ),
     ]
 
-    @property
-    def tensor_manifest(self) -> dict[int, TensorHeader]:
-        try:
-            reserved_bytes = bytes(self.reserved)
-            return pickle.loads(reserved_bytes) if any(reserved_bytes) else {}
-        except Exception:
-            return {}
 
-    @tensor_manifest.setter
-    def tensor_manifest(self, manifest: dict[int, TensorHeader]):
-        data = pickle.dumps(manifest)
-        if len(data) > ctypes.sizeof(self.reserved):
-            raise ValueError(f"Manifest too large ({len(data)} > {ctypes.sizeof(self.reserved)})")
-        ctypes.memset(ctypes.addressof(self.reserved), 0, ctypes.sizeof(self.reserved))
-        ctypes.memmove(ctypes.addressof(self.reserved), data, len(data))
+# --- Sanity Check ---
+# Ensure the total size of the structure matches the defined METADATA_SIZE
+assert ctypes.sizeof(BufferMetadataType) == METADATA_SIZE, (
+    f"BufferMetadataType size mismatch: Actual {ctypes.sizeof(BufferMetadataType)} != Expected {METADATA_SIZE}"
+)
 
 
-assert ctypes.sizeof(BufferMetadataType) == METADATA_SIZE, "Metadata size mismatch"
-
-
+# --- Helper Function ---
 def get_metadata_str(metadata: BufferMetadataType | None) -> str:
     return f"Metadata(len_written_data={metadata.len_written_data})" if metadata else "[Metadata: None]"

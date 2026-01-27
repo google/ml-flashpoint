@@ -30,12 +30,12 @@ from torch.distributed.checkpoint.planner import WriteItem, WriteItemType
 from torch.distributed.checkpoint.storage import WriteResult
 from typing_extensions import override
 
-from ml_flashpoint.checkpoint_object_manager.buffer_metadata import TensorHeader
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.checkpoint_object_manager.object_manager import object_manager_ext
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.defaults import DIRTY_MARKER_SUFFIX, default_metadata_object_name
 from ml_flashpoint.core.mlf_logging import get_logger
+from ml_flashpoint.core.tensor_header import TensorHeader
 from ml_flashpoint.core.utils import log_execution_time
 from ml_flashpoint.replication.replication_manager import ReplicationManager
 
@@ -708,10 +708,13 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         """
         # Metadata
         tensor_header = TensorHeader(
-            shape=tensor.shape,
-            dtype=tensor.dtype,
-            device=tensor.device,
+            dtype=str(tensor.dtype).replace("torch.", ""),
+            shape=list(tensor.shape),
         )
+
+        # Write Header (Len + JSON)
+        header_data = tensor_header.to_bytes()
+        buffer_io_writer.write(header_data)
 
         # Write Data (Zero Copy)
         num_bytes = tensor.numel() * tensor.element_size()

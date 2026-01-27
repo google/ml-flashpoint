@@ -15,10 +15,12 @@
 import abc
 import fcntl
 import io
+import json
 import logging
 import os
 import pickle
 import re
+import struct
 from collections import defaultdict
 from pathlib import Path
 from typing import IO, List, Optional, Tuple, TypeVar, cast
@@ -36,16 +38,17 @@ from torch.distributed.checkpoint.planner import (
 from torch.distributed.checkpoint.utils import _create_file_view
 from typing_extensions import override
 
-from ml_flashpoint.checkpoint_object_manager.buffer_metadata import TensorHeader
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.defaults import (
     COMMON_STATE_FNAME,
     DIRTY_MARKER_SUFFIX,
+    FORMAT_SIGNATURE,
     GLOBAL_RANK_PATTERN,
     default_metadata_object_name,
 )
 from ml_flashpoint.core.mlf_logging import get_logger
+from ml_flashpoint.core.tensor_header import TensorHeader
 from ml_flashpoint.core.utils import get_num_of_nodes, log_execution_time
 from ml_flashpoint.replication.replication_manager import ReplicationManager
 
@@ -159,34 +162,49 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
             _LOGGER.exception("Error reading metadata from '%s'", metadata_path)
             raise
 
-    def read_tensor(
-        self, buffer_slice: IO[bytes], req: ReadItem, header: Optional[TensorHeader] = None
-    ) -> torch.Tensor:
+    def read_tensor(self, buffer_slice: IO[bytes], req: ReadItem, use_optimized_loader: bool = False) -> torch.Tensor:
         """Read tensor from file slice.
 
         Args:
             buffer_slice (IO[bytes]): file slice to read from.
             req (ReadItem): read item.
-            header (Optional[TensorHeader]): TensorHeader if available from manifest.
+            use_optimized_loader (bool): whether to use optimized loader.
 
         Returns:
             torch.Tensor: read tensor.
         """
-        if header is not None:
-            # Optimized path (Zero Copy)
-            tensor = torch.frombuffer(buffer_slice.read(), dtype=header.dtype).reshape(header.shape)
-            return narrow_tensor_by_index(tensor, req.storage_offsets, req.lengths)
+        pos = buffer_slice.tell()
 
-        try:
-            # Fallback to legacy torch.load (e.g. for non-optimized tensors or legacy format)
-            tensor = cast(
-                torch.Tensor,
-                torch.load(cast(IO[bytes], buffer_slice), map_location="cpu", weights_only=True),
-            )
-            return narrow_tensor_by_index(tensor, req.storage_offsets, req.lengths)
-        except Exception:
-            _LOGGER.exception("Failed to load tensor using torch.load, and no header provided (not optimized).")
-            raise
+        if use_optimized_loader:
+            # Read as optimized format (TensorHeader)
+            # First read 4 bytes for length
+            len_bytes = buffer_slice.read(4)
+            if len(len_bytes) == 4:
+                header_len = struct.unpack("<I", len_bytes)[0]
+                # stored header length should be reasonable, if it's too large, it might be legacy format
+                if header_len < 1024 * 1024:
+                    json_bytes = buffer_slice.read(header_len)
+
+                    try:
+                        metadata = json.loads(json_bytes.decode("utf-8"))
+                        tensor_header = TensorHeader(**metadata)
+
+                        tensor_dtype = getattr(torch, tensor_header.dtype)
+                        tensor_shape = tensor_header.shape
+                        data_bytes = buffer_slice.read()
+                        tensor = torch.frombuffer(data_bytes, dtype=tensor_dtype)
+                        tensor = tensor.reshape(tensor_shape)
+                        return narrow_tensor_by_index(tensor, req.storage_offsets, req.lengths)
+                    except Exception:
+                        _LOGGER.exception("Failed to parse tensor header")
+                        raise
+
+        buffer_slice.seek(pos)
+        tensor = cast(
+            torch.Tensor,
+            torch.load(cast(IO[bytes], buffer_slice), map_location="cpu", weights_only=True),
+        )
+        return narrow_tensor_by_index(tensor, req.storage_offsets, req.lengths)
 
     def _try_retrieve_object_if_missing(self, checkpoint_object_id: CheckpointObjectId) -> bool:
         """Attempts to retrieve a checkpoint object from peer nodes if it is missing locally.
@@ -284,10 +302,10 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
             raise FileNotFoundError(error_msg)
 
         with self._checkpoint_object_manager.get_buffer(checkpoint_object_id) as stream:
-            # Try to read manifest from buffer metadata
-            tensor_manifest = {}
-            if hasattr(stream, "_metadata") and hasattr(stream._metadata, "tensor_manifest"):
-                tensor_manifest = stream._metadata.tensor_manifest
+            use_optimized_loader = False
+            if stream.format_signature == FORMAT_SIGNATURE:
+                use_optimized_loader = True
+                _LOGGER.debug("Using optimized loader for '%s'", checkpoint_object_id.data)
 
             for req in read_items:
                 item_md = storage_data[req.storage_index]
@@ -297,9 +315,7 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
                     read_bytes.seek(0)
                     planner.load_bytes(req, read_bytes)
                 else:
-                    # Check manifest for header
-                    header = tensor_manifest.get(item_md.offset)
-                    tensor = self.read_tensor(buffer_slice, req, header=header)
+                    tensor = self.read_tensor(buffer_slice, req, use_optimized_loader=use_optimized_loader)
                     target_tensor = planner.resolve_tensor(req).detach()
                     assert target_tensor.size() == tensor.size(), (
                         f"req {req.storage_index} mismatch sizes {target_tensor.size()} vs {tensor.size()}"

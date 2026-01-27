@@ -31,10 +31,10 @@ from torch.distributed.checkpoint.planner import (
     ReadItem,
 )
 
-from ml_flashpoint.checkpoint_object_manager.buffer_metadata import TensorHeader
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.checkpoint_loader import DefaultMLFlashpointCheckpointLoader, MLFlashpointCheckpointLoader
+from ml_flashpoint.core.tensor_header import TensorHeader
 from ml_flashpoint.replication.replication_manager import ReplicationManager
 
 _LOGGER = logging.getLogger(__name__)
@@ -317,26 +317,32 @@ class TestReadTensor:
 
         # Manually create optimized format buffer
         tensor_header = TensorHeader(
-            shape=tensor.shape,
-            dtype=tensor.dtype,
-            device=tensor.device,
+            dtype=str(tensor.dtype).replace("torch.", ""),
+            shape=list(tensor.shape),
         )
+        # Use header's own serialization
+        header_bytes = tensor_header.to_bytes()
 
-        buffer_data = tensor.numpy().tobytes()
-        buffer_slice = io.BytesIO(buffer_data)
+        buffer = io.BytesIO()
+        buffer.write(header_bytes)
+        buffer.write(tensor.numpy().tobytes())
+        buffer.seek(0)
 
         req = ReadItem(
             type=LoadItemType.TENSOR,
             storage_index=0,
             storage_offsets=(0,),
-            lengths=(len(buffer_data),),
+            lengths=(3,),  # Length in elements? No, in bytes? narrow_tensor uses indices.
+            # req.lengths is usually size in elements if we look at narrow_tensor usage?
+            # narrow_tensor_by_index(tensor, offsets, lengths)
+            # if tensor is 1D [1,2,3], offsets=(0,), lengths=(3,) means full tensor.
             dest_index=(0,),
             dest_offsets=(0,),
         )
 
         # Act
-        # Pass header explicitly simulating manifest lookup
-        result_tensor = self.loader.read_tensor(buffer_slice, req, header=tensor_header)
+        # call read_tensor with use_optimized_loader=True (default)
+        result_tensor = self.loader.read_tensor(buffer, req, use_optimized_loader=True)
 
         # Assert
         assert torch.equal(result_tensor, tensor)
@@ -442,7 +448,9 @@ class TestReadData:
         # Mock get_buffer
         mock_buffer_ctx = mocker.MagicMock()
         mocker.patch.object(self.loader._checkpoint_object_manager, "get_buffer", return_value=mock_buffer_ctx)
-        mock_buffer_ctx.__enter__.return_value = io.BytesIO(b"")
+        mock_stream = io.BytesIO(b"")
+        mock_stream.format_signature = b"mock_sig"
+        mock_buffer_ctx.__enter__.return_value = mock_stream
 
         # Act
         self.loader.read_data(checkpoint_obj_id, [], mocker.MagicMock(), {})
@@ -507,7 +515,9 @@ class TestReadData:
 
         mock_buffer_ctx = mocker.MagicMock()
         mocker.patch.object(self.loader._checkpoint_object_manager, "get_buffer", return_value=mock_buffer_ctx)
-        mock_buffer_ctx.__enter__.return_value = io.BytesIO(b"")
+        mock_stream = io.BytesIO(b"")
+        mock_stream.format_signature = b"mock_sig"
+        mock_buffer_ctx.__enter__.return_value = mock_stream
 
         # Act
         self.loader.read_data(checkpoint_obj_id, [], mocker.MagicMock(), {})

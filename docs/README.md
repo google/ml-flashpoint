@@ -27,6 +27,7 @@ We performed some tests on a [Vertex AI Training Cluster](https://docs.cloud.goo
 These tests were conducted using ML Flashpoint _alongside_ NeMo's recommended checkpointing (as you would in production), where NeMo's default checkpointing used a 7-10 TB [Filestore](https://cloud.google.com/filestore) instance.
 
 Observations when comparing the hybrid of ML Flashpoint (every 5 steps) and NeMo checkpointing (every 50 steps) to just NeMo's regular checkpointing (every 10 steps):
+
 * Data write times that are up to 20-30x faster, with little to no optimization.
 This is expected to further improve with additional optimizations.
 * Total checkpoint recovery times that are ~7-10x faster (includes the time it takes to do checkpoint detection, cross-node coordination, replication, read into model state and be ready to resume training).
@@ -34,8 +35,8 @@ This is expected to further improve with additional optimizations.
 These improvements only account for checkpoint save efficiency, representing a "worst case" in the sense that checkpointing purely adds overhead and isn't actually used.
 Any job interruptions will also benefit from the improved checkpoint recovery times.
 
-While [ML runtime goodput](https://cloud.google.com/blog/products/ai-machine-learning/goodput-metric-as-measure-of-ml-productivity) is important, we focus on overall job time as an end-to-end metric, as it is most transparent and accounts for actual cost.
-Goodput can be misleading if improvements to unproductive time actually worsen productive time.
+While [ML runtime goodput](https://cloud.google.com/blog/products/ai-machine-learning/goodput-metric-as-measure-of-ml-productivity) is important, we focus on overall job time as an end-to-end metric, as it is simpler and allows for straightforward _total_ cost comparisons.
+Runtime goodput alone can be misleading if improvements to unproductive time actually worsen productive (active training) time, and the change in total evaluation period (job time) is not taken into account.
 
 ## Design Philosophy
 

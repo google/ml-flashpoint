@@ -112,17 +112,31 @@ Code: See the [`ml_flashpoint.adapter.megatron`](https://github.com/google/ml-fl
 The Megatron strategies depend on the PyTorch DCP implementations.
 Below are instructions for setting up ML Flashpoint checkpointing, which you should configure alongside regular checkpointing to long-term storage.
 
+#### Imports
+
+```python
+# Saving
+from ml_flashpoint.adapter.pytorch.memory_storage_writer import MemoryStorageWriter
+from ml_flashpoint.adapter.megatron.save_strategies import (
+    MLFlashpointMegatronAsyncSaveStrategy,
+)
+
+# Loading
+from ml_flashpoint.adapter.megatron.load_strategies import MLFlashpointMegatronLoadStrategy
+from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
+from ml_flashpoint.core.checkpoint_loader import DefaultMLFlashpointCheckpointLoader
+from ml_flashpoint.replication.replication_manager import ReplicationManager
+
+# Megatron Checkpointing
+from megatron.core import dist_checkpointing as mcore_dist_checkpointing
+```
+
 #### Save Strategy
 
 First create a `MemoryStorageWriter`  instance as outlined in [PyTorch DCP](#pytorch-dcp).
 Then use that to instantiate the Megatron save strategy.
 
 ```python
-from ml_flashpoint.adapter.pytorch.memory_storage_writer import MemoryStorageWriter
-from ml_flashpoint.adapter.megatron.save_strategies import (
-    MLFlashpointMegatronAsyncSaveStrategy,
-)
-
 # Instantiate the MemoryStorageWriter
 memory_storage_writer = MemoryStorageWriter(...)
 
@@ -135,6 +149,13 @@ megatron_save_strategy = MLFlashpointMegatronAsyncSaveStrategy(
 Because Megatron's `dist_checkpointing.save()` function writes "common" data only on global rank 0, which does not align with local checkpointing, you can orchestrate saves using the save strategy the same way it's done in [`MLFlashpointCheckpointIO.save_checkpoint()`](https://github.com/google/ml-flashpoint/blob/b9767583520106f59743b9e8050769523cfbef6e/src/ml_flashpoint/adapter/nemo/checkpoint_io.py#L137-L171) in the `ml_flashpoint.adapter.nemo` package.
 You'll notice that the logic there aims to mimic `dist_checkpointing.save`, but it saves common data on each node (via local rank 0) as opposed to solely on the coordinator node (global rank 0).
 
+!!! note
+
+    Make sure to specify the checkpoint ID/path when saving based on the current step using: 
+    `CheckpointContainerId.create_child(base_container, CheckpointContainerId.format_version_container(current_step))`
+    where `base_container` is the base path CheckpointContainerId used for all checkpoints for the current job, e.g. `"/tmp/mlf-checkpoints/job123"`.
+
+
 Use this strategy on a more frequent interval than your regular long-term storage checkpointing strategy.
 
 #### Load Strategy
@@ -143,12 +164,6 @@ Instantiate the singleton `ReplicationManager` with a singleton `CheckpointObjec
 Also create an `MLFlashpointCheckpointLoader` with those dependencies, and use these instances to create the load strategy:
 
 ```python
-from ml_flashpoint.adapter.megatron.load_strategies import MLFlashpointMegatronLoadStrategy
-from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
-from ml_flashpoint.core.checkpoint_loader import DefaultMLFlashpointCheckpointLoader
-from ml_flashpoint.replication.replication_manager import ReplicationManager
-
-
 # Initialize dependencies (shared singletons)
 checkpoint_object_manager = CheckpointObjectManager()
 replication_manager = ReplicationManager()
@@ -169,12 +184,19 @@ mlflashpoint_load_strategy = MLFlashpointMegatronLoadStrategy(
 Now you can use the load strategy with Megatron-LM's `dist_checkpointing.load` function directly:
 
 ```python
-from megatron.core import dist_checkpointing as mcore_dist_checkpointing
-
 # First determine if an ML Flashpoint checkpoint is available, using the base container path you've configured
-local_checkpoint_container = checkpoint_loader.get_latest_complete_checkpoint(checkpoint_base_container)
+latest_saved_checkpoint_id = checkpoint_loader.get_latest_complete_checkpoint(checkpoint_base_container)
 
-if local_container is None:
+if local_checkpoint_container:
+    # Given the existing load function doesn't do anything rank-specific,
+    # it is suitable for us to use directly.
+    state_dict = mcore_dist_checkpointing.load(
+        sharded_state_dict=sharded_state_dict,
+        checkpoint_dir=str(latest_saved_checkpoint_id),
+        sharded_strategy=mlflashpoint_load_strategy,
+        common_strategy=TorchCommonLoadStrategy(),
+    )
+else:
     # Load using your regular sharded strategy from your long-term storage path
     state_dict = mcore_dist_checkpointing.load(
         sharded_state_dict=sharded_state_dict,
@@ -182,17 +204,100 @@ if local_container is None:
         sharded_strategy=regular_megatron_load_strategy,
         common_strategy=TorchCommonLoadStrategy(),
     )
-else:
-    # Given the existing load function doesn't do anything rank-specific,
-    # it is suitable for us to use directly.
-    state_dict = mcore_dist_checkpointing.load(
-        sharded_state_dict=sharded_state_dict,
-        checkpoint_dir=str(local_checkpoint_container),
-        sharded_strategy=mlflashpoint_load_strategy,
-        common_strategy=TorchCommonLoadStrategy(),
-    )
 ```
 
 ### PyTorch DCP
 
 Code: See the [`ml_flashpoint.adapter.pytorch`](https://github.com/google/ml-flashpoint/tree/main/src/ml_flashpoint/adapter/pytorch) package.
+
+To use directly with PyTorch DCP, use the provided `StorageWriter` and `StorageReader` implementations.
+You can use whatever `Planner` implementations work for your use case, or resort to the defaults.
+
+If your per-rank checkpoint data exceeds the default buffer size (16 GB as of this writing), you can increase it using the optional `initial_buffer_size_bytes` parameter. 
+
+#### Imports
+```python
+import torch
+from torch import multiprocessing as torch_mp
+import torch.distributed.checkpoint as dcp
+
+from ml_flashpoint.adapter.megatron.load_strategies import MLFlashpointMegatronLoadStrategy
+from ml_flashpoint.adapter.pytorch.memory_storage_writer import MemoryStorageWriter
+from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
+from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId
+from ml_flashpoint.core.checkpoint_loader import DefaultMLFlashpointCheckpointLoader
+from ml_flashpoint.core.checkpoint_saver import DefaultMLFlashpointCheckpointSaver
+from ml_flashpoint.replication.replication_manager import ReplicationManager
+```
+
+#### Initialization
+```python
+# Initialize dependencies (shared singletons)
+checkpoint_object_manager = CheckpointObjectManager()
+replication_manager = ReplicationManager()
+replication_manager.initialize(checkpoint_object_manager)
+
+# Instantiate the StorageWriter
+memory_storage_writer = MemoryStorageWriter(
+    checkpoint_saver=DefaultMLFlashpointCheckpointSaver(
+        global_rank_getter=torch.distributed.get_rank,
+        local_rank_getter=torch.distributed.get_node_local_rank,
+        global_barrier_func=lambda: torch.distributed.barrier(),
+        ckpt_obj_manager=checkpoint_object_manager,
+        replication_manager=replication_manager,
+        # initial_buffer_size_bytes=initial_write_buffer_size_bytes, # Optional - increase for larger checkpoint sizes per rank
+    ),
+    mp_manager=torch_mp.Manager(),
+)
+
+# Instantiate the CheckpointLoader and StorageReader
+checkpoint_loader = DefaultMLFlashpointCheckpointLoader(
+    checkpoint_object_manager=checkpoint_object_manager,
+    replication_manager=replication_manager,
+)
+memory_storage_reader = MemoryStorageReader(
+    path=checkpoint_dir,
+    checkpoint_loader=checkpoint_loader,
+)
+```
+
+#### Saving
+
+Now you can use the `MemoryStorageWriter` when saving checkpoints as you normally do with DCP e.g.:
+
+```python
+# Assuming base_container is the base path CheckpointContainerId used for all checkpoints for the current job, e.g. `"/tmp/mlf-checkpoints/job123"`:
+curr_step_checkpoint_id = CheckpointContainerId.create_child(
+    base_container, CheckpointContainerId.format_version_container(current_step)
+)
+
+# Sync save
+metadata = dcp.save(state_dict,
+                    checkpoint_id=str(curr_step_checkpoint_id),
+                    storage_writer=memory_storage_writer)
+
+# Async save
+future = dcp.async_save(state_dict,
+                        checkpoint_id=str(curr_step_checkpoint_id),
+                        storage_writer=memory_storage_writer,
+                        async_checkpointer_type=dcp.AsyncCheckpointerType.PROCESS)
+```
+
+#### Recovery
+During a recovery scenario, use the `checkpoint_loader` to first identify the latest available ML Flashpoint checkpoint, if any, to recover from.
+If none, fallback to your long-term storage checkpoint.
+
+```python
+# First determine if an ML Flashpoint checkpoint is available, using the base container path you've configured
+latest_saved_checkpoint_id = checkpoint_loader.get_latest_complete_checkpoint(checkpoint_base_container)
+
+if latest_saved_checkpoint_id:
+    dcp.load(state_dict,
+             checkpoint_id=str(latest_saved_checkpoint_id),
+             storage_reader=memory_storage_reader)
+else:
+    # Load using your regular sharded strategy from your long-term storage path
+    dcp.load(state_dict,
+             checkpoint_id=str(long_term_checkpoint_path),
+             ...)
+```

@@ -724,7 +724,7 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
             try:
                 dest_mv = buffer_io_writer.next_buffer_slice(num_bytes)
             except AttributeError:
-                _LOGGER.exception("BufferIO does not support get_buffer_slice, try to disable use_optimized_save.")
+                _LOGGER.exception("BufferIO does not support next_buffer_slice, try to disable use_optimized_save.")
                 raise
 
             # Create a tensor wrapper around the buffer slice

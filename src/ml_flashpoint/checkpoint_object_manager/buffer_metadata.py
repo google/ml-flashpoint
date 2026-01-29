@@ -14,7 +14,8 @@
 
 import ctypes
 
-METADATA_SIZE = 4096
+# --- Metadata Definitions ---
+METADATA_SIZE = 4096  # 4KB
 
 
 class BufferMetadataType(ctypes.LittleEndianStructure):
@@ -42,4 +43,5 @@ assert ctypes.sizeof(BufferMetadataType) == METADATA_SIZE, (
 
 # --- Helper Function ---
 def get_metadata_str(metadata: BufferMetadataType | None) -> str:
+    """Returns a string representation of the BufferMetadataType object."""
     return f"Metadata(len_written_data={metadata.len_written_data})" if metadata else "[Metadata: None]"

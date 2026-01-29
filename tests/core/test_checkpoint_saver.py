@@ -15,7 +15,6 @@
 import builtins
 import concurrent.futures
 import io
-import json
 import os
 import pickle
 import shutil
@@ -68,11 +67,11 @@ def _load_tensor_maybe_optimized(data, header=None):
         if header_len > 1024 * 1024:
             raise ValueError("Header too large")
 
-        json_bytes = data.read(header_len)
-        metadata = json.loads(json_bytes)
+        pickle_bytes = data.read(header_len)
+        tensor_header = pickle.loads(pickle_bytes)
 
-        dtype = getattr(torch, metadata["dtype"])
-        shape = metadata["shape"]
+        dtype = tensor_header.dtype
+        shape = tensor_header.shape
 
         raw_data = data.read()
         tensor = torch.frombuffer(bytearray(raw_data), dtype=dtype).reshape(shape)
@@ -164,11 +163,11 @@ class TestDefaultMLFlashpointCheckpointSaver:
             header_len = struct.unpack("<I", len_bytes)[0]
             assert header_len > 0
 
-            # Verify JSON header
-            json_bytes = buffer_io.read(header_len)
-            metadata = json.loads(json_bytes)
-            assert "dtype" in metadata
-            assert "shape" in metadata
+            # Verify Pickle header
+            pickle_bytes = buffer_io.read(header_len)
+            tensor_header = pickle.loads(pickle_bytes)
+            assert tensor_header.dtype == tensor_data.dtype
+            assert tensor_header.shape == tensor_data.shape
 
     def test_write_data_with_optimized_save_false(self, chkpt_object_manager, replication_manager, temp_dir_path):
         # Given
@@ -809,12 +808,12 @@ class TestDefaultMLFlashpointCheckpointSaver:
             len_bytes = header_bytes[:4]
             header_len = struct.unpack("<I", len_bytes)[0]
 
-            json_bytes = header_bytes[4:]
-            assert len(json_bytes) == header_len
+            pickle_bytes = header_bytes[4:]
+            assert len(pickle_bytes) == header_len
 
-            metadata = json.loads(json_bytes)
-            assert metadata["dtype"] == str(tensor.dtype).replace("torch.", "")
-            assert metadata["shape"] == list(tensor.shape)
+            tensor_header = pickle.loads(pickle_bytes)
+            assert tensor_header.dtype == tensor.dtype
+            assert tensor_header.shape == tensor.shape
 
             # 2. Verify Data Copy
             if tensor.nbytes > 0:
@@ -1560,6 +1559,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
             """Helper to assert that a WriteResult matches expectations."""
             assert write_result.index == expected_index
             assert write_result.storage_data.relative_path == expected_path
+            assert write_result.size_in_bytes > 0
             assert write_result.storage_data.offset == expected_offset
 
             obj_id = CheckpointObjectId.from_container(checkpoint_id, expected_path)
@@ -1573,8 +1573,6 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 if hasattr(buffer_reader, "_metadata") and hasattr(buffer_reader._metadata, "tensor_manifest"):
                     manifest = buffer_reader._metadata.tensor_manifest
 
-                # Better: check write_result type if available, but WriteResult only has index/size/storage_data.
-                # We can check expected_data type.
                 if isinstance(expected_data, (bytes, io.BytesIO)):
                     data_len = write_result.size_in_bytes
                     loaded_bytes = buffer_reader.read(data_len)

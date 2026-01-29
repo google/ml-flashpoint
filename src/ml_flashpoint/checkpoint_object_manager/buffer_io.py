@@ -16,7 +16,6 @@ import io
 from typing import Union
 
 from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject
-from ml_flashpoint.core.defaults import FORMAT_SIGNATURE
 from ml_flashpoint.core.mlf_logging import get_logger
 
 from .buffer_metadata import METADATA_SIZE, BufferMetadataType
@@ -65,7 +64,6 @@ class BufferIO:
                 # For writable buffers, create a "live" view that directly maps to the memory.
                 _LOGGER.info("Initializing in writable mode: creating a live view of the metadata section.")
                 self._metadata = BufferMetadataType.from_buffer(self._mv[:METADATA_SIZE])
-                self._metadata.format_signature = FORMAT_SIGNATURE
         except Exception as e:
             _LOGGER.exception("Failed to create metadata object from buffer slice.")
             raise IOError(f"Could not initialize metadata from buffer: {e}") from e
@@ -479,3 +477,14 @@ class BufferIO:
         """
         self._check_validity()
         return self._metadata.format_signature
+
+    def set_format_signature(self, signature: bytes) -> None:
+        """Sets the format signature in the buffer metadata.
+
+        Args:
+            signature: The signature bytes to set. Must be at most 8 bytes.
+        """
+        self._check_validity("write")
+        if len(signature) > 8:
+            raise ValueError(f"Format signature must be at most 8 bytes, got {len(signature)}")
+        self._metadata.format_signature = signature

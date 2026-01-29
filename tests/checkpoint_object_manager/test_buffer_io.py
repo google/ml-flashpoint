@@ -24,6 +24,7 @@ import pytest
 from ml_flashpoint.checkpoint_object_manager.buffer_io import METADATA_SIZE, BufferIO
 from ml_flashpoint.checkpoint_object_manager.buffer_metadata import BufferMetadataType
 from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject
+from ml_flashpoint.core.defaults import FORMAT_SIGNATURE
 
 
 # --- Mocks and Fixtures ---
@@ -980,3 +981,36 @@ class TestEndToEndIntegration:
         # Expect a RuntimeError indicating the path is a directory.
         with pytest.raises(RuntimeError, match="Path is a directory"):
             BufferObject(directory_path)
+
+
+class TestFormatSignature:
+    def test_buffer_io_does_not_set_signature_automatically(self, temp_dir_path):
+        """Test that initializing BufferIO does NOT automatically set the format signature."""
+        file_path = str(temp_dir_path / "signature_test.bin")
+        # precise size isn't critical, just needs to be enough for metadata
+        buffer_obj = BufferObject(file_path, METADATA_SIZE + 1024, overwrite=True)
+
+        with BufferIO(buffer_obj) as bio:
+            # BufferIO should NOT auto-set signature.
+            sig = bio.format_signature
+
+            assert sig != FORMAT_SIGNATURE, f"BufferIO SHOULD NOT auto-set signature. Got {sig!r}"
+
+    def test_set_format_signature(self, temp_dir_path):
+        """Test that set_format_signature correctly updates the metadata."""
+        file_path = str(temp_dir_path / "signature_set_test.bin")
+        buffer_obj = BufferObject(file_path, METADATA_SIZE + 1024, overwrite=True)
+
+        with BufferIO(buffer_obj) as bio:
+            custom_sig = b"CUSTOMSG"
+            bio.set_format_signature(custom_sig)
+            assert bio.format_signature == custom_sig
+
+    def test_set_format_signature_too_long(self, temp_dir_path):
+        """Test that set_format_signature raises error for too long signature."""
+        file_path = str(temp_dir_path / "signature_error_test.bin")
+        buffer_obj = BufferObject(file_path, METADATA_SIZE + 1024, overwrite=True)
+
+        with BufferIO(buffer_obj) as bio:
+            with pytest.raises(ValueError, match="Format signature must be at most 8 bytes"):
+                bio.set_format_signature(b"TOO_LONG_SIGNATURE")

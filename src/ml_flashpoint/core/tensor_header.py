@@ -13,32 +13,30 @@
 # limitations under the License.
 
 import dataclasses
-import json
+import pickle
 import struct
 from typing import Tuple
+
+import torch
 
 
 @dataclasses.dataclass
 class TensorHeader:
     """Header for a tensor stored in the checkpoint buffer."""
 
-    dtype: str
-    shape: list[int]
+    dtype: torch.dtype
+    shape: torch.Size
 
     def to_bytes(self) -> bytes:
         """Serializes the header to bytes.
 
         Format:
-        [4 bytes HEADER_LEN] [HEADER_BYTES (JSON)]
+        [4 bytes HEADER_LEN] [HEADER_BYTES (Pickle)]
         """
-        metadata = {
-            "dtype": self.dtype,
-            "shape": self.shape,
-        }
-        json_bytes = json.dumps(metadata).encode("utf-8")
-        header_len = len(json_bytes)
+        pickle_bytes = pickle.dumps(self)
+        header_len = len(pickle_bytes)
 
-        return struct.pack("<I", header_len) + json_bytes
+        return struct.pack("<I", header_len) + pickle_bytes
 
     @classmethod
     def from_bytes(cls, buffer: bytes) -> Tuple["TensorHeader", int]:
@@ -54,7 +52,5 @@ class TensorHeader:
         header_len = struct.unpack("<I", buffer[:4])[0]
 
         # Read header
-        json_bytes = buffer[4 : 4 + header_len]
-        metadata = json.loads(json_bytes.decode("utf-8"))
-
-        return cls(dtype=metadata["dtype"], shape=metadata["shape"]), 4 + header_len
+        pickle_bytes = buffer[4 : 4 + header_len]
+        return pickle.loads(pickle_bytes), 4 + header_len

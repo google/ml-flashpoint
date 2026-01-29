@@ -13,13 +13,21 @@
 # limitations under the License.
 
 import re
+from enum import Enum
 
 DIRTY_MARKER_SUFFIX = "unfinished"
 GLOBAL_RANK_PATTERN = re.compile(r"src(\d+)")
 COMMON_STATE_FNAME = "common.pt"
 
-# Magic bytes to identify our custom tensor format (8 bytes)
-FORMAT_SIGNATURE = b"MLF_TENS"
+
+class CheckpointFormat(bytes, Enum):
+    # Standard PyTorch save format
+    TORCH_SAVE = b"TORCH___"
+    # Our custom optimized format
+    MLF_FORMAT = b"MLF_TENS"
+
+
+FORMAT_SIGNATURE = CheckpointFormat.MLF_FORMAT.value
 
 
 def default_metadata_object_name() -> str:

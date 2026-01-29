@@ -15,7 +15,6 @@
 import abc
 import fcntl
 import io
-import json
 import logging
 import os
 import pickle
@@ -48,7 +47,6 @@ from ml_flashpoint.core.defaults import (
     default_metadata_object_name,
 )
 from ml_flashpoint.core.mlf_logging import get_logger
-from ml_flashpoint.core.tensor_header import TensorHeader
 from ml_flashpoint.core.utils import get_num_of_nodes, log_execution_time
 from ml_flashpoint.replication.replication_manager import ReplicationManager
 
@@ -174,6 +172,7 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
             torch.Tensor: read tensor.
         """
         pos = buffer_slice.tell()
+        tensor: Optional[torch.Tensor] = None
 
         if use_optimized_loader:
             # Read as optimized format (TensorHeader)
@@ -183,27 +182,26 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
                 header_len = struct.unpack("<I", len_bytes)[0]
                 # stored header length should be reasonable, if it's too large, it might be legacy format
                 if header_len < 1024 * 1024:
-                    json_bytes = buffer_slice.read(header_len)
+                    pickle_bytes = buffer_slice.read(header_len)
 
                     try:
-                        metadata = json.loads(json_bytes.decode("utf-8"))
-                        tensor_header = TensorHeader(**metadata)
+                        tensor_header = pickle.loads(pickle_bytes)
 
-                        tensor_dtype = getattr(torch, tensor_header.dtype)
+                        tensor_dtype = tensor_header.dtype
                         tensor_shape = tensor_header.shape
                         data_bytes = buffer_slice.read()
                         tensor = torch.frombuffer(data_bytes, dtype=tensor_dtype)
                         tensor = tensor.reshape(tensor_shape)
-                        return narrow_tensor_by_index(tensor, req.storage_offsets, req.lengths)
                     except Exception:
                         _LOGGER.exception("Failed to parse tensor header")
                         raise
-
-        buffer_slice.seek(pos)
-        tensor = cast(
-            torch.Tensor,
-            torch.load(cast(IO[bytes], buffer_slice), map_location="cpu", weights_only=True),
-        )
+        # Fallback to torch.load if optimized loader fails.
+        if tensor is None:
+            buffer_slice.seek(pos)
+            tensor = cast(
+                torch.Tensor,
+                torch.load(cast(IO[bytes], buffer_slice), map_location="cpu", weights_only=True),
+            )
         return narrow_tensor_by_index(tensor, req.storage_offsets, req.lengths)
 
     def _try_retrieve_object_if_missing(self, checkpoint_object_id: CheckpointObjectId) -> bool:

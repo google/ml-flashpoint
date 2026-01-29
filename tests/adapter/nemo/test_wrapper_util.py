@@ -851,7 +851,7 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         assert trainer.strategy.checkpoint_io.load_strategy.checkpoint_loader is mock_loader
 
     @pytest.mark.parametrize("use_optimized_save", [True, False])
-    def test_use_optimized_save_flag_passed_to_wrap_trainer_checkpoint_io_with_mlflashpoin(
+    def test_use_optimized_save_flag_passed_to_wrap_trainer_checkpoint_io_with_mlflashpoint(
         self, mocker, mock_ckpt_obj_manager, mock_replication_manager, use_optimized_save
     ):
         """Tests that the use_optimized_save flag is forwarded correctly."""

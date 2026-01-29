@@ -317,8 +317,8 @@ class TestReadTensor:
 
         # Manually create optimized format buffer
         tensor_header = TensorHeader(
-            dtype=str(tensor.dtype).replace("torch.", ""),
-            shape=list(tensor.shape),
+            dtype=tensor.dtype,
+            shape=tensor.shape,
         )
         # Use header's own serialization
         header_bytes = tensor_header.to_bytes()

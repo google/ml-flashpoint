@@ -625,9 +625,9 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
                 ) as buffer_io_writer:
                     # Set the format signature
                     if use_optimized_write:
-                        buffer_io_writer.set_format_signature(CheckpointFormat.MLF_FORMAT.value)
+                        buffer_io_writer.set_format_signature(CheckpointFormat.MLF_FORMAT)
                     else:
-                        buffer_io_writer.set_format_signature(CheckpointFormat.TORCH_SAVE.value)
+                        buffer_io_writer.set_format_signature(CheckpointFormat.TORCH_SAVE)
 
                     # First write tensors.
                     for tensor_item, tensor in tensor_tuples:

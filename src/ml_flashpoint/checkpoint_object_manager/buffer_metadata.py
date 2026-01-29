@@ -21,10 +21,10 @@ METADATA_SIZE = 4096  # 4KB
 class BufferMetadataType(ctypes.LittleEndianStructure):
     """Metadata block stored at the beginning of the BufferIO buffer."""
 
-    _pack_ = 1
+    _pack_ = 1  # Ensure tight packing for cross-platform consistency
     _fields_ = [
         ("len_written_data", ctypes.c_uint64),
-        # 8 bytes for MAGIC_BYTES to identify the file format version
+        # 8 bytes for checkpoint format signature to identify the file format version
         ("format_signature", ctypes.c_char * 8),
         # Pad the rest of the structure to reach METADATA_SIZE
         (

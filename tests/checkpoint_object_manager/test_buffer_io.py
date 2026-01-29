@@ -24,7 +24,7 @@ import pytest
 from ml_flashpoint.checkpoint_object_manager.buffer_io import METADATA_SIZE, BufferIO
 from ml_flashpoint.checkpoint_object_manager.buffer_metadata import BufferMetadataType
 from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject
-from ml_flashpoint.core.defaults import FORMAT_SIGNATURE
+from ml_flashpoint.core.defaults import CheckpointFormat
 
 
 # --- Mocks and Fixtures ---
@@ -994,7 +994,7 @@ class TestFormatSignature:
             # BufferIO should NOT auto-set signature.
             sig = bio.format_signature
 
-            assert sig != FORMAT_SIGNATURE, f"BufferIO SHOULD NOT auto-set signature. Got {sig!r}"
+            assert sig != CheckpointFormat.MLF_FORMAT, f"BufferIO SHOULD NOT auto-set signature. Got {sig!r}"
 
     def test_set_format_signature(self, temp_dir_path):
         """Test that set_format_signature correctly updates the metadata."""

@@ -27,9 +27,6 @@ class CheckpointFormat(bytes, Enum):
     MLF_FORMAT = b"MLF_TENS"
 
 
-FORMAT_SIGNATURE = CheckpointFormat.MLF_FORMAT.value
-
-
 def default_metadata_object_name() -> str:
     """Returns the default object name for metadata files (i.e. filename).
 

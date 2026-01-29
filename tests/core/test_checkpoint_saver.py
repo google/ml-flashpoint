@@ -39,7 +39,7 @@ from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import Ch
 from ml_flashpoint.checkpoint_object_manager.object_manager import object_manager_ext
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.checkpoint_saver import DefaultMLFlashpointCheckpointSaver, WriteItemResolver
-from ml_flashpoint.core.defaults import FORMAT_SIGNATURE
+from ml_flashpoint.core.defaults import CheckpointFormat
 from ml_flashpoint.replication.replication_manager import ReplicationManager
 
 
@@ -202,7 +202,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
         assert buffer_io is not None
         with buffer_io:
             magic = buffer_io.read(8)
-            assert magic != FORMAT_SIGNATURE
+            assert magic != CheckpointFormat.MLF_FORMAT
 
             # Reset position for loading
             buffer_io.seek(0)

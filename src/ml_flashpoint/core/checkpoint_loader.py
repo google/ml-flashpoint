@@ -42,8 +42,8 @@ from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, Checkp
 from ml_flashpoint.core.defaults import (
     COMMON_STATE_FNAME,
     DIRTY_MARKER_SUFFIX,
-    FORMAT_SIGNATURE,
     GLOBAL_RANK_PATTERN,
+    CheckpointFormat,
     default_metadata_object_name,
 )
 from ml_flashpoint.core.mlf_logging import get_logger
@@ -301,7 +301,7 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
 
         with self._checkpoint_object_manager.get_buffer(checkpoint_object_id) as stream:
             use_optimized_loader = False
-            if stream.format_signature == FORMAT_SIGNATURE:
+            if stream.format_signature == CheckpointFormat.MLF_FORMAT:
                 use_optimized_loader = True
                 _LOGGER.debug("Using optimized loader for '%s'", checkpoint_object_id.data)
 

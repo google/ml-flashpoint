@@ -21,7 +21,7 @@ import pickle
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import IO, List, Optional, Tuple, TypeVar, cast
+from typing import IO, List, Optional, Set, Tuple, TypeVar, cast
 
 import torch
 import torch.distributed as dist
@@ -126,7 +126,6 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         self,
         checkpoint_object_manager: CheckpointObjectManager,
         replication_manager: ReplicationManager,
-        recover_context: bool = False,
     ):
         """Initializes the DefaultMLFlashpointCheckpointLoader.
 
@@ -135,11 +134,9 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
                 reading data.
             replication_manager: The replication manager to use for retrieving
                 missing checkpoint objects from peer nodes.
-            recover_context: Whether to recover the context directory if missing.
         """
         self._checkpoint_object_manager = checkpoint_object_manager
         self._replication_manager = replication_manager
-        self._recover_context = recover_context
         # Cache for available objects: CheckpointContainerId -> dict[object_path, list[rank]]
         self._available_objects_cache: dict[CheckpointContainerId, dict[str, List[int]]] = {}
 
@@ -415,14 +412,7 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
             str(CheckpointObjectId.from_container(checkpoint, default_metadata_object_name()))
         )
 
-        if self._recover_context:
-            # We assume that if a rank has the context dir, the content in the dir is complete.
-            # We assume that are the files needed by all the nodes.
-            context_path = Path(checkpoint.data) / "context"
-            for objs in available_objects_by_rank.values():
-                for obj in objs:
-                    if Path(obj.data).parent == context_path:
-                        objects_needed_by_local_rank_0.add(str(obj.data))
+        objects_needed_by_local_rank_0.update(self._get_extra_needed_objects(checkpoint, available_objects_by_rank))
 
         world_size = dist.get_world_size()
         num_nodes = get_num_of_nodes()
@@ -560,11 +550,7 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
             for entry in os.listdir(container_path):
                 local_objects.append(entry)
 
-            if self._recover_context:
-                context_path = container_path / "context"
-                if context_path.is_dir():
-                    for entry in os.listdir(context_path):
-                        local_objects.append(os.path.join("context", entry))
+            local_objects.extend(self._get_extra_local_objects(container_path))
 
         all_objects_by_rank_paths = [None for _ in range(dist.get_world_size())]
         dist.all_gather_object(all_objects_by_rank_paths, local_objects)
@@ -640,3 +626,15 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         dist.all_gather_object(all_success_list, all_success)
         _LOGGER.debug("All success list: '%s'", all_success_list)
         return all(all_success_list)
+
+    def _get_extra_local_objects(self, container_path: Path) -> List[str]:
+        """Hook for subclasses to provide extra local objects."""
+        return []
+
+    def _get_extra_needed_objects(
+        self,
+        checkpoint: CheckpointContainerId,
+        available_objects_by_rank: dict[int, List[CheckpointObjectId]],
+    ) -> Set[str]:
+        """Hook for subclasses to provide extra needed objects for local rank 0."""
+        return set()

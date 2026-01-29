@@ -745,5 +745,3 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
 
             # Perform the actual copy.
             dest_tensor.copy_(tensor)
-
-        return tensor_header

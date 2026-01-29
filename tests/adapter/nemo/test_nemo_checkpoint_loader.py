@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -105,11 +104,11 @@ class TestNeMoCheckpointLoaderContext:
         metadata_file = str(Path(checkpoint.data) / ".metadata")
 
         # Available objects:
-        # Rank 0 has everything (Context + Common + Metadata)
-        # Others have nothing
+        # Node 0 (Rank 0,1) has everything (Context + Common + Metadata)
+        # Node 1 (Rank 2,3) has nothing
         available_objects = {
             0: [CheckpointObjectId(ctx_file), CheckpointObjectId(common_pt), CheckpointObjectId(metadata_file)],
-            1: [],
+            1: [CheckpointObjectId(ctx_file), CheckpointObjectId(common_pt), CheckpointObjectId(metadata_file)],
             2: [],
             3: [],
         }
@@ -119,12 +118,8 @@ class TestNeMoCheckpointLoaderContext:
 
         assert plan is not None
 
-        # Rank 0: Already has files, no retrieval needed (or plan[0] is empty)
+        # Node 0: Already has files, no retrieval needed (or plan[0] is empty)
         assert 0 not in plan or not plan[0]
-
-        # Rank 1: Local rank 1 on Node 0. Shared FS with Rank 0. Should NOT retrieve context.
-        # It also doesn't need common.pt/metadata (only local rank 0 needs them).
-        # So plan[1] should be empty/missing.
         assert 1 not in plan or not plan[1]
 
         # Rank 2: Local rank 0 on Node 1. Needs Context + Common + Metadata.

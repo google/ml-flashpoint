@@ -19,7 +19,6 @@ import pickle
 import tempfile
 from pathlib import Path
 from typing import Dict, Tuple
-from unittest.mock import MagicMock
 
 import pytest
 import torch
@@ -1936,6 +1935,3 @@ class TestCheckpointLoaderSync:
         # This assertion is expected to FAIL currently
         assert len(result[1]) == 1, f"Rank 1 should have objects, but got {result[1]}"
         assert str(result[1][0]).endswith("file1")
-
-
-

@@ -68,10 +68,10 @@ class NeMoMLFlashpointCheckpointLoader(DefaultMLFlashpointCheckpointLoader):
         extra_needed = set()
         if self._recover_context:
             # We assume that if a rank has the context dir, the content in the dir is complete.
-            # We assume that are the files needed by all the nodes.
-            context_path = Path(checkpoint.data) / "context"
+            # We assume that these are the files needed by all the nodes.
+            context_path_str = str(Path(checkpoint.data) / "context")
             for objs in available_objects_by_rank.values():
                 for obj in objs:
-                    if Path(obj.data).parent == context_path:
+                    if os.path.dirname(str(obj.data)) == context_path_str:
                         extra_needed.add(str(obj.data))
         return extra_needed

@@ -43,6 +43,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
     always_save_context: bool = False,
     write_thread_count: int = 1,
     initial_write_buffer_size_bytes: int = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
+    use_optimized_save: bool = True,
 ) -> MLFlashpointAutoResume:
     """Wraps the trainer and creates an MLFlashpointAutoResume instance wrapping `default_auto_resume`.
 
@@ -87,6 +88,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
         always_save_context=always_save_context,
         write_thread_count=write_thread_count,
         initial_write_buffer_size_bytes=initial_write_buffer_size_bytes,
+        use_optimized_save=use_optimized_save,
     )
 
     default_auto_resume_args = vars(default_auto_resume) if default_auto_resume else {}
@@ -107,6 +109,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
     always_save_context: bool = False,
     write_thread_count: int = 1,
     initial_write_buffer_size_bytes: int = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
+    use_optimized_save: bool = True,
 ):
     """Wraps the trainer's checkpoint I/O with ML Flashpoint capabilities.
 
@@ -202,6 +205,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
                 ckpt_obj_manager=ckpt_obj_manager,
                 replication_manager=replication_manager,
                 initial_buffer_size_bytes=initial_write_buffer_size_bytes,
+                use_optimized_save=use_optimized_save,
             ),
             mp_manager=torch_mp.Manager(),
             thread_count=write_thread_count,

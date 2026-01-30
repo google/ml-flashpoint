@@ -323,6 +323,40 @@ class BufferIO:
         self._check_validity()
         return self._pos
 
+    def next_buffer_slice(self, size: int) -> memoryview:
+        """Returns a writable memoryview slice of the buffer at the current position.
+
+        This allows for zero-copy operations into the buffer (e.g., direct tensor copy).
+        The stream position is advanced by `size` bytes.
+
+        Args:
+            size: The size of the slice in bytes.
+
+        Returns:
+            A writable memoryview slice.
+        """
+        self._check_validity("write")
+        if size < 0:
+            raise ValueError(f"Size must be non-negative, got {size}")
+
+        actual_start = METADATA_SIZE + self._pos
+        actual_end = actual_start + size
+
+        if actual_end > len(self._mv):
+            raise ValueError(
+                f"Requested slice (size={size}) exceeds buffer capacity "
+                f"(pos={self._pos}, cap={len(self._mv) - METADATA_SIZE})"
+            )
+
+        # Create the slice
+        slice_mv = self._mv[actual_start:actual_end]
+
+        # Advance position
+        self._pos += size
+        self._update_written_data_length(self._pos)
+
+        return slice_mv
+
     def close(self, truncate: bool = True) -> None:
         """Closes the BufferIO stream and the underlying C++ BufferObject.
 
@@ -433,3 +467,24 @@ class BufferIO:
         # Check validity first, as flush() is still an I/O operation.
         self._check_validity()
         pass
+
+    @property
+    def format_signature(self) -> bytes:
+        """Returns the format signature stored in the buffer metadata.
+
+        Returns:
+            The format signature bytes.
+        """
+        self._check_validity()
+        return self._metadata.format_signature
+
+    def set_format_signature(self, signature: bytes) -> None:
+        """Sets the format signature in the buffer metadata.
+
+        Args:
+            signature: The signature bytes to set. Must be at most 8 bytes.
+        """
+        self._check_validity("write")
+        if len(signature) > 8:
+            raise ValueError(f"Format signature must be at most 8 bytes, got {len(signature)}")
+        self._metadata.format_signature = signature

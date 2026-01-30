@@ -27,10 +27,12 @@ class BufferMetadataType(ctypes.LittleEndianStructure):
     _fields_ = [
         # 8 bytes for the length of valid data written *after* the metadata block
         ("len_written_data", ctypes.c_uint64),
+        # 8 bytes for checkpoint format signature to identify the file format version
+        ("format_signature", ctypes.c_char * 8),
         # Pad the rest of the structure to reach METADATA_SIZE
         (
             "reserved",
-            ctypes.c_uint8 * (METADATA_SIZE - ctypes.sizeof(ctypes.c_uint64)),
+            ctypes.c_uint8 * (METADATA_SIZE - ctypes.sizeof(ctypes.c_uint64) - 8),
         ),
     ]
 

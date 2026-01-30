@@ -19,6 +19,7 @@ import logging
 import os
 import pickle
 import re
+import struct
 from collections import defaultdict
 from pathlib import Path
 from typing import IO, List, Optional, Tuple, TypeVar, cast
@@ -42,6 +43,7 @@ from ml_flashpoint.core.defaults import (
     COMMON_STATE_FNAME,
     DIRTY_MARKER_SUFFIX,
     GLOBAL_RANK_PATTERN,
+    CheckpointFormat,
     default_metadata_object_name,
 )
 from ml_flashpoint.core.mlf_logging import get_logger
@@ -158,20 +160,48 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
             _LOGGER.exception("Error reading metadata from '%s'", metadata_path)
             raise
 
-    def read_tensor(self, buffer_slice: IO[bytes], req: ReadItem) -> torch.Tensor:
+    def read_tensor(self, buffer_slice: IO[bytes], req: ReadItem, use_optimized_loader: bool = False) -> torch.Tensor:
         """Read tensor from file slice.
 
         Args:
             buffer_slice (IO[bytes]): file slice to read from.
             req (ReadItem): read item.
+            use_optimized_loader (bool): whether to use optimized loader.
 
         Returns:
             torch.Tensor: read tensor.
         """
-        tensor = cast(
-            torch.Tensor,
-            torch.load(cast(IO[bytes], buffer_slice), map_location="cpu", weights_only=True),
-        )
+        pos = buffer_slice.tell()
+        tensor: Optional[torch.Tensor] = None
+
+        if use_optimized_loader:
+            # Read as optimized format (TensorHeader)
+            # First read 4 bytes for length
+            len_bytes = buffer_slice.read(4)
+            if len(len_bytes) == 4:
+                header_len = struct.unpack("<I", len_bytes)[0]
+                # stored header length should be reasonable, if it's too large, it might be legacy format
+                if header_len < 1024 * 1024:
+                    pickle_bytes = buffer_slice.read(header_len)
+
+                    try:
+                        tensor_header = pickle.loads(pickle_bytes)
+
+                        tensor_dtype = tensor_header.dtype
+                        tensor_shape = tensor_header.shape
+                        data_bytes = buffer_slice.read()
+                        tensor = torch.frombuffer(data_bytes, dtype=tensor_dtype)
+                        tensor = tensor.reshape(tensor_shape)
+                    except Exception:
+                        _LOGGER.exception("Failed to parse tensor header")
+                        raise
+        # Fallback to torch.load if optimized loader fails.
+        if tensor is None:
+            buffer_slice.seek(pos)
+            tensor = cast(
+                torch.Tensor,
+                torch.load(cast(IO[bytes], buffer_slice), map_location="cpu", weights_only=True),
+            )
         return narrow_tensor_by_index(tensor, req.storage_offsets, req.lengths)
 
     def _try_retrieve_object_if_missing(self, checkpoint_object_id: CheckpointObjectId) -> bool:
@@ -270,6 +300,11 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
             raise FileNotFoundError(error_msg)
 
         with self._checkpoint_object_manager.get_buffer(checkpoint_object_id) as stream:
+            use_optimized_loader = False
+            if stream.format_signature == CheckpointFormat.MLF_FORMAT:
+                use_optimized_loader = True
+                _LOGGER.debug("Using optimized loader for '%s'", checkpoint_object_id.data)
+
             for req in read_items:
                 item_md = storage_data[req.storage_index]
                 buffer_slice = cast(IO[bytes], _create_file_view(stream, item_md.offset, item_md.length))
@@ -278,7 +313,7 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
                     read_bytes.seek(0)
                     planner.load_bytes(req, read_bytes)
                 else:
-                    tensor = self.read_tensor(buffer_slice, req)
+                    tensor = self.read_tensor(buffer_slice, req, use_optimized_loader=use_optimized_loader)
                     target_tensor = planner.resolve_tensor(req).detach()
                     assert target_tensor.size() == tensor.size(), (
                         f"req {req.storage_index} mismatch sizes {target_tensor.size()} vs {tensor.size()}"

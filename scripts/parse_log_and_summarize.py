@@ -172,11 +172,14 @@ def analyze_step_time_breakdown(log_file_path):
     # 2. Calculate Dynamic Threshold
     # This threshold represents the minimum expected time interval between
     # the timestamps of two consecutive steps.
+    THRESHOLD_BUFFER_SECONDS = 2.0
+    DEFAULT_THRESHOLD_SECONDS = 20.0
     train_times = [e["train_time"] for e in events if e["type"] == "step"]
     if train_times:
-        threshold = min(train_times) - 2.0
+        # Ensure threshold is not negative, which would disable the correction logic.
+        threshold = max(0, min(train_times) - THRESHOLD_BUFFER_SECONDS)
     else:
-        threshold = 20.0
+        threshold = DEFAULT_THRESHOLD_SECONDS
 
     results = []
     processed_steps = []

@@ -145,35 +145,73 @@ def analyze_step_time_breakdown(log_file_path):
     timestamp_pattern = re.compile(r"\[(?:NeMo|MLF).*? (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
     train_step_pattern = re.compile(r"global_step: (\d+).*?train_step_timing in s: ([\d.]+)")
 
-    step_data = []
-    last_seen_timestamp = None
-
+    events = []
+    # 1. Parse the file into a linear stream of events
     try:
         with open(log_file_path, "r") as f:
             for line in f:
                 ts_match = timestamp_pattern.search(line)
                 if ts_match:
                     try:
-                        last_seen_timestamp = datetime.strptime(ts_match.group(1), "%Y-%m-%d %H:%M:%S")
+                        dt = datetime.strptime(ts_match.group(1), "%Y-%m-%d %H:%M:%S")
+                        events.append({"type": "ts", "val": dt})
                     except ValueError:
                         pass
 
                 step_match = train_step_pattern.search(line)
-                if step_match and last_seen_timestamp:
-                    step_data.append(
-                        {
-                            "step": int(step_match.group(1)),
-                            "finish_time": last_seen_timestamp,
-                            "train_time": float(step_match.group(2)),
-                        }
+                if step_match:
+                    events.append(
+                        {"type": "step", "step": int(step_match.group(1)), "train_time": float(step_match.group(2))}
                     )
     except Exception as e:
         print(f"Error analyzing breakdown: {e}")
         return []
 
+    # 2. Calculate Dynamic Threshold
+    # This threshold represents the minimum expected time interval between
+    # the timestamps of two consecutive steps.
+    train_times = [e["train_time"] for e in events if e["type"] == "step"]
+    if train_times:
+        threshold = min(train_times) - 2.0
+    else:
+        threshold = 20.0
+
     results = []
-    for i in range(1, len(step_data)):
-        prev, curr = step_data[i - 1], step_data[i]
+    processed_steps = []
+    last_seen_ts = None
+
+    # 3. Process events to determine effective finish_time for each step
+    for i, event in enumerate(events):
+        if event["type"] == "ts":
+            last_seen_ts = event["val"]
+        elif event["type"] == "step":
+            if last_seen_ts is None:
+                continue
+
+            step_num = event["step"]
+            train_time = event["train_time"]
+
+            finish_time = last_seen_ts
+
+            if processed_steps:
+                prev_finish_time = processed_steps[-1]["finish_time"]
+                gap = (finish_time - prev_finish_time).total_seconds()
+
+                # Check against the threshold
+                if gap < threshold:
+                    # Look ahead for the NEXT timestamp
+                    for j in range(i + 1, len(events)):
+                        if events[j]["type"] == "ts":
+                            finish_time = events[j]["val"]
+                            break
+
+            processed_steps.append({"step": step_num, "finish_time": finish_time, "train_time": train_time})
+
+    # 4. Calculate final gaps
+    for i in range(1, len(processed_steps)):
+        prev = processed_steps[i - 1]
+        curr = processed_steps[i]
+
         if curr["step"] > prev["step"]:
             time_delta = max((curr["finish_time"] - prev["finish_time"]).total_seconds(), 0.0)
             other_time = time_delta - curr["train_time"]
@@ -186,6 +224,7 @@ def analyze_step_time_breakdown(log_file_path):
                     "other_time": other_time,
                 }
             )
+
     return results
 
 

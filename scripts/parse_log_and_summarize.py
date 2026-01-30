@@ -169,7 +169,7 @@ def analyze_step_time_breakdown(log_file_path):
         print(f"Error analyzing breakdown: {e}")
         return []
 
-    # 2. Calculate Dynamic Threshold
+   # 2. Calculate Dynamic Threshold
     # This threshold represents the minimum expected time interval between
     # the timestamps of two consecutive steps.
     THRESHOLD_BUFFER_SECONDS = 2.0

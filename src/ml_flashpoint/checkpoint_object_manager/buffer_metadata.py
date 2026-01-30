@@ -19,7 +19,9 @@ METADATA_SIZE = 4096  # 4KB
 
 
 class BufferMetadataType(ctypes.LittleEndianStructure):
-    """Metadata block stored at the beginning of the BufferIO buffer."""
+    """Defines the structure of the metadata block stored at the beginning
+    of the BufferIO buffer.
+    """
 
     _pack_ = 1  # Ensure tight packing for cross-platform consistency
     _fields_ = [
@@ -43,5 +45,19 @@ assert ctypes.sizeof(BufferMetadataType) == METADATA_SIZE, (
 
 # --- Helper Function ---
 def get_metadata_str(metadata: BufferMetadataType | None) -> str:
-    """Returns a string representation of the BufferMetadataType object."""
-    return f"Metadata(len_written_data={metadata.len_written_data})" if metadata else "[Metadata: None]"
+    """Returns a string representation of the BufferMetadataType object.
+
+    Args:
+        metadata: An instance of BufferMetadataType or None.
+
+    Returns:
+        A formatted string describing the metadata content, or a placeholder
+        if metadata is None.
+    """
+    if metadata is None:
+        return "[Metadata: None]"
+    # Format the fields from the metadata object
+    # Add more fields here if the BufferMetadataType struct expands
+    len_data = metadata.len_written_data
+    # You could add other relevant fields from 'reserved' if they were defined
+    return f"Metadata(len_written_data={len_data})"

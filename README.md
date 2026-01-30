@@ -4,7 +4,7 @@
 
 A memory-first, lightning-fast, ready-to-use ML checkpointing library.
 
-PyTorch DCP, Megatron-LM and NeMo 2.0 adapters are readily available for seamless integration, on top of our general core checkpointing library that is available for custom integrations.
+PyTorch DCP, Megatron-LM and NeMo 2.0 adapters are readily available for seamless integration, on top of our general core checkpointing library that can be used for custom integrations.
 
 If interested in direct integration support with another framework, let us know! 
 Please create a [feature request](https://github.com/google/ml-flashpoint/issues/new?template=feature_request.md), or upvote an existing one.

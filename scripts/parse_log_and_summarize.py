@@ -160,9 +160,11 @@ def analyze_step_time_breakdown(log_file_path):
 
                 step_match = train_step_pattern.search(line)
                 if step_match:
-                    events.append(
-                        {"type": "step", "step": int(step_match.group(1)), "train_time": float(step_match.group(2))}
-                    )
+                    events.append({
+                        "type": "step",
+                        "step": int(step_match.group(1)),
+                        "train_time": float(step_match.group(2))
+                    })
     except Exception as e:
         print(f"Error analyzing breakdown: {e}")
         return []
@@ -205,7 +207,11 @@ def analyze_step_time_breakdown(log_file_path):
                             finish_time = events[j]["val"]
                             break
 
-            processed_steps.append({"step": step_num, "finish_time": finish_time, "train_time": train_time})
+            processed_steps.append({
+                "step": step_num,
+                "finish_time": finish_time,
+                "train_time": train_time
+            })
 
     # 4. Calculate final gaps
     for i in range(1, len(processed_steps)):
@@ -215,15 +221,13 @@ def analyze_step_time_breakdown(log_file_path):
         if curr["step"] > prev["step"]:
             time_delta = max((curr["finish_time"] - prev["finish_time"]).total_seconds(), 0.0)
             other_time = time_delta - curr["train_time"]
-            results.append(
-                {
-                    "step": curr["step"],
-                    "timestamp": curr["finish_time"],
-                    "total_gap": time_delta,
-                    "train_time": curr["train_time"],
-                    "other_time": other_time,
-                }
-            )
+            results.append({
+                "step": curr["step"],
+                "timestamp": curr["finish_time"],
+                "total_gap": time_delta,
+                "train_time": curr["train_time"],
+                "other_time": other_time,
+            })
 
     return results
 

@@ -25,6 +25,7 @@ class BufferMetadataType(ctypes.LittleEndianStructure):
 
     _pack_ = 1  # Ensure tight packing for cross-platform consistency
     _fields_ = [
+        # 8 bytes for the length of valid data written *after* the metadata block
         ("len_written_data", ctypes.c_uint64),
         # 8 bytes for checkpoint format signature to identify the file format version
         ("format_signature", ctypes.c_char * 8),

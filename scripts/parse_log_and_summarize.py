@@ -142,7 +142,7 @@ def analyze_step_time_breakdown(log_file_path):
     1. Total Gap: Wall-clock time elapsed between the end of step N-1 and step N.
     2. Other Time (Overhead): Total Gap minus the reported training time (train_step_timing from NeMo logs).
     """
-    timestamp_pattern = re.compile(r"\[NeMo \w (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+    timestamp_pattern = re.compile(r"\[(?:NeMo|MLF).*? (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
     train_step_pattern = re.compile(r"global_step: (\d+).*?train_step_timing in s: ([\d.]+)")
 
     step_data = []

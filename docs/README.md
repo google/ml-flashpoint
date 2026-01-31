@@ -27,6 +27,7 @@ We observe meaningful improvements even in small-scale tests, spanning just 300 
 We executed such tests on a [Vertex AI Training Cluster](https://docs.cloud.google.com/vertex-ai/docs/training/training-clusters/overview) and obtained the speedups listed below.
 These tests were conducted using ML Flashpoint _alongside_ NeMo's recommended checkpointing (as you would in production), where NeMo's default checkpointing used a 7-10 TB [Filestore](https://cloud.google.com/filestore) instance.
 
+[¶](#perf-summary){ #perf-summary }
 When comparing 
 
 1. the hybrid of ML Flashpoint (every 5 steps) and NeMo checkpointing (every 50 steps), to

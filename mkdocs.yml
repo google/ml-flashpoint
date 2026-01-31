@@ -48,6 +48,7 @@ plugins:
   # To enable generating documentation that can be served from a local filesystem.
   # - offline
   - search
+  - autorefs
   - mkdocstrings:
       handlers:
         python:
@@ -59,6 +60,7 @@ plugins:
 
 markdown_extensions:
   - admonition
+  - attr_list
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg

@@ -41,7 +41,7 @@ This is expected to further improve with additional optimizations.
 These improvements only account for checkpoint _save_ efficiency, representing a "lower bound" value as it doesn't account for the speedups in _recovery_ time.
 Any job interruptions would also benefit from ML Flashpoint's recovery performance gains.
 
-!!! note
+!!! info
 
     While [ML runtime goodput](https://cloud.google.com/blog/products/ai-machine-learning/goodput-metric-as-measure-of-ml-productivity) is important, we focus on overall job time as an end-to-end metric, as it is simpler and allows for straightforward _total_ cost comparisons.
     

@@ -23,11 +23,11 @@ See the [overview](overview.md) for more detail.
 
 ### Performance
 
-We observe meaningful improvements even in small-scale tests spanning just 300 training steps with 4 [A3-Mega](https://docs.cloud.google.com/compute/docs/accelerator-optimized-machines#a3-mega-vms) nodes for Gemma 27B and Llama 70B pre-training.
+We observe meaningful improvements even in small-scale tests, spanning just 300 training steps with 4 [A3-Mega](https://docs.cloud.google.com/compute/docs/accelerator-optimized-machines#a3-mega-vms) nodes, for Gemma 27B and Llama 70B pre-training.
 We executed such tests on a [Vertex AI Training Cluster](https://docs.cloud.google.com/vertex-ai/docs/training/training-clusters/overview) and obtained the speedups listed below.
 These tests were conducted using ML Flashpoint _alongside_ NeMo's recommended checkpointing (as you would in production), where NeMo's default checkpointing used a 7-10 TB [Filestore](https://cloud.google.com/filestore) instance.
 
-When comparing the hybrid of ML Flashpoint (every 5 steps) and NeMo checkpointing (every 50 steps) to NeMo's regular checkpointing (every 10 steps - so half as often), the results were:
+When comparing a. the hybrid of ML Flashpoint (every 5 steps) and NeMo checkpointing (every 50 steps) to b. NeMo's regular checkpointing (every 10 steps - so half as often), the hybrid approach resulted in:
 
 * Data write times that are up to 20-30x faster, with little to no optimization.
 This is expected to further improve with additional optimizations.

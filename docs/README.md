@@ -34,7 +34,7 @@ This is expected to further improve with additional optimizations.
 * Total checkpoint recovery times that are ~7-10x faster (includes the time it takes to do checkpoint detection, cross-node coordination, replication, read into model state and be ready to resume training).
 * For _async_ checkpointing: improvements averaging **3-6%** for _overall job time_, with peaks of **5-10%** improvements if only doing NeMo checkpointing at the end (300th step) as opposed to every 50 steps.
 These improvements only account for checkpoint save efficiency, representing a "lower bound" speedup as it doesn't account for the speedups in recovery time.
-Any job interruptions would also benefit from recovery performance gains.
+Any job interruptions would also benefit from ML Flashpoint's recovery performance gains.
 
 While [ML runtime goodput](https://cloud.google.com/blog/products/ai-machine-learning/goodput-metric-as-measure-of-ml-productivity) is important, we focus on overall job time as an end-to-end metric, as it is simpler and allows for straightforward _total_ cost comparisons.
 Runtime goodput alone can be misleading if improvements to unproductive (non-training) time actually worsen productive (active training) time, and the change in total evaluation period (job time) is not taken into account.

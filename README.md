@@ -4,9 +4,9 @@
 
 A memory-first, lightning-fast, ready-to-use ML checkpointing library.
 
-PyTorch DCP, Megatron-LM and NeMo 2.0 adapters are readily available for seamless integration, on top of our general core checkpointing library that can be used for custom integrations.
+Adapters for PyTorch DCP, Megatron-LM and NeMo 2.0 are readily available for seamless integration, on top of our core checkpointing APIs that can also be used directly for custom integrations.
 
-If interested in direct integration support with another framework, please let us know by creating a [feature request](https://github.com/google/ml-flashpoint/issues/new?template=feature_request.md) or upvoting an existing one!
+If interested in a native integration with another framework, please let us know by creating a [feature request](https://github.com/google/ml-flashpoint/issues/new?template=feature_request.md) or upvoting an existing one!
 
 For learning more about using the library and its performance, check out the [user documentation](https://google.github.io/ml-flashpoint). 
 Below you will find development instructions for contributors.
@@ -14,7 +14,7 @@ Below you will find development instructions for contributors.
 ## Installation
 
 This library defines core dependencies, as well as additional optional dependencies for specific adapters, to avoid polluting consumers with unnecessary dependencies.
-See the adapters installation commands for examples of the available adapters.
+See the adapters installation commands below for examples of the available options, and the [`pyproject.toml`](./pyproject.toml) as the source of truth for all available adapters.
 
 ### Core Library
 ```bash

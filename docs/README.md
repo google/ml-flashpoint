@@ -32,7 +32,7 @@ When comparing a. the hybrid of ML Flashpoint (every 5 steps) and NeMo checkpoin
 * Data write times that are up to 20-30x faster, with little to no optimization.
 This is expected to further improve with additional optimizations.
 * Total checkpoint recovery times that are ~7-10x faster (includes the time it takes to do checkpoint detection, cross-node coordination, replication, read into model state and be ready to resume training).
-* For _async_ checkpointing: improvements averaging **3-6%** for _overall job time_, with peaks of **5-10%** improvements if only doing NeMo checkpointing at the end (300th step) as opposed to every 50 steps.
+* For _async_ checkpointing: improvements averaging **3-6%** for _overall job time_, with peaks reaching **5-10%** when NeMo checkpointing is deferred to the end (300th step) instead of being done every 50 steps.
 These improvements only account for checkpoint save efficiency, representing a "lower bound" speedup as it doesn't account for the speedups in recovery time.
 Any job interruptions would also benefit from ML Flashpoint's recovery performance gains.
 

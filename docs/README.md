@@ -18,25 +18,35 @@ The goal is to ultimately improve your ML runtime (total time and goodput), by a
 1. Free up your long-term storage bandwidth for other use cases.
 
 ML Flashpoint saves checkpoints to shared memory, to be able to recover when the node is not lost, and automatically replicates them asynchronously to peer(s) in the training cluster, to improve resilience during node losses.
-Replication has not been observed to have any negative impact on ongoing training or overall job time.
+Replication has not been observed to have any meaningful negative impact on ongoing training or overall job time.
 See the [overview](overview.md) for more detail.
 
 ### Performance
 
-We performed some tests on a [Vertex AI Training Cluster](https://docs.cloud.google.com/vertex-ai/docs/training/training-clusters/overview) with 4 [A3-Mega](https://docs.cloud.google.com/compute/docs/accelerator-optimized-machines#a3-mega-vms) nodes for Gemma 27B and Llama 70B pre-training over just 300 steps and observed the improvements listed below.
+We observe meaningful improvements even in small-scale tests, spanning just 300 training steps with 4 [A3-Mega](https://docs.cloud.google.com/compute/docs/accelerator-optimized-machines#a3-mega-vms) nodes, for Gemma 27B and Llama 70B pre-training.
+We executed such tests on a [Vertex AI Training Cluster](https://docs.cloud.google.com/vertex-ai/docs/training/training-clusters/overview) and obtained the speedups listed below.
 These tests were conducted using ML Flashpoint _alongside_ NeMo's recommended checkpointing (as you would in production), where NeMo's default checkpointing used a 7-10 TB [Filestore](https://cloud.google.com/filestore) instance.
 
-Observations when comparing the hybrid of ML Flashpoint (every 5 steps) and NeMo checkpointing (every 50 steps) to just NeMo's regular checkpointing (every 10 steps):
+[¶](#perf-summary){ #perf-summary }
+When comparing 
+
+1. the hybrid of ML Flashpoint (every 5 steps) and NeMo checkpointing (every 50 steps), to
+1. NeMo's regular checkpointing (every 10 steps - so half as often)
+
+the hybrid approach resulted in:
 
 * Data write times that are up to 20-30x faster, with little to no optimization.
 This is expected to further improve with additional optimizations.
 * Total checkpoint recovery times that are ~7-10x faster (includes the time it takes to do checkpoint detection, cross-node coordination, replication, read into model state and be ready to resume training).
-* For _async_ checkpointing: improvements averaging **3-6%** for _overall job time_, with peaks of **5-10%** improvements.
-These improvements only account for checkpoint save efficiency, representing a "worst case" in the sense that checkpointing purely adds overhead and isn't actually used.
-Any job interruptions will also benefit from the improved checkpoint recovery times.
+* For _async_ checkpointing: improvements averaging **3-6%** for _overall job time_, and reaching **5-10%** when NeMo checkpointing is deferred to the end (300th step) instead of being done every 50 steps.
+These improvements only account for checkpoint _save_ efficiency, representing a "lower bound" value as it doesn't account for the speedups in _recovery_ time.
+Any job interruptions would also benefit from ML Flashpoint's recovery performance gains.
 
-While [ML runtime goodput](https://cloud.google.com/blog/products/ai-machine-learning/goodput-metric-as-measure-of-ml-productivity) is important, we focus on overall job time as an end-to-end metric, as it is simpler and allows for straightforward _total_ cost comparisons.
-Runtime goodput alone can be misleading if improvements to unproductive time actually worsen productive (active training) time, and the change in total evaluation period (job time) is not taken into account.
+!!! info
+
+    While [ML runtime goodput](https://cloud.google.com/blog/products/ai-machine-learning/goodput-metric-as-measure-of-ml-productivity) is important, we focus on overall job time as an end-to-end metric, as it is simpler and allows for straightforward _total_ cost comparisons.
+    
+    Runtime goodput alone can be misleading if improvements to unproductive (non-training) time actually worsen productive (active training) time, and the change in total evaluation period (job time) is not taken into account.
 
 ## Design Philosophy
 

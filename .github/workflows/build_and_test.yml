@@ -22,8 +22,8 @@ on:
 
 jobs:
   build:
-    # Use larger machine with more disk space
-    runs-on: ubuntu-24.04-32core
+    # Use standard runner to avoid queue times
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.10"]
@@ -136,7 +136,7 @@ jobs:
 
 
   lint:
-    runs-on: ubuntu-24.04-32core
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: [ "3.10" ]

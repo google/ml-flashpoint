@@ -24,6 +24,7 @@ import pytest
 from ml_flashpoint.checkpoint_object_manager.buffer_io import METADATA_SIZE, BufferIO
 from ml_flashpoint.checkpoint_object_manager.buffer_metadata import BufferMetadataType
 from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject
+from ml_flashpoint.core.defaults import CheckpointFormat
 
 
 # --- Mocks and Fixtures ---
@@ -272,6 +273,68 @@ class TestWriteOperations:
         assert bio._metadata.len_written_data == 10, (
             "len_written_data should not decrease after overwriting a smaller portion."
         )
+
+
+class TestGetBufferSlice:
+    def test_next_buffer_slice_returns_correct_view(self, writable_buffer_obj):
+        """Test: next_buffer_slice returns a valid memoryview into the buffer."""
+        bio = BufferIO(writable_buffer_obj)
+        # Write some initial data
+        bio.write(b"prefix")
+        assert bio.tell() == 6
+
+        # Get a slice of 10 bytes
+        mv = bio.next_buffer_slice(10)
+        assert isinstance(mv, memoryview)
+        assert len(mv) == 10
+        assert not mv.readonly
+
+        # Write to the slice
+        mv[:] = b"0123456789"
+
+        # Verify position advanced
+        assert bio.tell() == 16
+
+        # Verify data in buffer
+        bio.seek(6)
+        data = bio.read(10)
+        assert data == b"0123456789"
+
+    def test_next_buffer_slice_validates_negative_size(self, writable_buffer_obj):
+        """Test: next_buffer_slice raises ValueError for negative size."""
+        bio = BufferIO(writable_buffer_obj)
+
+        with pytest.raises(ValueError, match="Size must be non-negative"):
+            bio.next_buffer_slice(-1)
+
+    def test_next_buffer_slice_validates_capacity_exceeded(self, writable_buffer_obj):
+        """Test: next_buffer_slice raises ValueError if size exceeds capacity."""
+        bio = BufferIO(writable_buffer_obj)
+        capacity = len(memoryview(writable_buffer_obj)) - METADATA_SIZE
+        with pytest.raises(ValueError, match="exceeds buffer capacity"):
+            bio.next_buffer_slice(capacity + 1)
+
+    def test_next_buffer_slice_updates_metadata(self, writable_buffer_obj):
+        """Test: getting a slice updates the len_written_data metadata."""
+        bio = BufferIO(writable_buffer_obj)
+        bio.next_buffer_slice(5)
+
+        # Check metadata
+        meta = BufferMetadataType.from_buffer(memoryview(writable_buffer_obj))
+        assert meta.len_written_data == 5
+
+    def test_next_buffer_slice_on_readonly_raises_error(self, readonly_buffer_obj):
+        """Test: calling next_buffer_slice on readonly buffer raises error."""
+        bio = BufferIO(readonly_buffer_obj)
+        with pytest.raises(TypeError, match="Operation 'write' is not supported in read-only mode"):
+            bio.next_buffer_slice(10)
+
+    def test_next_buffer_slice_on_closed_raises_error(self, writable_buffer_obj):
+        """Test: calling next_buffer_slice on closed buffer raises error."""
+        bio = BufferIO(writable_buffer_obj)
+        bio.close()
+        with pytest.raises(ValueError, match="I/O operation on a closed BufferIO object"):
+            bio.next_buffer_slice(10)
 
 
 class TestReadOperations:
@@ -918,3 +981,36 @@ class TestEndToEndIntegration:
         # Expect a RuntimeError indicating the path is a directory.
         with pytest.raises(RuntimeError, match="Path is a directory"):
             BufferObject(directory_path)
+
+
+class TestFormatSignature:
+    def test_buffer_io_does_not_set_signature_automatically(self, temp_dir_path):
+        """Test that initializing BufferIO does NOT automatically set the format signature."""
+        file_path = str(temp_dir_path / "signature_test.bin")
+        # precise size isn't critical, just needs to be enough for metadata
+        buffer_obj = BufferObject(file_path, METADATA_SIZE + 1024, overwrite=True)
+
+        with BufferIO(buffer_obj) as bio:
+            # BufferIO should NOT auto-set signature.
+            sig = bio.format_signature
+
+            assert sig != CheckpointFormat.MLF_FORMAT, f"BufferIO SHOULD NOT auto-set signature. Got {sig!r}"
+
+    def test_set_format_signature(self, temp_dir_path):
+        """Test that set_format_signature correctly updates the metadata."""
+        file_path = str(temp_dir_path / "signature_set_test.bin")
+        buffer_obj = BufferObject(file_path, METADATA_SIZE + 1024, overwrite=True)
+
+        with BufferIO(buffer_obj) as bio:
+            custom_sig = b"CUSTOMSG"
+            bio.set_format_signature(custom_sig)
+            assert bio.format_signature == custom_sig
+
+    def test_set_format_signature_too_long(self, temp_dir_path):
+        """Test that set_format_signature raises error for too long signature."""
+        file_path = str(temp_dir_path / "signature_error_test.bin")
+        buffer_obj = BufferObject(file_path, METADATA_SIZE + 1024, overwrite=True)
+
+        with BufferIO(buffer_obj) as bio:
+            with pytest.raises(ValueError, match="Format signature must be at most 8 bytes"):
+                bio.set_format_signature(b"TOO_LONG_SIGNATURE")

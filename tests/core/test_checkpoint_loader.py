@@ -33,6 +33,7 @@ from torch.distributed.checkpoint.planner import (
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.checkpoint_loader import DefaultMLFlashpointCheckpointLoader, MLFlashpointCheckpointLoader
+from ml_flashpoint.core.tensor_header import TensorHeader
 from ml_flashpoint.replication.replication_manager import ReplicationManager
 
 _LOGGER = logging.getLogger(__name__)
@@ -308,6 +309,66 @@ class TestReadTensor:
         with pytest.raises(IndexError):
             self.loader.read_tensor(buffer_slice, req)
 
+    def test_read_tensor_optimized_format(self):
+        """test_read_tensor detects magic bytes and uses zero-copy path."""
+        # Arrange
+        tensor = torch.tensor([1, 2, 3], dtype=torch.int32)
+
+        # Manually create optimized format buffer
+        tensor_header = TensorHeader(
+            dtype=tensor.dtype,
+            shape=tensor.shape,
+        )
+        # Use header's own serialization
+        header_bytes = tensor_header.to_bytes()
+
+        buffer = io.BytesIO()
+        buffer.write(header_bytes)
+        buffer.write(tensor.numpy().tobytes())
+        buffer.seek(0)
+
+        req = ReadItem(
+            type=LoadItemType.TENSOR,
+            storage_index=0,
+            storage_offsets=(0,),
+            lengths=(3,),  # Length in elements? No, in bytes? narrow_tensor uses indices.
+            # req.lengths is usually size in elements if we look at narrow_tensor usage?
+            # narrow_tensor_by_index(tensor, offsets, lengths)
+            # if tensor is 1D [1,2,3], offsets=(0,), lengths=(3,) means full tensor.
+            dest_index=(0,),
+            dest_offsets=(0,),
+        )
+
+        # Act
+        # call read_tensor with use_optimized_loader=True (default)
+        result_tensor = self.loader.read_tensor(buffer, req, use_optimized_loader=True)
+
+        # Assert
+        assert torch.equal(result_tensor, tensor)
+
+    def test_read_tensor_fallback_legacy(self):
+        """test_read_tensor falls back to torch.load if magic bytes missing."""
+        # Arrange
+        tensor = torch.tensor([4, 5, 6], dtype=torch.float32)
+        buffer = io.BytesIO()
+        torch.save(tensor, buffer)
+        buffer.seek(0)
+
+        req = ReadItem(
+            type=LoadItemType.TENSOR,
+            storage_index=0,
+            storage_offsets=(0,),
+            lengths=(buffer.getbuffer().nbytes,),
+            dest_index=(0,),
+            dest_offsets=(0,),
+        )
+
+        # Act
+        result_tensor = self.loader.read_tensor(buffer, req)
+
+        # Assert
+        assert torch.equal(result_tensor, tensor)
+
     @pytest.mark.skip(reason="Test skipped until it is setup properly.")
     def test_read_tensor_with_weights_only_behavior(self):
         """Tests that read_tensor correctly loads only tensor data when weights_only=True is used internally."""
@@ -386,7 +447,9 @@ class TestReadData:
         # Mock get_buffer
         mock_buffer_ctx = mocker.MagicMock()
         mocker.patch.object(self.loader._checkpoint_object_manager, "get_buffer", return_value=mock_buffer_ctx)
-        mock_buffer_ctx.__enter__.return_value = io.BytesIO(b"")
+        mock_stream = io.BytesIO(b"")
+        mock_stream.format_signature = b"mock_sig"
+        mock_buffer_ctx.__enter__.return_value = mock_stream
 
         # Act
         self.loader.read_data(checkpoint_obj_id, [], mocker.MagicMock(), {})
@@ -451,7 +514,9 @@ class TestReadData:
 
         mock_buffer_ctx = mocker.MagicMock()
         mocker.patch.object(self.loader._checkpoint_object_manager, "get_buffer", return_value=mock_buffer_ctx)
-        mock_buffer_ctx.__enter__.return_value = io.BytesIO(b"")
+        mock_stream = io.BytesIO(b"")
+        mock_stream.format_signature = b"mock_sig"
+        mock_buffer_ctx.__enter__.return_value = mock_stream
 
         # Act
         self.loader.read_data(checkpoint_obj_id, [], mocker.MagicMock(), {})

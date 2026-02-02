@@ -21,7 +21,7 @@ ML Flashpoint saves checkpoints to shared memory, to be able to recover when the
 Replication has not been observed to have any meaningful negative impact on ongoing training or overall job time.
 See the [overview](overview.md) for more detail.
 
-### Performance
+## Performance
 
 We observe meaningful improvements even in small-scale tests, spanning just 300 training steps with 4 [A3-Mega](https://docs.cloud.google.com/compute/docs/accelerator-optimized-machines#a3-mega-vms) nodes, for Gemma 27B and Llama 70B pre-training.
 We executed such tests on a [Vertex AI Training Cluster](https://docs.cloud.google.com/vertex-ai/docs/training/training-clusters/overview) and obtained the speedups listed below.

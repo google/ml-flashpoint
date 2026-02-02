@@ -22,8 +22,8 @@ on:
 
 jobs:
   build:
-    # Use standard runner to avoid queue times
-    runs-on: ubuntu-latest
+    # Use self-hosted runner for Google internal infra
+    runs-on: self-hosted
     strategy:
       matrix:
         python-version: ["3.10"]
@@ -136,7 +136,7 @@ jobs:
 
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     strategy:
       matrix:
         python-version: [ "3.10" ]

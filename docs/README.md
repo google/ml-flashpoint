@@ -35,13 +35,14 @@ When comparing
 
 We observe:
 
-* Data write times that are up to 20-30x faster for ML Flashpoint, with little to no optimization.
+* Data write times that are up to 20-30x faster for ML Flashpoint specifically, with little to no optimization.
 This is expected to further improve with additional optimizations.
-* Total checkpoint recovery times that are ~7-10x faster for ML Flashpoint (includes the time it takes to do checkpoint detection, cross-node coordination, replication, read into model state and be ready to resume training).
-* For _async_ checkpointing: improvements averaging **3% & 6%** for _overall job time_ in the hybrid approach, for Gemma 27B and Llama 70B respectively.
-Improvements reach **5% & 10%** when NeMo checkpointing is deferred to the end (300th step) instead of being done every 50 steps.
-These improvements only account for checkpoint _save_ efficiency, representing a "lower bound" value as it doesn't account for the speedups in _recovery_ time.
-Any job interruptions would also benefit from ML Flashpoint's recovery performance gains.
+* Total checkpoint recovery times that are ~7-10x faster for ML Flashpoint specifically (includes the time it takes to do checkpoint detection, cross-node coordination, replication, read into model state and be ready to resume training).
+* For _async_ checkpointing: 
+    * Improvements averaging **3%** (Gemma 27B) & **6%** (Llama 70B) for _overall job time_ in the hybrid approach.
+    * Improvements reach **5%** (Gemma 27B) & **10%** (Llama 70B) when NeMo checkpointing is deferred to the end (300th step) instead of being done every 50 steps. 
+    * These improvements only account for checkpoint _save_ efficiency, representing a "lower bound" value as it doesn't account for the speedups in _recovery_ time.
+    * Any job interruptions would also benefit from ML Flashpoint's recovery performance gains.
 
 !!! info
 

@@ -626,7 +626,7 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         _LOGGER.debug("All success list: '%s'", all_success_list)
         return all(all_success_list)
 
-    def _get_extra_local_objects(self, container_path: Path) -> List[str]:
+    def _get_extra_local_objects(self, container_path: Path) -> List[CheckpointObjectId]:
         """Hook for subclasses to provide extra local objects that are available and relevant,
         which may be needed by other hosts.
         This can be used when additional objects beyond the standard checkpoint data are needed,

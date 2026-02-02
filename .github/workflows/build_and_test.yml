@@ -23,7 +23,7 @@ on:
 jobs:
   build:
     # Use larger machine with more disk spacea
-    runs-on: ubuntu-24.04-16core
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.10"]
@@ -136,7 +136,7 @@ jobs:
 
 
   lint:
-    runs-on: ubuntu-24.04-4core
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: [ "3.10" ]

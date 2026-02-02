@@ -628,7 +628,16 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         return all(all_success_list)
 
     def _get_extra_local_objects(self, container_path: Path) -> List[str]:
-        """Hook for subclasses to provide extra local objects."""
+        """Hook for subclasses to provide extra local objects that are available and relevant, 
+        which may be needed by other hosts.
+        This can be used when additional objects beyond the standard checkpoint data are needed, 
+        such as framework-specific context data.
+        
+        This should always be implemented alongside `_get_extra_needed_objects`.
+        
+        Returns:
+            List of additional locally available objects.
+        """
         return []
 
     def _get_extra_needed_objects(
@@ -636,5 +645,13 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         checkpoint: CheckpointContainerId,
         available_objects_by_rank: dict[int, List[CheckpointObjectId]],
     ) -> Set[str]:
-        """Hook for subclasses to provide extra needed objects for local rank 0."""
+        """Hook for subclasses to provide extra needed objects on any given host (each local rank 0).
+        This can leverage `available_objects_by_rank` to determine the set of additional objects 
+        each host needs.
+        
+        This should always be implemented alongside `_get_extra_local_objects`.
+        
+        Returns:
+            Set of extra needed objects on any given node.
+        """
         return set()

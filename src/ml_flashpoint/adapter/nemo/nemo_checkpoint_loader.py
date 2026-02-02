@@ -48,14 +48,14 @@ class NeMoMLFlashpointCheckpointLoader(DefaultMLFlashpointCheckpointLoader):
         self._recover_context = recover_context
 
     @override
-    def _get_extra_local_objects(self, container_path: Path) -> List[str]:
+    def _get_extra_local_objects(self, container_path: Path) -> List[CheckpointObjectId]:
         """Returns extra local objects to include, specifically context files."""
         local_objects = []
         if self._recover_context:
             context_path = container_path / "context"
             if context_path.is_dir():
                 for entry in os.listdir(context_path):
-                    local_objects.append(os.path.join("context", entry))
+                    local_objects.append(CheckpointObjectId(str(context_path / entry)))
         return local_objects
 
     @override

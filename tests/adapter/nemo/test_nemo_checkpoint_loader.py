@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ml_flashpoint.adapter.nemo.checkpoint_loader import NeMoMLFlashpointCheckpointLoader
+from ml_flashpoint.adapter.nemo.nemo_checkpoint_loader import NeMoMLFlashpointCheckpointLoader
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.replication.replication_manager import ReplicationManager

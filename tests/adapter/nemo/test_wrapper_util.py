@@ -256,6 +256,32 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         _, kwargs = spy_memory_storage_writer_init.call_args  # Capture kwargs
         assert kwargs["thread_count"] == expected_thread_count
 
+    @pytest.mark.parametrize("always_save_context", [True, False])
+    def test_loader_initialization_arguments(self, mocker, always_save_context):
+        """Tests that NeMoMLFlashpointCheckpointLoader is initialized with correct arguments."""
+        # Given
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.ReplicationManager")
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.wrap_trainer_checkpoint_io_with_mlflashpoint")
+        mock_loader_cls = mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.NeMoMLFlashpointCheckpointLoader")
+
+        trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        flashpoint_base_container = "/tmp/test_container"
+        default_auto_resume = nl.AutoResume()
+
+        # When
+        wrap_trainer_and_auto_resume_with_mlflashpoint(
+            trainer,
+            flashpoint_base_container,
+            async_save=True,
+            default_auto_resume=default_auto_resume,
+            always_save_context=always_save_context,
+        )
+
+        # Then
+        mock_loader_cls.assert_called_once()
+        _, kwargs = mock_loader_cls.call_args
+        assert kwargs["recover_context"] == always_save_context
+
 
 class TestWrapTrainerCheckpointIOWithMLFlashpoint:
     """Tests for the wrap_trainer_checkpoint_io_with_mlflashpoint function."""

@@ -379,6 +379,8 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
     ) -> Optional[dict[int, List[Tuple[int, str]]]]:
         """Computes the retrieval plan.
 
+        The plan assumes an even number of ranks (accelerator processes) on each node in the training cluster.
+
         Args:
             checkpoint: The checkpoint container ID.
             available_objects_by_rank: Map of rank to available objects on that rank.
@@ -540,7 +542,7 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
             `CheckpointObjectId`s available on that node.
         """
         container_path = Path(checkpoint_container_id.data)
-        local_objects = []
+        local_objects: List[CheckpointObjectId] = []
         if not container_path.is_dir():
             _LOGGER.debug(
                 "Checkpoint container path '%s' is not a directory. Returning empty list.",
@@ -548,7 +550,7 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
             )
         else:
             for entry in os.listdir(container_path):
-                local_objects.append(entry)
+                local_objects.append(CheckpointObjectId.from_container(checkpoint_container_id, entry))
 
             local_objects.extend(self._get_extra_local_objects(container_path))
 
@@ -560,11 +562,8 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         if all_objects_by_rank_paths:
             for rank, objects in enumerate(all_objects_by_rank_paths):
                 if objects:
-                    # Convert filenames to full paths and then to CheckpointObjectId
-                    full_paths = [str(container_path / obj) for obj in objects]
-                    checkpoint_objects = [CheckpointObjectId(p) for p in full_paths]
-                    result[rank] = checkpoint_objects
-                    for obj in checkpoint_objects:
+                    result[rank] = objects
+                    for obj in objects:
                         object_locations[obj.data].append(rank)
                 else:
                     result[rank] = []
@@ -628,13 +627,13 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         return all(all_success_list)
 
     def _get_extra_local_objects(self, container_path: Path) -> List[str]:
-        """Hook for subclasses to provide extra local objects that are available and relevant, 
+        """Hook for subclasses to provide extra local objects that are available and relevant,
         which may be needed by other hosts.
-        This can be used when additional objects beyond the standard checkpoint data are needed, 
+        This can be used when additional objects beyond the standard checkpoint data are needed,
         such as framework-specific context data.
-        
+
         This should always be implemented alongside `_get_extra_needed_objects`.
-        
+
         Returns:
             List of additional locally available objects.
         """
@@ -646,11 +645,11 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         available_objects_by_rank: dict[int, List[CheckpointObjectId]],
     ) -> Set[str]:
         """Hook for subclasses to provide extra needed objects on any given host (each local rank 0).
-        This can leverage `available_objects_by_rank` to determine the set of additional objects 
+        This can leverage `available_objects_by_rank` to determine the set of additional objects
         each host needs.
-        
+
         This should always be implemented alongside `_get_extra_local_objects`.
-        
+
         Returns:
             Set of extra needed objects on any given node.
         """

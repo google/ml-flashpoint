@@ -1725,8 +1725,9 @@ class TestGetCheckpointObjectsByNodeOptimization:
 
         # Mock all_gather to return some data for rank 1
         def side_effect_all_gather(out_list, in_obj):
-            out_list[0] = ["obj1", "obj2"]  # Rank 0 data
-            out_list[1] = ["obj3"]  # Rank 1 data (filename only)
+            out_list[0] = in_obj  # Rank 0 data (passed in)
+            # Rank 1 data
+            out_list[1] = [CheckpointObjectId(str(ckpt_dir / "obj3"))]
 
         mock_all_gather.side_effect = side_effect_all_gather
 
@@ -1735,11 +1736,13 @@ class TestGetCheckpointObjectsByNodeOptimization:
         # Call method
         result = loader.get_checkpoint_objects_by_rank(container_id)
 
-        # Verify all_gather called with filenames only
+        # Verify all_gather called
         mock_all_gather.assert_called_once()
         args, _ = mock_all_gather.call_args
-        # args[1] is the input object (list of filenames for rank 0)
-        assert set(args[1]) == {"obj1", "obj2"}
+        # args[1] is the input object (list of CheckpointObjectIds for rank 0)
+        # Should be full paths now
+        expected_local = {str(ckpt_dir / "obj1"), str(ckpt_dir / "obj2")}
+        assert set(str(o.data) for o in args[1]) == expected_local
 
         # Verify result has full paths
         assert 0 in result
@@ -1913,9 +1916,10 @@ class TestCheckpointLoaderSync:
         (container_path / "file1").touch()
 
         def side_effect_all_gather(obj_list, local_obj):
-            obj_list[0] = ["file1"]
-            obj_list[1] = ["file1"]
-            obj_list[2] = ["file2"]
+            # Manually constructing full paths for the mock, mimicking what other ranks would send
+            obj_list[0] = [CheckpointObjectId(str(container_path / "file1"))]
+            obj_list[1] = [CheckpointObjectId(str(container_path / "file1"))]
+            obj_list[2] = [CheckpointObjectId(str(container_path / "file2"))]
             obj_list[3] = []
 
         mock_all_gather.side_effect = side_effect_all_gather

@@ -226,9 +226,7 @@ TEST_F(BufferObjectTest, GetCapacityReturnsCorrectSize) {
 
   // Test with the opening constructor.
   // The 'writer' scope ensures the file is closed before reopening.
-  {
-    BufferObject writer(test_path_ + "_new", 512);
-  }
+  { BufferObject writer(test_path_ + "_new", 512); }
   BufferObject reader(test_path_ + "_new");
   // The capacity should be determined by the file size on disk.
   ASSERT_EQ(reader.get_capacity(), 512);
@@ -308,9 +306,7 @@ TEST_F(BufferObjectTest, CloseWithTruncateIgnoresTruncateOnReadOnlyFile) {
   const size_t truncate_to_size = 512;
 
   // Setup: Create a file on disk with a known initial size.
-  {
-    BufferObject writable_buffer(test_path_, initial_size);
-  }
+  { BufferObject writable_buffer(test_path_, initial_size); }
   ASSERT_EQ(std::filesystem::file_size(test_path_), initial_size);
 
   // Open the existing file in read-only mode.

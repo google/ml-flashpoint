@@ -55,6 +55,19 @@ class TestNeMoCheckpointLoaderContext:
                 return ["file1.txt", "file2.txt"]
             return []
 
+        def mock_walk(path):
+            if str(path) == str(Path(container_path) / "context"):
+                # Simulation of:
+                # context/
+                #   file1.txt
+                #   file2.txt
+                #   subdir/
+                #     file3.txt
+                # Yields: (root, dirs, files)
+                yield (str(path), ["subdir"], ["file1.txt", "file2.txt"])
+                yield (str(Path(path) / "subdir"), [], ["file3.txt"])
+            return []
+
         def mock_isdir(path):
             if str(path) == container_path:
                 return True
@@ -62,6 +75,7 @@ class TestNeMoCheckpointLoaderContext:
                 return True
             return False
 
+        mocker.patch("os.walk", side_effect=mock_walk)
         mocker.patch("os.listdir", side_effect=mock_listdir)
         mocker.patch("pathlib.Path.is_dir", new=mock_isdir)
 
@@ -69,14 +83,14 @@ class TestNeMoCheckpointLoaderContext:
 
         assert 0 in result
         objs = result[0]
-        # Should contain: .../context/file1.txt, .../context/file2.txt, .../context, .../other_file
-        # Note: 'context' is from top-level listdir. 'context/file*.txt' is from recursive check.
 
         paths = [str(o.data) for o in objs]
         expected_context_file1 = str(Path(container_path) / "context" / "file1.txt")
         expected_context_file2 = str(Path(container_path) / "context" / "file2.txt")
+        expected_nested_file3 = str(Path(container_path) / "context" / "subdir" / "file3.txt")
         assert expected_context_file1 in paths
         assert expected_context_file2 in paths
+        assert expected_nested_file3 in paths
 
     def test_compute_retrieval_plan_includes_context_optimized(self, loader, mocker):
         """
@@ -100,15 +114,26 @@ class TestNeMoCheckpointLoaderContext:
         mocker.patch("torch.distributed.get_rank", return_value=0)
 
         ctx_file = str(Path(checkpoint.data) / "context" / "file1.txt")
+        nested_ctx_file = str(Path(checkpoint.data) / "context" / "subdir" / "file3.txt")
         common_pt = str(Path(checkpoint.data) / "common.pt")
         metadata_file = str(Path(checkpoint.data) / ".metadata")
 
         # Available objects:
-        # Node 0 (Rank 0,1) has everything (Context + Common + Metadata)
+        # Node 0 (Rank 0,1) has everything (Context + Nested + Common + Metadata)
         # Node 1 (Rank 2,3) has nothing
         available_objects = {
-            0: [CheckpointObjectId(ctx_file), CheckpointObjectId(common_pt), CheckpointObjectId(metadata_file)],
-            1: [CheckpointObjectId(ctx_file), CheckpointObjectId(common_pt), CheckpointObjectId(metadata_file)],
+            0: [
+                CheckpointObjectId(ctx_file),
+                CheckpointObjectId(nested_ctx_file),
+                CheckpointObjectId(common_pt),
+                CheckpointObjectId(metadata_file),
+            ],
+            1: [
+                CheckpointObjectId(ctx_file),
+                CheckpointObjectId(nested_ctx_file),
+                CheckpointObjectId(common_pt),
+                CheckpointObjectId(metadata_file),
+            ],
             2: [],
             3: [],
         }
@@ -128,6 +153,10 @@ class TestNeMoCheckpointLoaderContext:
         assert ctx_file in retrieved_objs_2
         assert common_pt in retrieved_objs_2
         assert metadata_file in retrieved_objs_2
+
+        # Verify nested file
+        nested_ctx_file = str(Path(checkpoint.data) / "context" / "subdir" / "file3.txt")
+        assert nested_ctx_file in retrieved_objs_2
 
         # Rank 3: Local rank 1 on Node 1. Shared FS with Rank 2. Should NOT retrieve.
         assert 3 not in plan or not plan[3]

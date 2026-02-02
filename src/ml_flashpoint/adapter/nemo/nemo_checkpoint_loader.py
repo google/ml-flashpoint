@@ -54,8 +54,9 @@ class NeMoMLFlashpointCheckpointLoader(DefaultMLFlashpointCheckpointLoader):
         if self._recover_context:
             context_path = container_path / "context"
             if context_path.is_dir():
-                for entry in os.listdir(context_path):
-                    local_objects.append(CheckpointObjectId(str(context_path / entry)))
+                for root, _, files in os.walk(context_path):
+                    for file in files:
+                        local_objects.append(CheckpointObjectId(str(Path(root) / file)))
         return local_objects
 
     @override
@@ -72,6 +73,10 @@ class NeMoMLFlashpointCheckpointLoader(DefaultMLFlashpointCheckpointLoader):
             context_path = Path(checkpoint.data) / "context"
             for objs in available_objects_by_rank.values():
                 for obj in objs:
-                    if Path(str(obj.data)).parent == context_path:
-                        extra_needed.add(str(obj.data))
+                    try:
+                        if Path(str(obj.data)).is_relative_to(context_path):
+                            extra_needed.add(str(obj.data))
+                    except ValueError:
+                        # Path.is_relative_to raises ValueError if it's not relative to the path
+                        pass
         return extra_needed

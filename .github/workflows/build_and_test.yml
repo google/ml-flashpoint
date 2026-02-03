@@ -162,7 +162,7 @@ jobs:
   lint-code:
     runs-on: ubuntu-latest
     - name: C++ Coverage Summary
-      # if: false # TODO(#3): fix and then re-enable
+      if: false # TODO(#3): fix and then re-enable
       uses: irongut/CodeCoverageSummary@v1.3.0
       with:
         filename: cxx-coverage.xml

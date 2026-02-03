@@ -426,8 +426,8 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         thread_count: int = 1,
     ) -> list[WriteResult]:
         thread_count = max(thread_count, 1)
-        num_cpus = os.cpu_count() or 1
-        num_ranks = torch.cuda.device_count() or 1
+        num_cpus = max(os.cpu_count(), 1)
+        num_ranks = max(torch.cuda.device_count(), 1)
         torch_thread_count = max(1, num_cpus // 2 // num_ranks // thread_count)
         original_num_threads = torch.get_num_threads()
         # Explicitly set PyTorch intra-op threads to optimize for performance.

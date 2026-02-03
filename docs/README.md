@@ -1,6 +1,7 @@
 # ML Flashpoint
 
 ML Flashpoint is a memory-first, lightning-fast, ready-to-use ML checkpointing library.
+It is infrastructure and scheduler agnostic, with native integrations for certain frameworks, and a core library for custom use cases.
 
 Check out the [User Guide](user-guide.md) to get started.
 

@@ -1,6 +1,10 @@
 # User Guide
 
 Below are instructions for using ML Flashpoint with the different frameworks supported.
+For finer-grain control, use the [core](https://github.com/google/ml-flashpoint/tree/main/src/ml_flashpoint/core) library APIs, which the framework adapters build on top of.
+The adapters also provide a good working example of how to use the core library.
+
+If interested in a native integration with another framework, please let us know by creating a [feature request](https://github.com/google/ml-flashpoint/issues/new?template=feature_request.md) or upvoting an [existing one](https://github.com/google/ml-flashpoint/issues?q=is%3Aissue%20state%3Aopen%20label%3Aenhancement).
 
 ## Install
 

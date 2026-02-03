@@ -77,7 +77,8 @@ jobs:
           --xml-pretty -o cxx-coverage.xml \
           --sort uncovered-number \
           --gcov-ignore-parse-errors negative_hits.warn \
-          --gcov-ignore-parse-errors suspicious_hits.warn
+          --gcov-ignore-parse-errors suspicious_hits.warn \
+          --gcov-ignore-errors=no_working_dir_found
 
   lint:
     runs-on: ubuntu-24.04-32core

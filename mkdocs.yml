@@ -14,7 +14,7 @@
 
 # yaml-language-server: $schema=https://squidfunk.github.io/mkdocs-material/schema.json
 
-site_name: ML Flashpoint Docs [WIP]
+site_name: ML Flashpoint Docs
 site_url: https://google.github.io/ml-flashpoint
 
 nav:

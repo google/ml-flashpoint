@@ -573,8 +573,8 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
             checkpoint_container_id: The ID of the checkpoint container to inspect.
 
         Returns:
-            A dictionary mapping each node's local rank 0 to a list of
-            `CheckpointObjectId`s available on that node.
+            A dictionary mapping each rank to a list of
+            `CheckpointObjectId`s available on that rank.
         """
         container_path = Path(checkpoint_container_id.data)
         local_objects: List[CheckpointObjectId] = []
@@ -662,8 +662,9 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         return all(all_success_list)
 
     def _get_extra_local_objects(self, container_path: Path) -> List[CheckpointObjectId]:
-        """Hook for subclasses to provide extra local objects that are available and relevant,
-        which may be needed by other hosts.
+        """Hook for subclasses to provide extra local objects that are available on the current rank,
+        which may be needed by other ranks. This would be called on every rank.
+
         This can be used when additional objects beyond the standard checkpoint data are needed,
         such as framework-specific context data.
 
@@ -679,13 +680,17 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         checkpoint: CheckpointContainerId,
         available_objects_by_rank: dict[int, List[CheckpointObjectId]],
     ) -> Set[str]:
-        """Hook for subclasses to provide extra needed objects on any given host (each local rank 0).
+        """Hook for subclasses to provide extra needed objects for each node.
+
+        The objects returned by this method are considered necessary for the first rank
+        (local rank 0) of every node.
+
         This can leverage `available_objects_by_rank` to determine the set of additional objects
-        each host needs.
+        needed.
 
         This should always be implemented alongside `_get_extra_local_objects`.
 
         Returns:
-            Set of extra needed objects on any given node.
+            Set of extra needed objects on each node (specifically local rank 0).
         """
         return set()

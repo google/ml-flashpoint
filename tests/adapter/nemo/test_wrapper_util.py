@@ -263,7 +263,9 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         # Given
         mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.ReplicationManager")
         mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.wrap_trainer_checkpoint_io_with_mlflashpoint")
-        mock_loader_cls = mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.NeMoMLFlashpointCheckpointLoader")
+        mock_nemo_checkpoint_loader_cls = mocker.patch(
+            "ml_flashpoint.adapter.nemo.wrapper_util.NeMoMLFlashpointCheckpointLoader"
+        )
 
         trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
         flashpoint_base_container = "/tmp/test_container"
@@ -279,8 +281,8 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         )
 
         # Then
-        mock_loader_cls.assert_called_once()
-        _, kwargs = mock_loader_cls.call_args
+        mock_nemo_checkpoint_loader_cls.assert_called_once()
+        _, kwargs = mock_nemo_checkpoint_loader_cls.call_args
         assert kwargs["recover_context"] == always_save_context
 
 

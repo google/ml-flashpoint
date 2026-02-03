@@ -49,7 +49,6 @@ class NeMoMLFlashpointCheckpointLoader(DefaultMLFlashpointCheckpointLoader):
 
     @override
     def _get_extra_local_objects(self, container_path: Path) -> List[CheckpointObjectId]:
-        """Returns extra local objects to include, specifically context files."""
         local_objects = []
         if self._recover_context:
             context_path = container_path / "context"
@@ -65,7 +64,6 @@ class NeMoMLFlashpointCheckpointLoader(DefaultMLFlashpointCheckpointLoader):
         checkpoint: CheckpointContainerId,
         available_objects_by_rank: dict[int, List[CheckpointObjectId]],
     ) -> Set[str]:
-        """Returns extra needed objects for local rank 0, specifically context files."""
         extra_needed = set()
         if self._recover_context:
             # We assume that if a rank has the context dir, the content in the dir is complete.

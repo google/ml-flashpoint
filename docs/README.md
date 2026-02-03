@@ -1,6 +1,7 @@
 # ML Flashpoint
 
 ML Flashpoint is a memory-first, lightning-fast, ready-to-use ML checkpointing library.
+It is infrastructure and scheduler agnostic, with native integrations for certain frameworks, and a core library for custom use cases.
 
 Check out the [User Guide](user-guide.md) to get started.
 
@@ -21,7 +22,7 @@ ML Flashpoint saves checkpoints to shared memory, to be able to recover when the
 Replication has not been observed to have any meaningful negative impact on ongoing training or overall job time.
 See the [overview](overview.md) for more detail.
 
-### Performance
+## Performance
 
 We observe meaningful improvements even in small-scale tests, spanning just 300 training steps with 4 [A3-Mega](https://docs.cloud.google.com/compute/docs/accelerator-optimized-machines#a3-mega-vms) nodes, for Gemma 27B and Llama 70B pre-training.
 We executed such tests on a [Vertex AI Training Cluster](https://docs.cloud.google.com/vertex-ai/docs/training/training-clusters/overview) and obtained the speedups listed below.
@@ -33,14 +34,16 @@ When comparing
 1. the hybrid of ML Flashpoint (every 5 steps) and NeMo checkpointing (every 50 steps), to
 1. NeMo's regular checkpointing (every 10 steps - so half as often)
 
-the hybrid approach resulted in:
+We observe:
 
-* Data write times that are up to 20-30x faster, with little to no optimization.
+* Data write times that are up to 20-30x faster for ML Flashpoint specifically, with little to no optimization.
 This is expected to further improve with additional optimizations.
-* Total checkpoint recovery times that are ~7-10x faster (includes the time it takes to do checkpoint detection, cross-node coordination, replication, read into model state and be ready to resume training).
-* For _async_ checkpointing: improvements averaging **3-6%** for _overall job time_, and reaching **5-10%** when NeMo checkpointing is deferred to the end (300th step) instead of being done every 50 steps.
-These improvements only account for checkpoint _save_ efficiency, representing a "lower bound" value as it doesn't account for the speedups in _recovery_ time.
-Any job interruptions would also benefit from ML Flashpoint's recovery performance gains.
+* Total checkpoint recovery times that are ~7-10x faster for ML Flashpoint specifically (includes the time it takes to do checkpoint detection, cross-node coordination, replication, read into model state and be ready to resume training).
+* For _async_ checkpointing: 
+    * Improvements averaging **3%** (Gemma 27B) & **6%** (Llama 70B) for _overall job time_ in the hybrid approach.
+    * Improvements reach **5%** (Gemma 27B) & **10%** (Llama 70B) when NeMo checkpointing is deferred to the end (300th step) instead of being done every 50 steps. 
+    * These improvements only account for checkpoint _save_ efficiency, representing a "lower bound" value as it doesn't account for the speedups in _recovery_ time.
+    * Any job interruptions would also benefit from ML Flashpoint's recovery performance gains.
 
 !!! info
 

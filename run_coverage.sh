@@ -39,7 +39,7 @@ coverage report
 mkdir -p htmlcov/cpp
 
 # Run gcovr for C++ coverage
-gcovr --root=. --filter=src/ml_flashpoint --exclude=".*/_deps/.*" --gcov-executable=gcov --txt-metric branch --html-details htmlcov/cpp/index.html --xml-pretty -o cxx-coverage.xml --sort uncovered-number --gcov-ignore-parse-errors=negative_hits.warn --gcov-ignore-parse-errors=suspicious_hits.warn
+gcovr --root=. --filter=src/ml_flashpoint --exclude=".*/_deps/.*" --gcov-executable=gcov --txt-metric branch --html-details htmlcov/cpp/index.html --xml-pretty -o cxx-coverage.xml --sort uncovered-number --gcov-ignore-parse-errors=negative_hits.warn,suspicious_hits.warn
 
 # Generate Python HTML report
 coverage html -d htmlcov/python

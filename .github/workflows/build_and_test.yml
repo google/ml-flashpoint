@@ -22,7 +22,7 @@ on:
 
 jobs:
   build:
-    # Use larger machine with more disk spacea
+    # Use larger machine with more disk space
     runs-on: ubuntu-24.04-32core
     strategy:
       matrix:
@@ -88,7 +88,7 @@ jobs:
 
 
     - name: Check C++ test coverage
-      # if: false # TODO(#3): fix and then re-enable
+      if: false # TODO(#3): fix and then re-enable
       run: |
         # Run C++ coverage check
         echo -e "\n##### Running C++ coverage check #####"
@@ -105,7 +105,7 @@ jobs:
           --gcov-ignore-parse-errors suspicious_hits.warn
 
     - name: C++ Coverage Summary
-      # if: false # TODO(#3): fix and then re-enable
+      if: false # TODO(#3): fix and then re-enable
       uses: irongut/CodeCoverageSummary@v1.3.0
       with:
         filename: cxx-coverage.xml

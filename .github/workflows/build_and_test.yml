@@ -64,7 +64,6 @@ jobs:
         coverage report
 
     - name: Check C++ test coverage
-      if: false # TODO(#3): fix and then re-enable
       run: |
         # Run C++ coverage check
         echo -e "\n##### Running C++ coverage check #####"
@@ -78,7 +77,8 @@ jobs:
           --xml-pretty -o cxx-coverage.xml \
           --sort uncovered-number \
           --gcov-ignore-parse-errors negative_hits.warn \
-          --gcov-ignore-parse-errors suspicious_hits.warn
+          --gcov-ignore-parse-errors suspicious_hits.warn \
+          --gcov-ignore-errors=no_working_dir_found
 
   lint-code:
     runs-on: ubuntu-latest

@@ -27,6 +27,7 @@ from ml_flashpoint.adapter.megatron.save_strategies import MLFlashpointMegatronA
 from ml_flashpoint.adapter.nemo.auto_resume import MLFlashpointAutoResume
 from ml_flashpoint.adapter.nemo.checkpoint_callback import MLFlashpointCheckpointCallback
 from ml_flashpoint.adapter.nemo.checkpoint_io import MLFlashpointAsyncFinalizableCheckpointIO, MLFlashpointCheckpointIO
+from ml_flashpoint.adapter.nemo.nemo_checkpoint_loader import NeMoMLFlashpointCheckpointLoader
 from ml_flashpoint.adapter.pytorch.memory_storage_writer import MemoryStorageWriter
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId
@@ -72,7 +73,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
     replication_manager = ReplicationManager()
     replication_manager.initialize(checkpoint_object_manager=ckpt_obj_manager)
 
-    ckpt_loader = DefaultMLFlashpointCheckpointLoader(
+    ckpt_loader = NeMoMLFlashpointCheckpointLoader(
         checkpoint_object_manager=ckpt_obj_manager,
         replication_manager=replication_manager,
         recover_context=always_save_context,

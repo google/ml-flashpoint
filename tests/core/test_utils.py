@@ -118,7 +118,7 @@ def test_get_num_of_nodes_torch_only_cpu_only_training_raises_error(monkeypatch)
     monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
     monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 8)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-    with pytest.raises(RuntimeError, match="Cannot determine number of nodes for CPU-only training"):
+    with pytest.raises(RuntimeError, match="Cannot determine number of accelerators for CPU-only training"):
         utils.get_num_of_nodes()
 
 
@@ -222,3 +222,24 @@ class TestGetEnvValInt:
 
         # Then
         assert result == expected
+
+
+class TestGetAcceleratorCount:
+    def test_get_accelerator_count_cuda_available(self, mocker):
+        # Given
+        mocker.patch("torch.cuda.is_available", return_value=True)
+        mocker.patch("torch.cuda.device_count", return_value=4)
+
+        # When
+        count = utils.get_accelerator_count()
+
+        # Then
+        assert count == 4
+
+    def test_get_accelerator_count_cuda_unavailable(self, mocker):
+        # Given
+        mocker.patch("torch.cuda.is_available", return_value=False)
+
+        # When/Then
+        with pytest.raises(RuntimeError, match="Cannot determine number of accelerators for CPU-only training"):
+            utils.get_accelerator_count()

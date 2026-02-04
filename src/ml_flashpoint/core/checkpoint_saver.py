@@ -36,7 +36,7 @@ from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, Checkp
 from ml_flashpoint.core.defaults import DIRTY_MARKER_SUFFIX, CheckpointFormat, default_metadata_object_name
 from ml_flashpoint.core.mlf_logging import get_logger
 from ml_flashpoint.core.tensor_header import TensorHeader
-from ml_flashpoint.core.utils import log_execution_time
+from ml_flashpoint.core.utils import get_accelerator_count, log_execution_time
 from ml_flashpoint.replication.replication_manager import ReplicationManager
 
 DEFAULT_INITIAL_BUFFER_SIZE_BYTES = 16 * 1000 * 1000 * 1000
@@ -426,17 +426,19 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         thread_count: int = 1,
     ) -> list[WriteResult]:
         thread_count = max(thread_count, 1)
-        num_cpus = max(os.cpu_count(), 1)
-        num_ranks = max(torch.cuda.device_count(), 1)
+        num_cpus = os.cpu_count() or 1
+        num_ranks = max(get_accelerator_count(), 1)
         torch_thread_count = max(1, num_cpus // 2 // num_ranks // thread_count)
         original_num_threads = torch.get_num_threads()
         # Explicitly set PyTorch intra-op threads to optimize for performance.
         # This also avoids potential runtime errors in tensor.copy_() with concurrent writers
+        # Use 50% of available CPU cores for PyTorch intra-op threads and evenly distribute them across ranks.
         torch.set_num_threads(torch_thread_count)
         _LOGGER.debug(
-            "original_num_threads: %d, thread_count: %d, num_cpus: %d, num_ranks: %d, torch_thread_count: %d",
-            original_num_threads,
+            "%s thread_count: %d, original_num_threads: %d, num_cpus: %d, num_ranks: %d, torch_thread_count: %d",
+            self.__class__.__name__,
             thread_count,
+            original_num_threads,
             num_cpus,
             num_ranks,
             torch_thread_count,

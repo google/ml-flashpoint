@@ -22,7 +22,7 @@ import re
 import struct
 from collections import defaultdict
 from pathlib import Path
-from typing import IO, List, Optional, Tuple, TypeVar, cast
+from typing import IO, List, Optional, Set, Tuple, TypeVar, cast
 
 import torch
 import torch.distributed as dist
@@ -128,7 +128,6 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         self,
         checkpoint_object_manager: CheckpointObjectManager,
         replication_manager: ReplicationManager,
-        recover_context: bool = False,
     ):
         """Initializes the DefaultMLFlashpointCheckpointLoader.
 
@@ -137,11 +136,9 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
                 reading data.
             replication_manager: The replication manager to use for retrieving
                 missing checkpoint objects from peer nodes.
-            recover_context: Whether to recover the context directory if missing.
         """
         self._checkpoint_object_manager = checkpoint_object_manager
         self._replication_manager = replication_manager
-        self._recover_context = recover_context
         # Cache for available objects: CheckpointContainerId -> dict[object_path, list[rank]]
         self._available_objects_cache: dict[CheckpointContainerId, dict[str, List[int]]] = {}
 
@@ -417,6 +414,8 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
     ) -> Optional[dict[int, List[Tuple[int, str]]]]:
         """Computes the retrieval plan.
 
+        The plan assumes an even number of ranks (accelerator processes) on each node in the training cluster.
+
         Args:
             checkpoint: The checkpoint container ID.
             available_objects_by_rank: Map of rank to available objects on that rank.
@@ -450,14 +449,7 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
             str(CheckpointObjectId.from_container(checkpoint, default_metadata_object_name()))
         )
 
-        if self._recover_context:
-            # We assume that if a rank has the context dir, the content in the dir is complete.
-            # We assume that are the files needed by all the nodes.
-            context_path = Path(checkpoint.data) / "context"
-            for objs in available_objects_by_rank.values():
-                for obj in objs:
-                    if Path(obj.data).parent == context_path:
-                        objects_needed_by_local_rank_0.add(str(obj.data))
+        objects_needed_by_local_rank_0.update(self._get_extra_needed_objects(checkpoint, available_objects_by_rank))
 
         world_size = dist.get_world_size()
         num_nodes = get_num_of_nodes()
@@ -581,11 +573,11 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
             checkpoint_container_id: The ID of the checkpoint container to inspect.
 
         Returns:
-            A dictionary mapping each node's local rank 0 to a list of
-            `CheckpointObjectId`s available on that node.
+            A dictionary mapping each rank to a list of
+            `CheckpointObjectId`s available on that rank.
         """
         container_path = Path(checkpoint_container_id.data)
-        local_objects = []
+        local_objects: List[CheckpointObjectId] = []
         if not container_path.is_dir():
             _LOGGER.debug(
                 "Checkpoint container path '%s' is not a directory. Returning empty list.",
@@ -593,13 +585,9 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
             )
         else:
             for entry in os.listdir(container_path):
-                local_objects.append(entry)
+                local_objects.append(CheckpointObjectId.from_container(checkpoint_container_id, entry))
 
-            if self._recover_context:
-                context_path = container_path / "context"
-                if context_path.is_dir():
-                    for entry in os.listdir(context_path):
-                        local_objects.append(os.path.join("context", entry))
+            local_objects.extend(self._get_extra_local_objects(container_path))
 
         all_objects_by_rank_paths = [None for _ in range(dist.get_world_size())]
         dist.all_gather_object(all_objects_by_rank_paths, local_objects)
@@ -609,11 +597,8 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         if all_objects_by_rank_paths:
             for rank, objects in enumerate(all_objects_by_rank_paths):
                 if objects:
-                    # Convert filenames to full paths and then to CheckpointObjectId
-                    full_paths = [str(container_path / obj) for obj in objects]
-                    checkpoint_objects = [CheckpointObjectId(p) for p in full_paths]
-                    result[rank] = checkpoint_objects
-                    for obj in checkpoint_objects:
+                    result[rank] = objects
+                    for obj in objects:
                         object_locations[obj.data].append(rank)
                 else:
                     result[rank] = []
@@ -675,3 +660,37 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         dist.all_gather_object(all_success_list, all_success)
         _LOGGER.debug("All success list: '%s'", all_success_list)
         return all(all_success_list)
+
+    def _get_extra_local_objects(self, container_path: Path) -> List[CheckpointObjectId]:
+        """Hook for subclasses to provide extra local objects that are available on the current rank,
+        which may be needed by other ranks. This would be called on every rank.
+
+        This can be used when additional objects beyond the standard checkpoint data are needed,
+        such as framework-specific context data.
+
+        This should always be implemented alongside `_get_extra_needed_objects`.
+
+        Returns:
+            List of additional locally available objects.
+        """
+        return []
+
+    def _get_extra_needed_objects(
+        self,
+        checkpoint: CheckpointContainerId,
+        available_objects_by_rank: dict[int, List[CheckpointObjectId]],
+    ) -> Set[str]:
+        """Hook for subclasses to provide extra needed objects for each node.
+
+        The objects returned by this method are considered necessary for the first rank
+        (local rank 0) of every node.
+
+        This can leverage `available_objects_by_rank` to determine the set of additional objects
+        needed.
+
+        This should always be implemented alongside `_get_extra_local_objects`.
+
+        Returns:
+            Set of extra needed objects on each node (specifically local rank 0).
+        """
+        return set()

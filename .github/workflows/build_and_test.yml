@@ -117,7 +117,7 @@ jobs:
 
     - name: Add C++ Coverage PR Comment
       uses: marocchino/sticky-pull-request-comment@v2
-      if: github.event_name == 'pull_request' # && false # TODO(#3): fix and then re-enable
+      if: github.event_name == 'pull_request'
       with:
         header: cpp-coverage
         recreate: true

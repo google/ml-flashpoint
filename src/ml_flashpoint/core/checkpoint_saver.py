@@ -435,7 +435,8 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         # Use 50% of available CPU cores for PyTorch intra-op threads and evenly distribute them across ranks.
         torch.set_num_threads(torch_thread_count)
         _LOGGER.debug(
-            "%s thread_count: %d, original_num_threads: %d, num_cpus: %d, num_ranks: %d, torch_thread_count: %d",
+            "%s starting multi-threaded write_data. thread_count: %d, original_num_threads: %d, "
+            "num_cpus: %d, num_ranks: %d, torch_thread_count: %d",
             self.__class__.__name__,
             thread_count,
             original_num_threads,

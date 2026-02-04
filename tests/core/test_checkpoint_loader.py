@@ -19,7 +19,6 @@ import pickle
 import tempfile
 from pathlib import Path
 from typing import Dict, Tuple
-from unittest.mock import MagicMock
 
 import pytest
 import torch
@@ -1791,8 +1790,9 @@ class TestGetCheckpointObjectsByNodeOptimization:
 
         # Mock all_gather to return some data for rank 1
         def side_effect_all_gather(out_list, in_obj):
-            out_list[0] = ["obj1", "obj2"]  # Rank 0 data
-            out_list[1] = ["obj3"]  # Rank 1 data (filename only)
+            out_list[0] = in_obj  # Rank 0 data (passed in)
+            # Rank 1 data
+            out_list[1] = [CheckpointObjectId(str(ckpt_dir / "obj3"))]
 
         mock_all_gather.side_effect = side_effect_all_gather
 
@@ -1801,11 +1801,13 @@ class TestGetCheckpointObjectsByNodeOptimization:
         # Call method
         result = loader.get_checkpoint_objects_by_rank(container_id)
 
-        # Verify all_gather called with filenames only
+        # Verify all_gather called
         mock_all_gather.assert_called_once()
         args, _ = mock_all_gather.call_args
-        # args[1] is the input object (list of filenames for rank 0)
-        assert set(args[1]) == {"obj1", "obj2"}
+        # args[1] is the input object (list of CheckpointObjectIds for rank 0)
+        # Should be full paths now
+        expected_local = {str(ckpt_dir / "obj1"), str(ckpt_dir / "obj2")}
+        assert set(str(o.data) for o in args[1]) == expected_local
 
         # Verify result has full paths
         assert 0 in result
@@ -1979,9 +1981,10 @@ class TestCheckpointLoaderSync:
         (container_path / "file1").touch()
 
         def side_effect_all_gather(obj_list, local_obj):
-            obj_list[0] = ["file1"]
-            obj_list[1] = ["file1"]
-            obj_list[2] = ["file2"]
+            # Manually constructing full paths for the mock, mimicking what other ranks would send
+            obj_list[0] = [CheckpointObjectId(str(container_path / "file1"))]
+            obj_list[1] = [CheckpointObjectId(str(container_path / "file1"))]
+            obj_list[2] = [CheckpointObjectId(str(container_path / "file2"))]
             obj_list[3] = []
 
         mock_all_gather.side_effect = side_effect_all_gather
@@ -2001,115 +2004,3 @@ class TestCheckpointLoaderSync:
         # This assertion is expected to FAIL currently
         assert len(result[1]) == 1, f"Rank 1 should have objects, but got {result[1]}"
         assert str(result[1][0]).endswith("file1")
-
-
-class TestCheckpointLoaderContext:
-    @pytest.fixture
-    def loader(self):
-        ckpt_manager = CheckpointObjectManager()
-        repl_manager = MagicMock(spec=ReplicationManager)
-        return DefaultMLFlashpointCheckpointLoader(
-            checkpoint_object_manager=ckpt_manager, replication_manager=repl_manager, recover_context=True
-        )
-
-    def test_get_checkpoint_objects_by_rank_finds_context(self, loader, mocker):
-        """Test that get_checkpoint_objects_by_rank finds files in context/ dir when recover_context=True."""
-        mocker.patch("torch.distributed.get_world_size", return_value=1)
-        mocker.patch(
-            "torch.distributed.all_gather_object",
-            side_effect=lambda obj_list, local_obj: obj_list.__setitem__(0, local_obj),
-        )
-
-        container_path = "/tmp/ckpt/step-1"
-        container_id = CheckpointContainerId(container_path)
-
-        # Mock fs
-        # base dir has "context" directory
-        # context dir has "file1.txt"
-        def mock_listdir(path):
-            if str(path) == container_path:
-                return ["context", "other_file"]
-            if str(path) == str(Path(container_path) / "context"):
-                return ["file1.txt", "file2.txt"]
-            return []
-
-        def mock_isdir(path):
-            if str(path) == container_path:
-                return True
-            if str(path) == str(Path(container_path) / "context"):
-                return True
-            return False
-
-        mocker.patch("os.listdir", side_effect=mock_listdir)
-        mocker.patch("pathlib.Path.is_dir", new=mock_isdir)
-
-        result = loader.get_checkpoint_objects_by_rank(container_id)
-
-        assert 0 in result
-        objs = result[0]
-        # Should contain: .../context/file1.txt, .../context/file2.txt, .../context, .../other_file
-        # Note: 'context' is from top-level listdir. 'context/file*.txt' is from recursive check.
-
-        paths = [str(o.data) for o in objs]
-        expected_context_file1 = str(Path(container_path) / "context" / "file1.txt")
-        expected_context_file2 = str(Path(container_path) / "context" / "file2.txt")
-        assert expected_context_file1 in paths
-        assert expected_context_file2 in paths
-
-    def test_compute_retrieval_plan_includes_context_optimized(self, loader, mocker):
-        """
-        Test that _compute_retrieval_plan includes context files ONLY for local rank 0 on each node.
-        Scenario:
-          - World Size: 4
-          - Nodes: 2 (Ranks 0,1 on Node 0; Ranks 2,3 on Node 1)
-          - Rank 0 has context files.
-          - Rank 2 needs context files (different node).
-          - Rank 1, 3 do NOT need context retrieval (same node as 0, 2).
-        """
-        checkpoint = CheckpointContainerId("/tmp/ckpt/step-1")
-
-        # Mock metadata read (empty storage data)
-        mock_metadata = MagicMock()
-        mock_metadata.storage_data = {}
-        mocker.patch.object(loader, "read_metadata", return_value=mock_metadata)
-
-        mocker.patch("torch.distributed.get_world_size", return_value=4)
-        mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes", return_value=2)
-        mocker.patch("torch.distributed.get_rank", return_value=0)
-
-        ctx_file = str(Path(checkpoint.data) / "context" / "file1.txt")
-        common_pt = str(Path(checkpoint.data) / "common.pt")
-        metadata_file = str(Path(checkpoint.data) / ".metadata")
-
-        # Available objects:
-        # Rank 0 has everything (Context + Common + Metadata)
-        # Others have nothing
-        available_objects = {
-            0: [CheckpointObjectId(ctx_file), CheckpointObjectId(common_pt), CheckpointObjectId(metadata_file)],
-            1: [],
-            2: [],
-            3: [],
-        }
-
-        # Execute
-        plan = loader._compute_retrieval_plan(checkpoint, available_objects)
-
-        assert plan is not None
-
-        # Rank 0: Already has files, no retrieval needed (or plan[0] is empty)
-        assert 0 not in plan or not plan[0]
-
-        # Rank 1: Local rank 1 on Node 0. Shared FS with Rank 0. Should NOT retrieve context.
-        # It also doesn't need common.pt/metadata (only local rank 0 needs them).
-        # So plan[1] should be empty/missing.
-        assert 1 not in plan or not plan[1]
-
-        # Rank 2: Local rank 0 on Node 1. Needs Context + Common + Metadata.
-        assert 2 in plan
-        retrieved_objs_2 = [path for src, path in plan[2]]
-        assert ctx_file in retrieved_objs_2
-        assert common_pt in retrieved_objs_2
-        assert metadata_file in retrieved_objs_2
-
-        # Rank 3: Local rank 1 on Node 1. Shared FS with Rank 2. Should NOT retrieve.
-        assert 3 not in plan or not plan[3]

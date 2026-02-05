@@ -52,7 +52,7 @@ target_link_libraries(transfer_service_ext PUBLIC
 
 # --- Test Target ---
 if(BUILD_TESTING)
-    set(TEST_SRC_DIR ${CMAKE_SOURCE_DIR}/tests/replication/transfer_service/test)
+    set(TEST_SRC_DIR ${CMAKE_SOURCE_DIR}/tests/replication/transfer_service)
     add_executable(transfer_service_test
         ${TEST_SRC_DIR}/protocol_test.cpp
         ${TEST_SRC_DIR}/transfer_service_test.cpp

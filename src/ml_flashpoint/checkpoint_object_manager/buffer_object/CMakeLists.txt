@@ -50,7 +50,7 @@ if(BUILD_TESTING)
     include(GoogleTest)
 
     # Define the test source directory for readability
-    set(TEST_SRC_DIR ${CMAKE_SOURCE_DIR}/tests/checkpoint_object_manager/buffer_object/test)
+    set(TEST_SRC_DIR ${CMAKE_SOURCE_DIR}/tests/checkpoint_object_manager/buffer_object)
 
     # Best Practice: Combine all related test source files into a single executable.
     add_executable(buffer_object_test

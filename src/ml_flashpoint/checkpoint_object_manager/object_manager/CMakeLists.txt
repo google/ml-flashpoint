@@ -49,7 +49,7 @@ if(BUILD_TESTING)
 
     # Best Practice: Combine all related test source files into a single executable.
     add_executable(object_manager_test
-      test/object_manager_test.cpp
+      ${CMAKE_SOURCE_DIR}/tests/checkpoint_object_manager/object_manager/test/object_manager_test.cpp
     )
 
     # Link all necessary libraries to this unified test target just once.

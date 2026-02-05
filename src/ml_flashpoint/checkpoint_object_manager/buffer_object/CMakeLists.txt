@@ -51,8 +51,8 @@ if(BUILD_TESTING)
 
     # Best Practice: Combine all related test source files into a single executable.
     add_executable(buffer_object_test
-      test/buffer_object_test.cpp
-      test/buffer_helper_test.cpp
+      ${CMAKE_SOURCE_DIR}/tests/checkpoint_object_manager/buffer_object/test/buffer_object_test.cpp
+      ${CMAKE_SOURCE_DIR}/tests/checkpoint_object_manager/buffer_object/test/buffer_helper_test.cpp
     )
 
     # Link all necessary libraries to this unified test target just once.

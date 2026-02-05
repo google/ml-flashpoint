@@ -65,12 +65,12 @@ def parse_log_file(log_file):
     # Throughput logs
     # Read/Write patterns to capture timestamp and bytes
     # Capture groups: 1: Timestamp, 2: Step, 3: Rank, 4: Bytes, 5: Duration
-    # Timestamp + Read 123 bytes in 0.123 s (x.xx GB/s) from 1 buckets
+    # [Timestamp + ...] + "Read 123 bytes in 0.123 s (x.xx GB/s) from 1 buckets"
     read_throughput_pattern = re.compile(
         timestamp_prefix + r".*? Step=(-?\d+) Rank=(-?[\d/]+) .*?\] Read (\d+) "
         r"bytes in ([\d.]+) s \(([\d.]+) GB/s\) from (\d+) files"
     )
-    # Timestamp + Written 123 bytes in 0.123 s (X.XX GB/s) from 1 buckets
+    # [Timestamp + ...] + "Written 123 bytes in 0.123 s (X.XX GB/s) from 1 buckets"
     write_throughput_pattern = re.compile(
         timestamp_prefix + r".*? Step=(-?\d+) Rank=(-?[\d/]+) .*?\] Written (\d+) "
         r"bytes in ([\d.]+) s \(([\d.]+) GB/s\) from (\d+) buckets"

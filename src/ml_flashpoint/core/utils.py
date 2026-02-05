@@ -33,6 +33,19 @@ def get_env_var_prefix() -> str:
     return "MLFLASHPOINT"
 
 
+def get_accelerator_count() -> int:
+    """Returns the number of accelerators available in the host.
+
+    Returns:
+        int: The number of accelerators.
+
+    """
+    if torch.cuda.is_available():
+        return torch.cuda.device_count()
+    else:
+        return 0
+
+
 def get_num_of_nodes() -> int:
     """
     Calculates the number of nodes in a distributed job without using LOCAL_WORLD_SIZE.
@@ -59,15 +72,7 @@ def get_num_of_nodes() -> int:
 
     world_size = dist.get_world_size()
 
-    if torch.cuda.is_available():
-        nprocs_per_node = torch.cuda.device_count()
-    else:
-        # This will fail for CPU-only distributed training.
-        raise RuntimeError(
-            "Cannot determine number of nodes for CPU-only training without "
-            "the `NNODES` or `LOCAL_WORLD_SIZE` environment variables."
-        )
-
+    nprocs_per_node = get_accelerator_count()
     if nprocs_per_node == 0:
         raise RuntimeError("torch.cuda.device_count() returned 0.")
 

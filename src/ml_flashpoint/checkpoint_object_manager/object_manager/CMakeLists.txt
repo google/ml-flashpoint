@@ -48,7 +48,7 @@ if(BUILD_TESTING)
     include(GoogleTest)
 
     # Define the test source directory for readability
-    set(TEST_SRC_DIR ${CMAKE_SOURCE_DIR}/tests/checkpoint_object_manager/object_manager/test)
+    set(TEST_SRC_DIR ${CMAKE_SOURCE_DIR}/tests/checkpoint_object_manager/object_manager)
 
     # Best Practice: Combine all related test source files into a single executable.
     add_executable(object_manager_test

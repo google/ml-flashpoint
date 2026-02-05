@@ -48,7 +48,7 @@ jobs:
         df -h
         # Install python dependencies (with coverage enabled)
         echo -e "\n##### Running pip install #####"
-        pip install --no-build-isolation -e '.[dev]' --config-settings=cmake.args="-DENABLE_COVERAGE=ON"
+        pip install -e '.[dev]' --config-settings=cmake.args="-DENABLE_COVERAGE=ON"
 
     - run: df -h
 

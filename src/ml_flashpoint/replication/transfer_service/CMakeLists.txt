@@ -52,17 +52,18 @@ target_link_libraries(transfer_service_ext PUBLIC
 
 # --- Test Target ---
 if(BUILD_TESTING)
+    set(TEST_SRC_DIR ${CMAKE_SOURCE_DIR}/tests/replication/transfer_service)
     add_executable(transfer_service_test
-        test/protocol_test.cpp
-        test/transfer_service_test.cpp
-        test/transfer_service_p2p_test.cpp
-        test/task_test.cpp
-        test/thread_pool_test.cpp
-        test/task_queue_test.cpp
-        test/connection_pool_test.cpp
-        test/net_util_test.cpp
-        test/transfer_helpers_test.cpp
-        test/mlf_log_sink_test.cpp
+        ${TEST_SRC_DIR}/protocol_test.cpp
+        ${TEST_SRC_DIR}/transfer_service_test.cpp
+        ${TEST_SRC_DIR}/transfer_service_p2p_test.cpp
+        ${TEST_SRC_DIR}/task_test.cpp
+        ${TEST_SRC_DIR}/thread_pool_test.cpp
+        ${TEST_SRC_DIR}/task_queue_test.cpp
+        ${TEST_SRC_DIR}/connection_pool_test.cpp
+        ${TEST_SRC_DIR}/net_util_test.cpp
+        ${TEST_SRC_DIR}/transfer_helpers_test.cpp
+        ${TEST_SRC_DIR}/mlf_log_sink_test.cpp
     )
     target_link_libraries(transfer_service_test PRIVATE
         transfer_service_lib

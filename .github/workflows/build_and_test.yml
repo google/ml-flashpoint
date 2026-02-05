@@ -93,6 +93,8 @@ jobs:
         gcovr --root=. \
           --filter=src/ml_flashpoint \
           --exclude=".*/_deps/.*" \
+          --exclude="/tmp/.*" \
+          --exclude=".*/site-packages/.*" \
           --gcov-executable=gcov \
           --txt-metric branch \
           --html-details htmlcov/cpp/index.html \

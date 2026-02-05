@@ -225,7 +225,7 @@ TEST_F(BufferObjectTest, GetCapacityReturnsCorrectSize) {
   ASSERT_EQ(buffer.get_capacity(), expected_capacity);
 
   // Test with the opening constructor.
-  // The 'writer' scope ensures the file is closed before reopening.
+  // The BufferObject constructor will create the file, and its destructor will close the file (without deleting)
   {
     BufferObject writer(test_path_ + "_new", 512);
   }
@@ -308,6 +308,7 @@ TEST_F(BufferObjectTest, CloseWithTruncateIgnoresTruncateOnReadOnlyFile) {
   const size_t truncate_to_size = 512;
 
   // Setup: Create a file on disk with a known initial size.
+  // The BufferObject constructor will create the file, and its destructor will close the file (without deleting)
   {
     BufferObject writable_buffer(test_path_, initial_size);
   }

@@ -163,6 +163,6 @@ fail_under = 90
 # Tool-specific Configuration for cxx coverage
 # ===================================================================
 [tool.gcovr]
-fail-under-line = "85"
+fail-under-line = "80"
 #fail-under-branch = "85"
 

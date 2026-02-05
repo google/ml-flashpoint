@@ -39,13 +39,11 @@ def get_accelerator_count() -> int:
     Returns:
         int: The number of accelerators.
 
-    Raises:
-        RuntimeError: If no accelerators are available.
     """
     if torch.cuda.is_available():
         return torch.cuda.device_count()
     else:
-        raise RuntimeError("Cannot determine number of accelerators for CPU-only training.")
+        return 0
 
 
 def get_num_of_nodes() -> int:

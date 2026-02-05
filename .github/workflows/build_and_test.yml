@@ -110,7 +110,7 @@ jobs:
       with:
         filename: cxx-coverage.xml
         badge: true
-        fail_below_min: false  # C++ coverage might be lower initially
+        fail_below_min: false
         format: markdown
         hide_branch_rate: false
         hide_complexity: true
@@ -128,24 +128,6 @@ jobs:
 
     - name: Archive coverage reports
       uses: actions/upload-artifact@v4
-      with:
-        name: coverage-reports
-        path: |
-          htmlcov/
-          python-coverage.xml
-          cxx-coverage.xml
-          code-coverage-results.md
-
-    - name: Add C++ Coverage PR Comment
-      uses: marocchino/sticky-pull-request-comment@v2
-      if: github.event_name == 'pull_request' # && false # TODO(#3): fix and then re-enable
-      with:
-        header: cpp-coverage
-        recreate: true
-        path: code-coverage-results.md
-
-    - name: Archive coverage reports
-      uses: actions/upload-artifact@v3
       with:
         name: coverage-reports
         path: |

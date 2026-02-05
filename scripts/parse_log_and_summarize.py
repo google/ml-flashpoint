@@ -100,21 +100,14 @@ def parse_log_file(log_file):
             # Check for Read Throughput
             read_match = read_throughput_pattern.search(line)
             if read_match:
-                timestamp, step, rank, bytes_val, duration, _, _ = read_match.groups()
-                end_time = datetime.strptime(timestamp.replace(",", "."), "%Y-%m-%d %H:%M:%S.%f")
-                raw_throughput_records["Read"][int(step)].append(
-                    {"end_time": end_time, "duration": float(duration), "bytes": int(bytes_val), "rank": rank}
-                )
+                _process_throughput_match(read_match, "Read", raw_throughput_records)
                 continue
 
             # Check for Write Throughput
             write_match = write_throughput_pattern.search(line)
             if write_match:
-                timestamp, step, rank, bytes_val, duration, _, _ = write_match.groups()
-                end_time = datetime.strptime(timestamp.replace(",", "."), "%Y-%m-%d %H:%M:%S.%f")
-                raw_throughput_records["Write"][int(step)].append(
-                    {"end_time": end_time, "duration": float(duration), "bytes": int(bytes_val), "rank": rank}
-                )
+                _process_throughput_match(write_match, "Write", raw_throughput_records)
+                continue
                 continue
 
             # Check for Train Step
@@ -129,58 +122,51 @@ def parse_log_file(log_file):
     return data, ordered_functions, raw_throughput_records
 
 
+def _process_throughput_match(match, mode, raw_records):
+    """Extracting throughput data from a regex match."""
+    timestamp, step, rank, bytes_val, duration, _, _ = match.groups()
+    end_time = datetime.strptime(timestamp.replace(",", "."), "%Y-%m-%d %H:%M:%S.%f")
+    raw_records[mode][int(step)].append(
+        {"end_time": end_time, "duration": float(duration), "bytes": int(bytes_val), "rank": rank}
+    )
+
+
+def _calculate_throughput_stats(entries):
+    """Calculating throughput from a list of entries."""
+    if not entries:
+        return None
+    total_bytes = sum(e["bytes"] for e in entries)
+    starts = [e["end_time"] - timedelta(seconds=e["duration"]) for e in entries]
+    ends = [e["end_time"] for e in entries]
+    duration = (max(ends) - min(starts)).total_seconds()
+    if duration > 0:
+        return {"throughput": (total_bytes / 1e9) / duration, "duration": duration, "total_gb": total_bytes / 1e9}
+    return None
+
+
 def calculate_total_throughput(records):
-    """
-    Calculates Total Throughput = Total Bytes / (Latest End - Earliest Start).
-    """
     node_stats = {}
     for step, entries in records.items():
-        if not entries:
-            continue
-
-        total_bytes = sum(e["bytes"] for e in entries)
-
-        # Calculate individual rank start/end times
-        starts = [e["end_time"] - timedelta(seconds=e["duration"]) for e in entries]
-        ends = [e["end_time"] for e in entries]
-
-        # Determine the total read/write duration across all ranks
-        duration = (max(ends) - min(starts)).total_seconds()
-
-        if duration > 0:
-            throughput = (total_bytes / 1e9) / duration
-            node_stats[step] = {"throughput": throughput, "duration": duration, "total_gb": total_bytes / 1e9}
+        stats = _calculate_throughput_stats(entries)
+        if stats:
+            node_stats[step] = stats
     return node_stats
 
 
-# Function to calculate per-node throughput based on Rank to Node mapping
 def calculate_per_node_throughput(records, ranks_per_node):
-    """
-    Calculates Per-Node Throughput = Node Total Bytes / (Latest Node End - Earliest Node Start).
-    """
     per_node_stats = defaultdict(lambda: defaultdict(dict))
     for step, entries in records.items():
-        # Group entries by node ID
         node_groups = defaultdict(list)
         for e in entries:
             try:
                 node_id = int(e["rank"]) // ranks_per_node
                 node_groups[node_id].append(e)
-            except (ValueError, IndexError):
+            except ValueError:
                 continue
-
         for node_id, node_entries in node_groups.items():
-            total_bytes = sum(ne["bytes"] for ne in node_entries)
-            starts = [ne["end_time"] - timedelta(seconds=ne["duration"]) for ne in node_entries]
-            ends = [ne["end_time"] for ne in node_entries]
-
-            duration = (max(ends) - min(starts)).total_seconds()
-            if duration > 0:
-                per_node_stats[step][node_id] = {
-                    "throughput": (total_bytes / 1e9) / duration,
-                    "duration": duration,
-                    "total_gb": total_bytes / 1e9,
-                }
+            stats = _calculate_throughput_stats(node_entries)
+            if stats:
+                per_node_stats[step][node_id] = stats
     return per_node_stats
 
 
@@ -330,6 +316,50 @@ def calculate_total_training_time(log_file_path):
     return total_training_time
 
 
+def print_total_throughput_stats(mode, throughput_stats):
+    if not throughput_stats:
+        return
+    print(f"--- Cluster-Wide Total {mode} Throughput ---")
+    print(f"{'Step':<8} | {'Total Data (GB)':<15} | {'Time (s)':<10} | {'Throughput (GB/s)':<20}")
+    print("-" * 65)
+    all_throughput = [s["throughput"] for s in throughput_stats.values()]
+    for step in sorted(throughput_stats.keys()):
+        s = throughput_stats[step]
+        print(f"{step:<8} | {s['total_gb']:<15.2f} | {s['duration']:<10.3f} | {s['throughput']:<20.4f}")
+
+    if len(all_throughput) > 1:
+        avg = np.mean(all_throughput[1:])
+        print(f"Cluster-Wide Average {mode} Throughput Across Steps (Excluding first {mode}): {avg:.4f} GB/s\n")
+    elif all_throughput:
+        print(f"Cluster-Wide Average {mode} Throughput Across Steps: {np.mean(all_throughput):.4f} GB/s\n")
+
+
+def print_per_node_throughput_stats(mode, raw_records, ranks_per_node):
+    per_node_stats = calculate_per_node_throughput(raw_records, ranks_per_node)
+    if not per_node_stats:
+        return
+    print(f"--- Per-Node {mode} Throughput (Ranks per Node: {ranks_per_node}) ---")
+    print(f"{'Step':<8} | {'Node':<6} | {'Total Data (GB)':<15} | {'Time (s)':<10} | {'Throughput (GB/s)':<20}")
+    print("-" * 75)
+
+    node_averages = defaultdict(list)
+    sorted_steps = sorted(per_node_stats.keys())
+    for step in sorted_steps:
+        for node_id in sorted(per_node_stats[step].keys()):
+            s = per_node_stats[step][node_id]
+            print(
+                f"{step:<8} | {node_id:<6} | {s['total_gb']:<15.2f} | {s['duration']:<10.3f} | {s['throughput']:<20.4f}"
+            )
+            if len(sorted_steps) > 1 and step != sorted_steps[0]:
+                node_averages[node_id].append(s["throughput"])
+
+    if node_averages:
+        print(f"\nPer-Node Average {mode} Throughput Across Steps (Excluding first {mode}):")
+        for node_id in sorted(node_averages.keys()):
+            print(f"Node {node_id}: {np.mean(node_averages[node_id]):.4f} GB/s")
+    print()
+
+
 def main():
     """Main function."""
     parser = argparse.ArgumentParser(
@@ -435,54 +465,15 @@ Example Usage:
                 )
             print()
 
-    # Calculate statistics for Read and Write
+    # Report Total Throughput
     cluster_read_stats = calculate_total_throughput(raw_throughput_records["Read"])
     cluster_write_stats = calculate_total_throughput(raw_throughput_records["Write"])
+    print_total_throughput_stats("Read", cluster_read_stats)
+    print_total_throughput_stats("Write", cluster_write_stats)
 
-    for mode, throughput_stats in [("Read", cluster_read_stats), ("Write", cluster_write_stats)]:
-        if throughput_stats:
-            print(f"--- Total {mode} Throughput ---")
-            print(f"{'Step':<8} | {'Total Data (GB)':<15} | {'Span (s)':<10} | {'Throughput (GB/s)':<20}")
-            print("-" * 65)
-            all_throughput = []
-            for step in sorted(throughput_stats.keys()):
-                s = throughput_stats[step]
-                all_throughput.append(s["throughput"])
-                print(f"{step:<8} | {s['total_gb']:<15.2f} | {s['duration']:<10.3f} | {s['throughput']:<20.4f}")
-
-            if len(all_throughput) > 1:
-                # Skip the first read/write record
-                avg_throughput = np.mean(all_throughput[1:])
-                print(f"Total {mode} Throughput (Excluding first step): {avg_throughput:.4f} GB/s\n")
-            elif all_throughput:
-                # Fallback if only one step is recorded
-                print(f"Total {mode} Throughput: {np.mean(all_throughput):.4f} GB/s\n")
-
-    for mode, raw_records in [("Read", raw_throughput_records["Read"]), ("Write", raw_throughput_records["Write"])]:
-        per_node_stats = calculate_per_node_throughput(raw_records, args.ranks_per_node)
-        if per_node_stats:
-            print(f"--- Per-Node {mode} Throughput (Ranks per Node: {args.ranks_per_node}) ---")
-            print(f"{'Step':<8} | {'Node':<6} | {'Total Data (GB)':<15} | {'Span (s)':<10} | {'Throughput (GB/s)':<20}")
-            print("-" * 75)
-
-            node_averages = defaultdict(list)
-            sorted_steps = sorted(per_node_stats.keys())
-
-            for step in sorted_steps:
-                for node_id in sorted(per_node_stats[step].keys()):
-                    s = per_node_stats[step][node_id]
-                    print(
-                        f"{step:<8} | {node_id:<6} | {s['total_gb']:<15.2f} | {s['duration']:<10.3f}"
-                        f"| {s['throughput']:<20.4f}"
-                    )
-                    if len(sorted_steps) > 1 and step != sorted_steps[0]:
-                        node_averages[node_id].append(s["throughput"])
-
-            if node_averages:
-                print(f"\n Per-Node {mode} Throughput (Excluding first step):")
-                for node_id in sorted(node_averages.keys()):
-                    print(f"  Node {node_id}: {np.mean(node_averages[node_id]):.4f} GB/s")
-            print()
+    # Report Per-Node Throughput
+    print_per_node_throughput_stats("Read", raw_throughput_records["Read"], args.ranks_per_node)
+    print_per_node_throughput_stats("Write", raw_throughput_records["Write"], args.ranks_per_node)
 
     print("--- Step-to-Step Time Gap Analysis ---")
     print("Note: 'Total Gap' is the wall-clock time elapsed since the previous step finished.")

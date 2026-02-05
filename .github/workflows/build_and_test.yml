@@ -48,7 +48,7 @@ jobs:
         df -h
         # Install python dependencies (with coverage enabled)
         echo -e "\n##### Running pip install #####"
-        pip install -e '.[dev]' --config-settings=cmake.args="-DENABLE_COVERAGE=ON"
+        pip install --no-build-isolation -e '.[dev]' --config-settings=cmake.args="-DENABLE_COVERAGE=ON"
 
     - run: df -h
 
@@ -95,7 +95,7 @@ jobs:
           --exclude=".*/_deps/.*" \
           --exclude="/tmp/.*" \
           --exclude=".*pybind11.*" \
-          --gcov-ignore-errors=no_source \
+          --gcov-ignore-errors=source_not_found \
           --gcov-executable=gcov \
           --txt-metric branch \
           --html-details htmlcov/cpp/index.html \

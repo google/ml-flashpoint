@@ -18,6 +18,7 @@ import re
 import time
 from collections import defaultdict
 
+import numpy as np
 import parse_log_and_summarize as base
 
 
@@ -234,6 +235,38 @@ def main():
             for step in sorted(stats[func].keys()):
                 print_line(f" Step {step}:", stats[func][step], prefix="    ")
             print()
+
+    print("\n" + "=" * 150 + "\n")
+    print("--- Step-to-Step Time Gap Analysis ---")
+    print("Note: 'Total Gap' is the wall-clock time elapsed since the previous step finished.")
+    print("      'Other Time' = Total Gap - Train Time.")
+    print(
+        f"{'Step':<8} | {'Timestamp (Approx)':<20} | {'Total Gap (s)':<15} | "
+        f"{'Train Time (s)':<15} | {'Other Time (s)':<15}"
+    )
+    print("-" * 85)
+
+    breakdown = base.analyze_step_time_breakdown(args.log_file)
+
+    other_times = []
+    if not breakdown:
+        print("No consecutive steps or timestamps found to calculate gaps.")
+    else:
+        for row in breakdown:
+            other_times.append(row["other_time"])
+            print(
+                f"{row['step']:<8} | "
+                f"{str(row['timestamp']):<20} | "
+                f"{row['total_gap']:<15.2f} | "
+                f"{row['train_time']:<15.2f} | "
+                f"{row['other_time']:<15.2f}"
+            )
+        print("-" * 85)
+        if other_times:
+            print(f"Average 'Other Time' (Overhead) per step: {np.mean(other_times):.4f}s")
+            print(f"Total accumulated 'Other Time': {np.sum(other_times):.2f}s")
+
+    print("\n" + "=" * 150 + "\n")
 
 
 if __name__ == "__main__":

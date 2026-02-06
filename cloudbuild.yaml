@@ -33,7 +33,7 @@ steps:
       - '-c'
       - |
         pip install twine keyring keyrings.google-artifactregistry-auth
-        twine upload --repository-url https://us-python.pkg.dev/oss-exit-gate-prod/ml-flashpoint--pypi dist/*
+        twine upload --repository-url https://us-python.pkg.dev/oss-exit-gate-prod/${_PROJECT_NAME}--pypi dist/*
     waitFor: ['build']
 
   # 3. Create and upload the manifest to GCS to trigger the Exit Gate publication.
@@ -46,10 +46,13 @@ steps:
       - |
         # Use a simple manifest that publishes all artifacts currently in the AR repository.
         echo '{"publish_all": true}' > manifest.json
-        gcloud storage cp manifest.json gs://oss-exit-gate-prod-projects-bucket/ml-flashpoint/pypi/manifests/release-${TAG_NAME}.json
+        gcloud storage cp manifest.json gs://oss-exit-gate-prod-projects-bucket/${_PROJECT_NAME}/pypi/manifests/release-${TAG_NAME}.json
     waitFor: ['upload-to-ar']
 
 options:
   logging: CLOUD_LOGGING_ONLY
   # Ensure we have enough resources for building C++ extensions.
   machineType: 'E2_HIGHCPU_8'
+
+substitutions:
+  _PROJECT_NAME: 'ml-flashpoint'

@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2025 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ class StepTimerCallback(pl_callbacks.Callback):
     """
 
     def _log_event(self, hook_name: str) -> None:
-        _LOGGER.info(f"{hook_name: <30}")
+        _LOGGER.info(f"event={hook_name}")
 
     @override
     def on_train_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
@@ -121,7 +121,7 @@ class StepTimerCallback(pl_callbacks.Callback):
     @override
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """Called when loading a checkpoint, implement to reload callback state."""
-        self._log_event("on_load_checkpoint")
+        self._log_event("load_state_dict")
 
     @override
     def on_save_checkpoint(

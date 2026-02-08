@@ -5,7 +5,7 @@
 [![Build and Test](https://github.com/google/ml-flashpoint/actions/workflows/build_and_test.yml/badge.svg)](https://github.com/google/ml-flashpoint/actions/workflows/build_and_test.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-3100/)
 
-[Documentation](https://google.github.io/ml-flashpoint/) | [Performance](https://google.github.io/ml-flashpoint/#performance) | [Contributing](https://github.com/google/ml-flashpoint/blob/main/CONTRIBUTING.md) | [Security](https://github.com/google/ml-flashpoint/blob/main/SECURITY.md)
+[Documentation](https://google.github.io/ml-flashpoint/) | [Performance](https://google.github.io/ml-flashpoint/#performance) | [Contributing](./CONTRIBUTING.md) | [Security](./SECURITY.md)
 </div>
 
 ## Overview

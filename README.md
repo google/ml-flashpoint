@@ -1,6 +1,14 @@
+<div align="center">
+
 # ML Flashpoint
 
 [![Build and Test](https://github.com/google/ml-flashpoint/actions/workflows/build_and_test.yml/badge.svg)](https://github.com/google/ml-flashpoint/actions/workflows/build_and_test.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-3100/)
+
+[Documentation](https://google.github.io/ml-flashpoint/) | [Performance](https://google.github.io/ml-flashpoint/#performance) | [Contributing](./CONTRIBUTING.md) | [Security](./SECURITY.md)
+</div>
+
+## Overview
 
 A memory-first, lightning-fast, ready-to-use ML checkpointing library.
 
@@ -14,7 +22,7 @@ Below you will find development instructions for contributors.
 
 ## Installation
 
-This library defines core dependencies, as well as additional optional dependencies for specific adapters, to avoid polluting consumers with unnecessary dependencies.
+This library defines core dependencies, as well as additional _optional_ dependencies for specific adapters, to avoid polluting consumers with unnecessary dependencies.
 See the adapters installation commands below for examples of the available options, and the [`pyproject.toml`](./pyproject.toml) as the source of truth for all available adapters.
 
 ### Core Library

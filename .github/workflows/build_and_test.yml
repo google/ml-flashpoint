@@ -84,14 +84,14 @@ jobs:
 
     - name: Add Python Coverage Title
       run: |
-        echo '### Python Code Coverage Summary' | cat - code-coverage-results.md > temp && mv temp code-coverage-results.md
+        echo '### Python Code Coverage Summary' | cat - code-coverage-results.md > temp && mv temp python-code-coverage-results.md
 
     - name: Add Python Coverage PR Comment
       uses: marocchino/sticky-pull-request-comment@v2
       if: github.event_name == 'pull_request'
       with:
         recreate: true
-        path: code-coverage-results.md
+        path: python-code-coverage-results.md
 
     - name: Check C++ test coverage
       run: |
@@ -129,7 +129,7 @@ jobs:
 
     - name: Add C++ Coverage Title
       run: |
-        echo '### C++ Code Coverage Summary' | cat - code-coverage-results.md > temp && mv temp code-coverage-results.md
+        echo '### C++ Code Coverage Summary' | cat - code-coverage-results.md > temp && mv temp cpp-code-coverage-results.md
 
     - name: Add C++ Coverage PR Comment
       uses: marocchino/sticky-pull-request-comment@v2
@@ -137,7 +137,7 @@ jobs:
       with:
         header: cpp-coverage
         recreate: true
-        path: code-coverage-results.md
+        path: cpp-code-coverage-results.md
 
     - name: Archive coverage reports
       uses: actions/upload-artifact@v4
@@ -147,7 +147,8 @@ jobs:
           htmlcov/
           python-coverage.xml
           cxx-coverage.xml
-          code-coverage-results.md
+          python-code-coverage-results.md
+          cpp-code-coverage-results.md
 
   lint-code:
     runs-on: ubuntu-latest

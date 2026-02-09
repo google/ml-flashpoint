@@ -104,7 +104,6 @@ jobs:
         ruff format --check .
 
     - name: Lint with clang-format
-      if: false # TODO(#2): fix this then re-enable
       run: |
         # Install and run C++ linter
         echo -e "\n##### Installing and running clang-format linter #####"

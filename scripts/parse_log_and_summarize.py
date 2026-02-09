@@ -128,7 +128,7 @@ def parse_log_file(log_file):
 
             start_match = batch_start_pattern.search(line)
             if start_match:
-                ts_str, step_idx, rank = start_match.groups()
+                ts_str, step_idx, _ = start_match.groups()
                 step_idx = int(step_idx)
                 ts_dt = datetime.strptime(ts_str.replace(",", "."), "%Y-%m-%d %H:%M:%S.%f")
 
@@ -213,10 +213,10 @@ def analyze_step_time_breakdown(step_start_times, data):
         start_next = step_start_times[next_step]
         total_gap = (start_next - start_curr).total_seconds()
 
-        actual_train_time = 0.0
-        if curr_step in train_timings and len(train_timings[curr_step]) > 0:
+        try:
             actual_train_time = train_timings[curr_step][0][0]
-
+        except (KeyError, IndexError, TypeError):
+            actual_train_time = 0.0
         other_time = total_gap - actual_train_time
 
         results.append(

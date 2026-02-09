@@ -80,6 +80,14 @@ def parse_log_file(log_file):
     # Format: { 'Read': { step: [ (end_time, duration, bytes, rank), ... ] }, 'Write': { ... } }
     raw_throughput_records = {"Read": defaultdict(list), "Write": defaultdict(list)}
 
+    # Pattern to capture the start of a training step
+    # Groups: 1: Timestamp, 2: Step, 3: Rank
+    batch_start_pattern = re.compile(
+        timestamp_prefix + r".*? Step=(-?\d+) Rank=(-?[\d/]+) .*? event=on_train_batch_start"
+    )
+    # Create a dictionary to track the earliest start time for each step
+    step_start_times = {}
+
     train_step_pattern = re.compile(r"global_step: (\d+).*?train_step_timing in s: ([\d.]+)")
     data = defaultdict(lambda: defaultdict(list))
     ordered_functions = []
@@ -108,7 +116,6 @@ def parse_log_file(log_file):
             if write_match:
                 _process_throughput_match(write_match, "Write", raw_throughput_records)
                 continue
-                continue
 
             # Check for Train Step
             train_match = train_step_pattern.search(line)
@@ -119,7 +126,21 @@ def parse_log_file(log_file):
                     ordered_functions.append(metric_name)
                 data[metric_name][int(step)].append((float(time_taken), "NA"))
 
-    return data, ordered_functions, raw_throughput_records
+            start_match = batch_start_pattern.search(line)
+            if start_match:
+                ts_str, step_idx, rank = start_match.groups()
+                step_idx = int(step_idx)
+                ts_dt = datetime.strptime(ts_str.replace(",", "."), "%Y-%m-%d %H:%M:%S.%f")
+
+                # Record the earliest timestamp (of on_train_batch_start) seen for this step (first rank that logs it)
+                if step_idx not in step_start_times:
+                    # The first step in MLF is logged as -1 (-1->1->2) while in Nemo it's 0 (0->1->2)
+                    if step_idx == -1:
+                        step_idx = 0
+                    step_start_times[step_idx] = ts_dt
+                continue
+
+    return data, ordered_functions, raw_throughput_records, step_start_times
 
 
 def _process_throughput_match(match, mode, raw_records):
@@ -170,58 +191,43 @@ def calculate_per_node_throughput(records, ranks_per_node):
     return per_node_stats
 
 
-def analyze_step_time_breakdown(log_file_path):
+def analyze_step_time_breakdown(step_start_times, data):
     """
-    Analyzes the wall-clock time gap between consecutive global steps to identify overheads.
+    Analyzes the wall-clock time gap between consecutive global steps.
 
-    This function calculates:
-    1. Total Gap: Wall-clock time elapsed between the end of step N-1 and step N.
-    2. Other Time (Overhead): Total Gap minus the reported training time (train_step_timing from NeMo logs).
+    Using the earliest 'on_train_batch_start' event as the definitive
+    timestamp for the beginning of each step.
     """
-    timestamp_pattern = re.compile(r"\[NeMo \w (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
-    train_step_pattern = re.compile(r"global_step: (\d+).*?train_step_timing in s: ([\d.]+)")
-
-    step_data = []
-    last_seen_timestamp = None
-
-    try:
-        with open(log_file_path, "r") as f:
-            for line in f:
-                ts_match = timestamp_pattern.search(line)
-                if ts_match:
-                    try:
-                        last_seen_timestamp = datetime.strptime(ts_match.group(1), "%Y-%m-%d %H:%M:%S")
-                    except ValueError:
-                        pass
-
-                step_match = train_step_pattern.search(line)
-                if step_match and last_seen_timestamp:
-                    step_data.append(
-                        {
-                            "step": int(step_match.group(1)),
-                            "finish_time": last_seen_timestamp,
-                            "train_time": float(step_match.group(2)),
-                        }
-                    )
-    except Exception as e:
-        print(f"Error analyzing breakdown: {e}")
-        return []
-
     results = []
-    for i in range(1, len(step_data)):
-        prev, curr = step_data[i - 1], step_data[i]
-        if curr["step"] > prev["step"]:
-            time_delta = max((curr["finish_time"] - prev["finish_time"]).total_seconds(), 0.0)
-            other_time = time_delta - curr["train_time"]
-            results.append(
-                {
-                    "step": curr["step"],
-                    "timestamp": curr["finish_time"],
-                    "total_gap": time_delta,
-                    "train_time": curr["train_time"],
-                    "other_time": other_time,
-                }
-            )
+    # We need the reported train_step_timing to calculate overhead
+    train_timings = data.get("train_step_timing", {})
+
+    sorted_steps = sorted(step_start_times.keys())
+
+    for i in range(len(sorted_steps) - 1):
+        curr_step = sorted_steps[i]
+        next_step = sorted_steps[i + 1]
+
+        # Calculate Total Gap between starts of two consecutive steps
+        start_curr = step_start_times[curr_step]
+        start_next = step_start_times[next_step]
+        total_gap = (start_next - start_curr).total_seconds()
+
+        actual_train_time = 0.0
+        if curr_step in train_timings and len(train_timings[curr_step]) > 0:
+            actual_train_time = train_timings[curr_step][0][0]
+
+        other_time = total_gap - actual_train_time
+
+        results.append(
+            {
+                "step": curr_step,
+                "timestamp": start_curr,
+                "total_gap": total_gap,
+                "train_time": actual_train_time,
+                "other_time": other_time,
+            }
+        )
     return results
 
 
@@ -398,7 +404,7 @@ Example Usage:
     print("*********" * 8)
     print()
 
-    data, ordered_functions, raw_throughput_records = parse_log_file(args.log_file)
+    data, ordered_functions, raw_throughput_records, step_start_times = parse_log_file(args.log_file)
     stats = calculate_statistics(data)
     overall_stats = calculate_overall_statistics(data)
 
@@ -484,7 +490,7 @@ Example Usage:
     )
     print("-" * 85)
 
-    breakdown = analyze_step_time_breakdown(args.log_file)
+    breakdown = analyze_step_time_breakdown(step_start_times, data)
     other_times = []
     if not breakdown:
         print("No consecutive steps or timestamps found to calculate gaps.")

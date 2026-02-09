@@ -259,6 +259,9 @@ class TestDefaultMLFlashpointCheckpointSaver:
         assert mock_set_num_threads.call_args_list[-1] == mocker.call(original_num_threads)
 
     def test_write_data_multithreaded(self, chkpt_object_manager, replication_manager, temp_dir_path):
+        """Ensure that writing with multiple write threads (in our logic) does not fail, 
+        as it has in the past when using `tensor.copy_`.
+        """
         # Given
         saver = DefaultMLFlashpointCheckpointSaver(
             global_rank_getter=lambda: 0,

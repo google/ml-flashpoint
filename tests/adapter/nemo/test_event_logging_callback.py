@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,9 +18,9 @@ import lightning.pytorch as pl
 import pytest
 import torch
 
-from ml_flashpoint.adapter.nemo.step_timer_callback import StepTimerCallback
+from ml_flashpoint.adapter.nemo.event_logging_callback import EventLoggingCallback
 
-# Exhaustive list of all hooks implemented in StepTimerCallback.
+# Exhaustive list of all hooks implemented in EventLoggingCallback.
 # Format: (method_name, extra_kwargs, expected_event_string)
 HOOKS_TO_TEST = [
     ("on_train_start", {}, "on_train_start"),
@@ -49,23 +49,24 @@ HOOKS_TO_TEST = [
 
 def test_is_subtype_of_pytorch_lightning_callback():
     """Verify inheritance to ensure compatibility with PyTorch Lightning."""
-    # assert issubclass(MLFlashpointCheckpointCallback, pl.callbacks.Callback)
-    assert issubclass(StepTimerCallback, pl.callbacks.Callback)
+    assert issubclass(EventLoggingCallback, pl.callbacks.Callback)
 
 
 @pytest.mark.parametrize("hook_name, kwargs, expected_event", HOOKS_TO_TEST)
-def test_step_timer_hooks_log_correctly(mocker, hook_name, kwargs, expected_event):
+def test_event_logging_hooks_log_correctly(mocker, hook_name, kwargs, expected_event):
     """
-    Tests that every lifecycle hook in StepTimerCallback logs the correct event.
+    Tests that every lifecycle hook in EventLoggingCallback logs the correct event.
     """
 
-    mock_logger = mocker.patch("ml_flashpoint.adapter.nemo.step_timer_callback._LOGGER")
-    callback = StepTimerCallback()
+    # Given
+    mock_logger = mocker.patch("ml_flashpoint.adapter.nemo.event_logging_callback._LOGGER")
+    callback = EventLoggingCallback()
 
     # Mock Trainer and LightningModule as required by the PyTorch Lightning API.
     trainer = mocker.MagicMock(spec=pl.Trainer)
     pl_module = mocker.MagicMock(spec=pl.LightningModule)
 
+    # When
     # Dynamically fetch the method to test.
     hook_method = getattr(callback, hook_name)
 
@@ -75,6 +76,7 @@ def test_step_timer_hooks_log_correctly(mocker, hook_name, kwargs, expected_even
     else:
         hook_method(trainer=trainer, pl_module=pl_module, **kwargs)
 
+    # Then
     # Verify the log content matches the implementation of _log_event.
     # LOGGER.info(f"event={hook_name}")
     expected_log_msg = f"event={expected_event}"

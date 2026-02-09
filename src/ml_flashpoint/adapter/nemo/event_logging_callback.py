@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@ from ml_flashpoint.core.mlf_logging import get_logger
 _LOGGER = get_logger(__name__)
 
 
-class StepTimerCallback(pl_callbacks.Callback):
+class EventLoggingCallback(pl_callbacks.Callback):
     """
     A comprehensive logging callback to record timestamps for all key PyTorch Lightning
     lifecycle events to monitor execution flow.

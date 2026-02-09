@@ -106,6 +106,10 @@ class TestDefaultMLFlashpointCheckpointSaver:
     def replication_manager(self, mocker):
         return mocker.MagicMock(spec=ReplicationManager)
 
+    @pytest.fixture(autouse=True)
+    def mock_accelerator_count(self, mocker):
+        return mocker.patch("ml_flashpoint.core.checkpoint_saver.get_accelerator_count", return_value=1)
+
     @staticmethod
     def _tensor_write_data_for(tensor: torch.Tensor):
         return TensorWriteData(
@@ -212,6 +216,90 @@ class TestDefaultMLFlashpointCheckpointSaver:
         data_io = io.BytesIO(data)
         loaded_tensor = torch.load(data_io, weights_only=False)
         assert torch.equal(loaded_tensor, tensor_data)
+
+    @pytest.mark.parametrize(
+        "exception_in_worker",
+        [
+            None,
+            RuntimeError("Worker failed"),
+        ],
+    )
+    def test_write_data_resets_num_threads(
+        self, chkpt_object_manager, replication_manager, temp_dir_path, mocker, exception_in_worker
+    ):
+        # Given
+        saver = DefaultMLFlashpointCheckpointSaver(
+            global_rank_getter=lambda: 0,
+            local_rank_getter=lambda: 0,
+            global_barrier_func=lambda: None,
+            ckpt_obj_manager=chkpt_object_manager,
+            replication_manager=replication_manager,
+        )
+        checkpoint_id = CheckpointContainerId(os.path.join(temp_dir_path, "ckpt_threads"))
+
+        # Mock threading related calls
+        original_num_threads = 8
+        mocker.patch("torch.get_num_threads", return_value=original_num_threads)
+        mock_set_num_threads = mocker.patch("torch.set_num_threads")
+
+        # Mock worker to avoid actual writing and optionally raise exception
+        mock_worker = mocker.patch.object(saver, "_write_to_buffer_from_queue_worker")
+        if exception_in_worker:
+            mock_worker.side_effect = exception_in_worker
+
+        # When
+        if exception_in_worker:
+            with pytest.raises(RuntimeError, match="Worker failed"):
+                saver.write_data(checkpoint_id, [], replicate_after_write=False, thread_count=1)
+        else:
+            saver.write_data(checkpoint_id, [], replicate_after_write=False, thread_count=1)
+
+        # Then
+        # Verify it was reset to original_num_threads in finally block
+        assert mock_set_num_threads.call_args_list[-1] == mocker.call(original_num_threads)
+
+    def test_write_data_multithreaded(self, chkpt_object_manager, replication_manager, temp_dir_path):
+        """Ensure that writing with multiple write threads (in our logic) does not fail,
+        as it has in the past when using `tensor.copy_`.
+        """
+        # Given
+        saver = DefaultMLFlashpointCheckpointSaver(
+            global_rank_getter=lambda: 0,
+            local_rank_getter=lambda: 0,
+            global_barrier_func=lambda: None,
+            ckpt_obj_manager=chkpt_object_manager,
+            replication_manager=replication_manager,
+        )
+        checkpoint_id = CheckpointContainerId(os.path.join(temp_dir_path, "ckpt_threads_multi"))
+
+        # Create write items
+        num_items = 10
+        write_items = []
+        data_map = {}
+        for i in range(num_items):
+            tensor = torch.tensor([i], dtype=torch.int32)
+            index = MetadataIndex(fqn=f"item_{i}")
+            write_items.append(
+                WriteItem(
+                    index=index,
+                    type=WriteItemType.TENSOR,
+                    tensor_data=self._tensor_write_data_for(tensor),
+                )
+            )
+            data_map[index] = tensor
+
+        resolver = StubWriteItemResolver(data_map)
+
+        # Prepare buckets
+        buckets = saver.prepare_write_data(
+            checkpoint_id, write_items, resolver, object_name_prefix="data", bucket_count=4
+        )
+
+        # When
+        results = saver.write_data(checkpoint_id, buckets, replicate_after_write=False, thread_count=4)
+
+        # Then
+        assert len(results) == num_items
 
     @pytest.mark.parametrize(
         "checkpoint_id_suffix",

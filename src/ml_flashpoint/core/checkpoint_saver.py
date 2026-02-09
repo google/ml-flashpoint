@@ -36,7 +36,7 @@ from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, Checkp
 from ml_flashpoint.core.defaults import DIRTY_MARKER_SUFFIX, CheckpointFormat, default_metadata_object_name
 from ml_flashpoint.core.mlf_logging import get_logger
 from ml_flashpoint.core.tensor_header import TensorHeader
-from ml_flashpoint.core.utils import log_execution_time
+from ml_flashpoint.core.utils import get_accelerator_count, log_execution_time
 from ml_flashpoint.replication.replication_manager import ReplicationManager
 
 DEFAULT_INITIAL_BUFFER_SIZE_BYTES = 16 * 1000 * 1000 * 1000
@@ -426,67 +426,83 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         thread_count: int = 1,
     ) -> list[WriteResult]:
         thread_count = max(thread_count, 1)
+        num_cpus = os.cpu_count() or 1
+        num_ranks = max(get_accelerator_count(), 1)
+        # Use 50% of available CPU cores for PyTorch intra-op threads and evenly distribute them across ranks.
+        torch_thread_count = max(1, num_cpus // 2 // num_ranks // thread_count)
+        original_num_threads = torch.get_num_threads()
+        # Explicitly set PyTorch intra-op threads to optimize for performance.
+        # This also avoids potential runtime errors in tensor.copy_() with concurrent writers
+        torch.set_num_threads(torch_thread_count)
         _LOGGER.debug(
-            "%s starting multi-threaded write_data with thread_count: %d",
+            "%s starting multi-threaded write_data. thread_count: %d, original_num_threads: %d, "
+            "num_cpus: %d, num_ranks: %d, torch_thread_count: %d",
             self.__class__.__name__,
             thread_count,
+            original_num_threads,
+            num_cpus,
+            num_ranks,
+            torch_thread_count,
         )
+        try:
+            # Queue of ObjectWriteBuckets
+            object_items_queue: queue.Queue = queue.Queue()
+            for bucket in write_buckets:
+                object_items_queue.put(bucket)
 
-        # Queue of ObjectWriteBuckets
-        object_items_queue: queue.Queue = queue.Queue()
-        for bucket in write_buckets:
-            object_items_queue.put(bucket)
+            # NOTE: There is support for multiple threads, to simplify modifying that setting, but we typically
+            # only use 1 thread.
 
-        # NOTE: There is support for multiple threads, to simplify modifying that setting, but we typically
-        # only use 1 thread.
+            results_from_threads: queue.Queue = queue.Queue()  # Queue for tuple[List[WriteResult], Exception]
+            threads = []
 
-        results_from_threads: queue.Queue = queue.Queue()  # Queue for tuple[List[WriteResult], Exception]
-        threads = []
+            # Kick off additional threads to main thread, if any.
+            _LOGGER.debug("Spawning %d extra writer threads (in addition to the main thread).", thread_count - 1)
+            for i in range(1, thread_count):
+                thread = threading.Thread(
+                    target=self._write_to_buffer_from_queue_worker,
+                    args=(object_items_queue, results_from_threads, replicate_after_write, self._use_optimized_save),
+                    name=f"{self.__class__.__name__}-Thread-{i}",
+                )
+                threads.append(thread)
+                thread.start()
 
-        # Kick off additional threads to main thread, if any.
-        _LOGGER.debug("Spawning %d extra writer threads (in addition to the main thread).", thread_count - 1)
-        for i in range(1, thread_count):
-            thread = threading.Thread(
-                target=self._write_to_buffer_from_queue_worker,
-                args=(object_items_queue, results_from_threads, replicate_after_write, self._use_optimized_save),
-                name=f"{self.__class__.__name__}-Thread-{i}",
+            # Main thread execution.
+            self._write_to_buffer_from_queue_worker(
+                object_items_queue, results_from_threads, replicate_after_write, self._use_optimized_save
             )
-            threads.append(thread)
-            thread.start()
 
-        # Main thread execution.
-        self._write_to_buffer_from_queue_worker(
-            object_items_queue, results_from_threads, replicate_after_write, self._use_optimized_save
-        )
+            for thread in threads:
+                thread.join()
 
-        for thread in threads:
-            thread.join()
+            all_results: list[WriteResult] = []
+            exceptions_raised: list[Exception] = []
+            # Collect all results, replication metadata, and exceptions
+            while not results_from_threads.empty():
+                try:
+                    results, exception = results_from_threads.get_nowait()
+                    if exception:
+                        exceptions_raised.append(exception)
+                    elif results:
+                        all_results.extend(results)
+                except queue.Empty:
+                    break
 
-        all_results: list[WriteResult] = []
-        exceptions_raised: list[Exception] = []
-        # Collect all results, replication metadata, and exceptions
-        while not results_from_threads.empty():
-            try:
-                results, exception = results_from_threads.get_nowait()
-                if exception:
-                    exceptions_raised.append(exception)
-                elif results:
-                    all_results.extend(results)
-            except queue.Empty:
-                break
+            if exceptions_raised:
+                _LOGGER.error(
+                    "'%s' encountered %d error(s) during multi-threaded write (will propagate the first one):\n%s.",
+                    self.__class__.__name__,
+                    len(exceptions_raised),
+                    exceptions_raised,
+                )
+                # Propagate the first exception encountered.
+                # TODO: propagate some combined exception, then update log msg
+                # (for now they are all logged above at least)
+                raise exceptions_raised[0]
 
-        if exceptions_raised:
-            _LOGGER.error(
-                "'%s' encountered %d error(s) during multi-threaded write (will propagate the first one):\n%s.",
-                self.__class__.__name__,
-                len(exceptions_raised),
-                exceptions_raised,
-            )
-            # Propagate the first exception encountered.
-            # TODO: propagate some combined exception, then update log msg (for now they are all logged above at least)
-            raise exceptions_raised[0]
-
-        return all_results
+            return all_results
+        finally:
+            torch.set_num_threads(original_num_threads)
 
     @log_execution_time(logger=_LOGGER, name="async_replicate_object")
     def async_replicate_object(self, object_id: CheckpointObjectId) -> list[concurrent.futures.Future]:

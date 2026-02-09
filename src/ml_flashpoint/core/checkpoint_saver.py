@@ -428,9 +428,9 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         thread_count = max(thread_count, 1)
         num_cpus = os.cpu_count() or 1
         num_ranks = max(get_accelerator_count(), 1)
+        # Use 50% of available CPU cores for PyTorch intra-op threads and evenly distribute them across ranks.
         torch_thread_count = max(1, num_cpus // 2 // num_ranks // thread_count)
         original_num_threads = torch.get_num_threads()
-        # Use 50% of available CPU cores for PyTorch intra-op threads and evenly distribute them across ranks.
         # Explicitly set PyTorch intra-op threads to optimize for performance.
         # This also avoids potential runtime errors in tensor.copy_() with concurrent writers
         torch.set_num_threads(torch_thread_count)

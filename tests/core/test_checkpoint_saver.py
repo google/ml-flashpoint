@@ -258,6 +258,46 @@ class TestDefaultMLFlashpointCheckpointSaver:
         # Verify it was reset to original_num_threads in finally block
         assert mock_set_num_threads.call_args_list[-1] == mocker.call(original_num_threads)
 
+    def test_write_data_multithreaded(self, chkpt_object_manager, replication_manager, temp_dir_path):
+        # Given
+        saver = DefaultMLFlashpointCheckpointSaver(
+            global_rank_getter=lambda: 0,
+            local_rank_getter=lambda: 0,
+            global_barrier_func=lambda: None,
+            ckpt_obj_manager=chkpt_object_manager,
+            replication_manager=replication_manager,
+        )
+        checkpoint_id = CheckpointContainerId(os.path.join(temp_dir_path, "ckpt_threads_multi"))
+
+        # Create write items
+        num_items = 10
+        write_items = []
+        data_map = {}
+        for i in range(num_items):
+            tensor = torch.tensor([i], dtype=torch.int32)
+            index = MetadataIndex(fqn=f"item_{i}")
+            write_items.append(
+                WriteItem(
+                    index=index,
+                    type=WriteItemType.TENSOR,
+                    tensor_data=self._tensor_write_data_for(tensor),
+                )
+            )
+            data_map[index] = tensor
+
+        resolver = StubWriteItemResolver(data_map)
+
+        # Prepare buckets
+        buckets = saver.prepare_write_data(
+            checkpoint_id, write_items, resolver, object_name_prefix="data", bucket_count=4
+        )
+
+        # When
+        results = saver.write_data(checkpoint_id, buckets, replicate_after_write=False, thread_count=4)
+
+        # Then
+        assert len(results) == num_items
+
     @pytest.mark.parametrize(
         "checkpoint_id_suffix",
         [

@@ -100,16 +100,16 @@ You can prompt your coding tool to "create a comprehensive test plan for X, cove
 *   **C++ Format:** To apply automated fixes, run:
 
     ```bash
-    # install clang-format
-    sudo apt-get update && sudo apt-get install -y clang-format
+    # install clang-format-18
+    sudo apt-get update && sudo apt-get install -y clang-format-18
 
     # format all C++ files
-    find src -name '*.cpp' -o -name '*.h' | xargs clang-format -i
+    find src -name '*.cpp' -o -name '*.h' | xargs clang-format-18 -i
     ```
 
 *   **C++ Lint:** Check for style violations, run:
     ```bash
-    find src -name '*.cpp' -o -name '*.h' | xargs clang-format --dry-run --Werror
+    find src -name '*.cpp' -o -name '*.h' | xargs clang-format-18 --dry-run --Werror
     ```
 
 *   **Test:** To run all tests (Python and C++), run:

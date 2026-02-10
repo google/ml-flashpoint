@@ -104,13 +104,12 @@ jobs:
         ruff format --check .
 
     - name: Lint with clang-format
-      if: false # TODO(#2): fix this then re-enable
       run: |
         # Install and run C++ linter
         echo -e "\n##### Installing and running clang-format linter #####"
-        sudo apt-get update && sudo apt-get install -y clang-format
-        clang-format --version
-        find src -name '*.cpp' -o -name '*.h' | xargs clang-format --dry-run --Werror
+        sudo apt-get update && sudo apt-get install -y clang-format-18
+        clang-format-18 --version
+        find src -name '*.cpp' -o -name '*.h' | xargs clang-format-18 --dry-run --Werror
 
   lint-license:
     runs-on: ubuntu-latest

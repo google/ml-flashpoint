@@ -112,6 +112,17 @@ You can prompt your coding tool to "create a comprehensive test plan for X, cove
     find src -name '*.cpp' -o -name '*.h' | xargs clang-format-18 --dry-run --Werror
     ```
 
+*   **GitHub Actions Lint:** To pin action versions, first install [`ratchet`](https://github.com/sethvargo/ratchet?tab=readme-ov-file#installation) - one way is via `go install`:
+    ```bash
+    go install github.com/sethvargo/ratchet@latest
+    ```
+    Then run it on the workflow yaml file:
+    ```bash
+    ratchet pin .github/workflows/build-and-test.yml
+    # Or if installed to a specific location not in your path, something like:
+    ~/go/bin/ratchet pin ./.github/workflows/build-and-test.yml
+    ```
+
 *   **Test:** To run all tests (Python and C++), run:
     ```bash
     pytest

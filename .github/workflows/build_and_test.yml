@@ -27,7 +27,12 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.10"]
-
+    env:
+      PYTHON_FAIL_UNDER: 90
+      CPP_FAIL_UNDER: 80
+    permissions:
+      contents: read        # Required for actions/checkout
+      pull-requests: write  # Required to post the comment
     steps:
     - uses: actions/checkout@v3
 
@@ -61,7 +66,32 @@ jobs:
       run: |
         # Verify python coverage thresholds
         echo -e "\n##### Verifying Python coverage thresholds #####"
-        coverage report
+        coverage report --fail-under=${{ env.PYTHON_FAIL_UNDER }}
+        coverage xml -o python-coverage.xml
+
+    - name: Python Coverage Summary
+      uses: irongut/CodeCoverageSummary@v1.3.0
+      with:
+        filename: python-coverage.xml
+        badge: true
+        fail_below_min: true
+        format: markdown
+        hide_branch_rate: false
+        hide_complexity: true
+        indicators: true
+        output: both
+        thresholds: '${{ env.PYTHON_FAIL_UNDER }} 95'
+
+    - name: Add Python Coverage Title
+      run: |
+        echo '### Python Code Coverage Summary' | cat - code-coverage-results.md > temp && mv temp python-code-coverage-results.md
+
+    - name: Add Python Coverage PR Comment
+      uses: marocchino/sticky-pull-request-comment@v2
+      if: github.event_name == 'pull_request'
+      with:
+        recreate: true
+        path: python-code-coverage-results.md
 
     - name: Check C++ test coverage
       run: |
@@ -81,7 +111,44 @@ jobs:
           --sort uncovered-number \
           --gcov-ignore-parse-errors negative_hits.warn \
           --gcov-ignore-parse-errors suspicious_hits.warn \
-          --gcov-ignore-errors=no_working_dir_found
+          --gcov-ignore-errors=no_working_dir_found \
+          --fail-under-line=${{ env.CPP_FAIL_UNDER }}
+
+    - name: C++ Coverage Summary
+      uses: irongut/CodeCoverageSummary@v1.3.0
+      with:
+        filename: cxx-coverage.xml
+        badge: true
+        fail_below_min: true
+        format: markdown
+        hide_branch_rate: false
+        hide_complexity: true
+        indicators: true
+        output: both
+        thresholds: '${{ env.CPP_FAIL_UNDER }} 40'
+
+    - name: Add C++ Coverage Title
+      run: |
+        echo '### C++ Code Coverage Summary' | cat - code-coverage-results.md > temp && mv temp cpp-code-coverage-results.md
+
+    - name: Add C++ Coverage PR Comment
+      uses: marocchino/sticky-pull-request-comment@v2
+      if: github.event_name == 'pull_request'
+      with:
+        header: cpp-coverage
+        recreate: true
+        path: cpp-code-coverage-results.md
+
+    - name: Archive coverage reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-reports
+        path: |
+          htmlcov/
+          python-coverage.xml
+          cxx-coverage.xml
+          python-code-coverage-results.md
+          cpp-code-coverage-results.md
 
   lint-code:
     runs-on: ubuntu-latest

@@ -59,13 +59,12 @@ def parse_log_file(log_file):
     # Standard performance log: "... took X.Xs"
     log_pattern = re.compile(r"\[MLF.* Step=(-?\d+) Rank=(-?[\d/]+) (.*?):[\d]+\] (.*?) took ([\d.]+)s")
 
-    # Format: [MLF YYYY-MM-DD HH:MM:SS,mmm ...]
-    timestamp_prefix = r"\[MLF (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})"
-
     # Throughput logs
     # Read/Write patterns to capture timestamp and bytes
-    # Capture groups: 1: Timestamp, 2: Step, 3: Rank, 4: Bytes, 5: Duration
+    # Capture groups: 1: Timestamp, 2: Step, 3: Rank, 4: Bytes, 5: Duration 6. GB/s 7. Num files/buckets
     # [Timestamp + ...] + "Read 123 bytes in 0.123 s (x.xx GB/s) from 1 buckets"
+    # Format: [MLF YYYY-MM-DD HH:MM:SS,mmm ...]
+    timestamp_prefix = r"\[MLF (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})"
     read_throughput_pattern = re.compile(
         timestamp_prefix + r".*? Step=(-?\d+) Rank=(-?[\d/]+) .*?\] Read (\d+) "
         r"bytes in ([\d.]+) s \(([\d.]+) GB/s\) from (\d+) files"
@@ -133,11 +132,10 @@ def parse_log_file(log_file):
                 ts_dt = datetime.strptime(ts_str.replace(",", "."), "%Y-%m-%d %H:%M:%S.%f")
 
                 # Record the earliest timestamp (of on_train_batch_start) seen for this step (first rank that logs it)
-                if step_idx not in step_start_times:
-                    # The first step in MLF is logged as -1 (-1->1->2) while in Nemo it's 0 (0->1->2)
-                    if step_idx == -1:
-                        step_idx = 0
-                    step_start_times[step_idx] = ts_dt
+                # The first step in MLF is logged as -1 (-1->1->2) while in Nemo it's 0 (0->1->2)
+                if step_idx == -1:
+                    step_idx = 0
+                step_start_times[step_idx] = min(ts_dt, step_start_times.get(step_idx, ts_dt))
                 continue
 
     return data, ordered_functions, raw_throughput_records, step_start_times

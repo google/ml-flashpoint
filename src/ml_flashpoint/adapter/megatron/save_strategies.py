@@ -42,7 +42,7 @@ from ml_flashpoint.core.utils import log_execution_time
 _LOGGER = get_logger(__name__)
 
 
-def _perform_async_save(
+def _save_checkpoint(
     staged_buckets: list[ObjectWriteBucket],
     checkpoint_id: CheckpointContainerId,
     storage_writer: MemoryStorageWriter,
@@ -202,7 +202,7 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         current_step = mlf_logging.get_current_step()
 
         return AsyncRequest(
-            async_fn=_perform_async_save,
+            async_fn=_save_checkpoint,
             async_fn_args=(),
             async_fn_kwargs={
                 "staged_buckets": staged_write_buckets,

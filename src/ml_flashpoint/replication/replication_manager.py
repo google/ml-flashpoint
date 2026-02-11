@@ -187,15 +187,7 @@ def _get_process_local_replication_manager_instance():
     """
     global _PROCESS_LOCAL_REPLICATION_MANAGER_INSTANCE
     if _PROCESS_LOCAL_REPLICATION_MANAGER_INSTANCE is None:
-        manager = ReplicationManager()
-
-        def _unsupported_replication(*args, **kwargs):
-            raise RuntimeError(
-                "This ReplicationManager instance is from a worker process and is not initialized for replication."
-            )
-
-        manager.async_replicate = _unsupported_replication
-        _PROCESS_LOCAL_REPLICATION_MANAGER_INSTANCE = manager
+        _PROCESS_LOCAL_REPLICATION_MANAGER_INSTANCE = ReplicationManager()
     return _PROCESS_LOCAL_REPLICATION_MANAGER_INSTANCE
 
 

@@ -32,6 +32,10 @@ from ml_flashpoint.core.checkpoint_saver import MLFlashpointCheckpointSaver, Obj
 _EXPECTED_RESET_ERROR_MSG = re.escape("MemoryStorageWriter has not been reset. Call reset() before using this method.")
 
 
+class DummySaver:
+    pass
+
+
 class TestMemoryStorageWriter:
     @staticmethod
     def _create_metadata(state_dict_metadata=None):
@@ -1439,6 +1443,24 @@ class TestMemoryStorageWriter:
 
             # Verify that write_data was not called, as no write operation was initiated
             writer._checkpoint_saver.write_data.assert_not_called()
+
+    class TestPickling:
+        def test_pickling_excludes_mp_manager(self, mp_manager):
+            """Tests that pickling excludes the _mp_manager attribute."""
+            # Given
+            import pickle
+
+            dummy_saver = DummySaver()
+            writer = MemoryStorageWriter(checkpoint_saver=dummy_saver, mp_manager=mp_manager)
+
+            # When
+            pickled = pickle.dumps(writer)
+            unpickled = pickle.loads(pickled)
+
+            # Then
+            assert unpickled._mp_manager is None
+            assert unpickled._checkpoint_saver is not None
+            assert isinstance(unpickled._checkpoint_saver, DummySaver)
 
 
 def _create_rich_object_write_buckets(checkpoint_id: CheckpointContainerId, count: int = 3):

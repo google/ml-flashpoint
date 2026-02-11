@@ -19,6 +19,7 @@ from functools import partial
 from pathlib import Path
 from typing import Union
 
+import torch
 from megatron.core.dist_checkpointing.mapping import ShardedStateDict
 from megatron.core.dist_checkpointing.strategies.async_utils import AsyncRequest
 from megatron.core.dist_checkpointing.strategies.base import AsyncSaveShardedStrategy
@@ -32,13 +33,33 @@ from typing_extensions import override
 
 from ml_flashpoint.adapter.pytorch import custom_state_dict_saver as statedictsaver
 from ml_flashpoint.adapter.pytorch.memory_storage_writer import MemoryStorageWriter
-from ml_flashpoint.core import utils
+from ml_flashpoint.core import mlf_logging, utils
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId
 from ml_flashpoint.core.checkpoint_saver import MLFlashpointCheckpointSaver, ObjectWriteBucket
 from ml_flashpoint.core.mlf_logging import get_logger
 from ml_flashpoint.core.utils import log_execution_time
 
 _LOGGER = get_logger(__name__)
+
+
+def _perform_async_save(
+    staged_buckets: list[ObjectWriteBucket],
+    checkpoint_id: CheckpointContainerId,
+    storage_writer: MemoryStorageWriter,
+    rank: int,
+    step: int,
+):
+    """
+    This function is the 'async_fn' run in Megatron's :class:`AsyncRequest`.
+    """
+
+    mlf_logging.setup_worker_logging(rank, step)
+    statedictsaver.write_data(
+        checkpoint_id=checkpoint_id,
+        storage_writer=storage_writer,
+        staged_write_buckets=staged_buckets,
+        replicate_after_write=False,
+    )
 
 
 def default_backend_format_name() -> str:
@@ -156,17 +177,6 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         with open(os.path.join(checkpoint_dir, "metadata.json"), "w") as f:
             json.dump(metadata, f)
 
-        def _save_checkpoint(staged_buckets: list[ObjectWriteBucket]):
-            """
-            This function is the 'async_fn' run in Megatron's :class:`AsyncRequest`.
-            """
-            statedictsaver.write_data(
-                checkpoint_id=checkpoint_id,
-                storage_writer=self._storage_writer,
-                staged_write_buckets=staged_buckets,
-                replicate_after_write=False,
-            )
-
         finalize_fns = [
             # Replicate written objects
             partial(
@@ -188,9 +198,18 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
             ),
         ]
 
+        current_rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else -1
+        current_step = mlf_logging.get_current_step()
+
         return AsyncRequest(
-            async_fn=_save_checkpoint,
+            async_fn=_perform_async_save,
             async_fn_args=(),
-            async_fn_kwargs={"staged_buckets": staged_write_buckets},
+            async_fn_kwargs={
+                "staged_buckets": staged_write_buckets,
+                "checkpoint_id": checkpoint_id,
+                "storage_writer": self._storage_writer,
+                "rank": current_rank,
+                "step": current_step,
+            },
             finalize_fns=finalize_fns,
         )

@@ -30,6 +30,20 @@ def training_step_fixture():
     _TRAINING_STEP.value = initial_value
 
 
+@pytest.fixture(autouse=True)
+def reset_static_rank():
+    """Fixture to reset the static rank value for tests."""
+    # Import locally to avoid early import issues if any
+    from ml_flashpoint.core import mlf_logging
+
+    initial_value = mlf_logging._STATIC_RANK
+    # Force reset to default before test (in case polluted by previous tests)
+    mlf_logging._STATIC_RANK = mlf_logging._MISSING_NONNEG_NUMERIC_VAL
+    yield
+    # Restore after test
+    mlf_logging._STATIC_RANK = initial_value
+
+
 class TestRankFormatter:
     @pytest.fixture
     def formatter(self):

@@ -113,6 +113,18 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
         self._write_events_per_checkpoint_id: dict[CheckpointContainerId, torch_mp.Event] = mp_manager.dict()
         self._write_results_per_checkpoint_id: dict[CheckpointContainerId, list[WriteResult]] = mp_manager.dict()
 
+    def __getstate__(self):
+        """Custom pickling to exclude unpicklable mp_manager."""
+        state = self.__dict__.copy()
+        if "_mp_manager" in state:
+            del state["_mp_manager"]
+        return state
+
+    def __setstate__(self, state):
+        """Custom unpickling to restore state and set mp_manager to None."""
+        self.__dict__.update(state)
+        self._mp_manager = None
+
     def _check_checkpoint_id(self) -> None:
         if self._current_checkpoint_id is None:
             raise ValueError("MemoryStorageWriter has not been reset. Call reset() before using this method.")

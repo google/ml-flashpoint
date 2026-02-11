@@ -12,3 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from ml_flashpoint.adapter.megatron.utils import save_local_aware_megatron_checkpoint
+
+__all__ = ["save_local_aware_megatron_checkpoint"]

@@ -109,6 +109,8 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
             _LOGGER.warning("thread_count must be >= 1, but was %d. Setting to 1.", thread_count)
             thread_count = 1
         self._thread_count = thread_count
+        # mp_manager should only be used in the main process, not in the spawned processes.
+        # This is because mp_manager is not picklable.
         self._mp_manager = mp_manager
         self._write_events_per_checkpoint_id: dict[CheckpointContainerId, torch_mp.Event] = mp_manager.dict()
         self._write_results_per_checkpoint_id: dict[CheckpointContainerId, list[WriteResult]] = mp_manager.dict()

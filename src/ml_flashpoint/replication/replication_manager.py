@@ -39,6 +39,8 @@ from ml_flashpoint.core.utils import log_execution_time
 from ml_flashpoint.replication.transfer_service import transfer_service_ext
 
 _LOGGER = get_logger(__name__)
+_PROCESS_LOCAL_STRATEGY_INSTANCE = None
+_PROCESS_LOCAL_REPLICATION_MANAGER_INSTANCE = None
 
 
 class ReplicationStrategy:
@@ -75,6 +77,15 @@ class ReplicationStrategy:
             The list of all replication service addresses.
         """
         return self._replication_service_addresses
+
+
+def _get_process_local_strategy_instance(replication_service_addresses, processes_per_node):
+    global _PROCESS_LOCAL_STRATEGY_INSTANCE
+    if _PROCESS_LOCAL_STRATEGY_INSTANCE is None:
+        _PROCESS_LOCAL_STRATEGY_INSTANCE = PairwiseReplicationStrategy(
+            replication_service_addresses, processes_per_node
+        )
+    return _PROCESS_LOCAL_STRATEGY_INSTANCE
 
 
 class PairwiseReplicationStrategy(ReplicationStrategy):
@@ -116,6 +127,13 @@ class PairwiseReplicationStrategy(ReplicationStrategy):
                 f"The total number of nodes ({self._num_nodes}) must be equal to the world size "
                 "({self._world_size}) divided by the processes per node ({self._processes_per_node})."
             )
+
+    def __reduce__(self):
+        """Custom pickling to return the process-local singleton instance."""
+        return (
+            _get_process_local_strategy_instance,
+            (self._replication_service_addresses, self._processes_per_node),
+        )
 
     @override
     def get_destination_addresses(self, global_rank: int) -> List[str]:
@@ -161,6 +179,18 @@ def get_default_retry_config() -> ReplicationRetryConfig:
     return ReplicationRetryConfig()
 
 
+def _get_process_local_replication_manager_instance():
+    """Returns the process-local singleton instance of ReplicationManager.
+
+    If one does not exist, it is created. This ensures we reuse the same manager
+    (and its underlying C++ TransferService) in the worker process.
+    """
+    global _PROCESS_LOCAL_REPLICATION_MANAGER_INSTANCE
+    if _PROCESS_LOCAL_REPLICATION_MANAGER_INSTANCE is None:
+        _PROCESS_LOCAL_REPLICATION_MANAGER_INSTANCE = ReplicationManager()
+    return _PROCESS_LOCAL_REPLICATION_MANAGER_INSTANCE
+
+
 class ReplicationManager:
     """Manages asynchronous data replication using a C++ TransferService.
 
@@ -176,6 +206,16 @@ class ReplicationManager:
       through callbacks.
     - Ensuring proper cleanup and error handling for replication operations.
     """
+
+    def __reduce__(self):
+        """Custom pickling to return the process-local singleton instance.
+
+        This allows the ReplicationManager to be passed to worker processes (via
+        AsyncCallsQueue(persistent=True)) without trying to pickle the
+        underlying C++ TransferService (which is not picklable) and instead
+        using/initializing a local instance in the worker.
+        """
+        return (_get_process_local_replication_manager_instance, ())
 
     @log_execution_time(_LOGGER, "ReplicationManager.initialize")
     def initialize(

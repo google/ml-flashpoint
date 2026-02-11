@@ -323,7 +323,7 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
             raise ValueError("Incompatible wrapped checkpoint_io type: %s", type(checkpoint_io))
 
         super().__init__(checkpoint_io)
-        self._mlf_async_calls_queue = AsyncCallsQueue()
+        self._mlf_async_calls_queue = AsyncCallsQueue(persistent=True)
         self._alt_async_calls_queue = AsyncCallsQueue()
 
     @property
@@ -420,3 +420,15 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
         ):
             # Can't do finalization now because some ranks might be lost
             _LOGGER.warning("Some async checkpoint saves might be not finalized properly.")
+
+        if hasattr(self._mlf_async_calls_queue, "close"):
+            self._mlf_async_calls_queue.close()
+            # Monkeypatch persistent caller's close method to prevent double-close error at exit
+            # which happens if __del__ is called after process group destruction.
+            # We access the caller directly if possible as AsyncCallsQueue might store it as 'persistent_caller'.
+            caller = getattr(self._mlf_async_calls_queue, "persistent_caller", None)
+            if caller and hasattr(caller, "close"):
+                # We already closed the queue (and hopefully the caller), so we prevent future closes.
+                # Specifically, PersistentAsyncCaller.__del__ calls close() which calls torch.distributed.get_rank(),
+                # causing a crash if the process group is already destroyed.
+                caller.close = lambda: None

@@ -202,7 +202,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
             checkpoint_saver=DefaultMLFlashpointCheckpointSaver(
                 global_rank_getter=torch.distributed.get_rank,
                 local_rank_getter=torch.distributed.get_node_local_rank,
-                global_barrier_func=lambda: torch.distributed.barrier(),
+                global_barrier_func=torch.distributed.barrier,
                 ckpt_obj_manager=ckpt_obj_manager,
                 replication_manager=replication_manager,
                 initial_buffer_size_bytes=initial_write_buffer_size_bytes,

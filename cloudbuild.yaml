@@ -15,14 +15,25 @@
 steps:
   # 1. Build the distribution (sdist and wheel).
   # This uses scikit-build-core as defined in pyproject.toml to compile C++ extensions.
+  # We set BUILD_TESTING=OFF to ignore tests during the artifact build.
   - name: 'python:3.10'
     id: 'build'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        pip install build cmake ninja
-        python -m build
+        if [ -z "$TAG_NAME" ]; then
+          echo "Error: TAG_NAME is not set. This pipeline is only for tag-based releases."
+          exit 1
+        fi
+        pip install build
+        
+        echo "Building C++ extensions with editable install..."
+        # Note: pip install -e . will also respect the build-system requirements
+        SKBUILD_CMAKE_ARGS="-DBUILD_TESTING=OFF" pip install -e .
+        
+        echo "Building sdist and wheel..."
+        SKBUILD_CMAKE_ARGS="-DBUILD_TESTING=OFF" python -m build
 
   # 2. Upload to internal Artifact Registry (AR) for OSS Exit Gate.
   # OSS Exit Gate fetches artifacts from this repository.

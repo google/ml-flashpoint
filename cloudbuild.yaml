@@ -43,7 +43,7 @@ steps:
     args:
       - '-c'
       - |
-        pip install twine keyring keyrings.google-artifactregistry-auth
+        pip install -U twine keyring keyrings.google-artifactregistry-auth
         twine upload --repository-url https://us-python.pkg.dev/oss-exit-gate-prod/${_PROJECT_NAME}--pypi dist/*
     waitFor: ['build']
 

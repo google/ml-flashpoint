@@ -234,6 +234,12 @@ absl::Status unmap_and_close(int fd, void* data_ptr, size_t data_size,
   }
 
   // --- Core Cleanup Logic ---
+  // Unregister from CUDA first
+  cudaError_t err = cudaHostUnregister(host_ptr);
+  if (err != cudaSuccess) {
+    errors.push_back(absl::StrCat("cudaHostUnregister() failed: ",
+                                  cudaGetErrorString(err)));
+  }
   // Unmap the memory region only if the pointer is valid and the size is
   // positive.
   if (data_ptr != MAP_FAILED && data_size > 0) {

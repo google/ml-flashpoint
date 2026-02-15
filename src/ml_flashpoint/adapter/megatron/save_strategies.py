@@ -145,8 +145,14 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         )
 
         # 5. Stage to CPU.
-        staged_write_buckets = self._storage_writer.stage_write_data_buckets(
-            checkpoint_id, write_buckets, non_blocking=True
+        # staged_write_buckets = self._storage_writer.stage_write_data_buckets(
+        #     checkpoint_id, write_buckets, non_blocking=True
+        # )
+        statedictsaver.write_data(
+            checkpoint_id=checkpoint_id,
+            storage_writer=self._storage_writer,
+            staged_write_buckets=write_buckets,
+            replicate_after_write=False,
         )
 
         # Since loading will go through Megatron dist_checkpointing.load, which validates the metadata.json
@@ -160,18 +166,19 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
             """
             This function is the 'async_fn' run in Megatron's :class:`AsyncRequest`.
             """
-            statedictsaver.write_data(
-                checkpoint_id=checkpoint_id,
-                storage_writer=self._storage_writer,
-                staged_write_buckets=staged_buckets,
-                replicate_after_write=False,
-            )
+            # statedictsaver.write_data(
+            #     checkpoint_id=checkpoint_id,
+            #     storage_writer=self._storage_writer,
+            #     staged_write_buckets=staged_buckets,
+            #     replicate_after_write=False,
+            # )
+            pass
 
         finalize_fns = [
             # Replicate written objects
             partial(
                 self._storage_writer.replicate_written_objects,
-                object_ids={bucket.object_id for bucket in staged_write_buckets},
+                object_ids={bucket.object_id for bucket in write_buckets},
             ),
             # Update and write metadata
             partial(
@@ -191,6 +198,6 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         return AsyncRequest(
             async_fn=_save_checkpoint,
             async_fn_args=(),
-            async_fn_kwargs={"staged_buckets": staged_write_buckets},
+            async_fn_kwargs={"staged_buckets": []},
             finalize_fns=finalize_fns,
         )

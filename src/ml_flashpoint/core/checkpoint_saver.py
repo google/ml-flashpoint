@@ -30,6 +30,7 @@ from torch.distributed.checkpoint.planner import WriteItem, WriteItemType
 from torch.distributed.checkpoint.storage import WriteResult
 from typing_extensions import override
 
+from ml_flashpoint.checkpoint_object_manager.buffer_io import BufferIO
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.checkpoint_object_manager.object_manager import object_manager_ext
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
@@ -212,6 +213,7 @@ class MLFlashpointCheckpointSaver(abc.ABC):
         write_buckets: list[ObjectWriteBucket],
         thread_count: int,
         replicate_after_write: bool,
+        non_blocking_d2h: bool,
     ) -> list[WriteResult]:
         """Performs the core write logic for the given write items and checkpoint_id.
 
@@ -227,6 +229,7 @@ class MLFlashpointCheckpointSaver(abc.ABC):
             write_buckets: A list of `ObjectWriteBucket` objects, each containing resolved data ready for writing.
             thread_count: The number of threads to use for writing data.
             replicate_after_write: Whether to trigger async replication of each object after it is written.
+            non_blocking_d2h: Whether to copy tensors to CPU memory with non_blocking=True.
 
         Returns:
             The list of WriteResults from the write operations.
@@ -424,6 +427,7 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         write_buckets: list[ObjectWriteBucket],
         replicate_after_write: bool,
         thread_count: int = 1,
+        non_blocking_d2h: bool = True,
     ) -> list[WriteResult]:
         thread_count = max(thread_count, 1)
         num_cpus = os.cpu_count() or 1
@@ -461,7 +465,13 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
             for i in range(1, thread_count):
                 thread = threading.Thread(
                     target=self._write_to_buffer_from_queue_worker,
-                    args=(object_items_queue, results_from_threads, replicate_after_write, self._use_optimized_save),
+                    args=(
+                        object_items_queue,
+                        results_from_threads,
+                        replicate_after_write,
+                        self._use_optimized_save,
+                        non_blocking_d2h,
+                    ),
                     name=f"{self.__class__.__name__}-Thread-{i}",
                 )
                 threads.append(thread)
@@ -469,11 +479,19 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
 
             # Main thread execution.
             self._write_to_buffer_from_queue_worker(
-                object_items_queue, results_from_threads, replicate_after_write, self._use_optimized_save
+                object_items_queue,
+                results_from_threads,
+                replicate_after_write,
+                self._use_optimized_save,
+                non_blocking_d2h,
             )
 
             for thread in threads:
                 thread.join()
+
+            with log_execution_time(logger=_LOGGER, name="write_data__cuda_synchronize", level=logging.DEBUG):
+                if torch.cuda.is_initialized() and non_blocking_d2h:
+                    torch.cuda.synchronize()
 
             all_results: list[WriteResult] = []
             exceptions_raised: list[Exception] = []
@@ -605,6 +623,7 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         results_from_threads: queue.Queue,
         replicate_after_write: bool,
         use_optimized_write: bool,
+        non_blocking_d2h: bool,
     ):
         """Worker function for writing data from a queue to buffer objects.
 
@@ -613,6 +632,7 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
             results_from_threads: A queue to put `(List[WriteResult], Exception)` tuples into.
             replicate_after_write: Whether to trigger async replication of each object after it is written.
             use_optimized_write: Whether to use optimized write.
+            non_blocking_d2h: Whether to copy tensors to CPU memory with non_blocking=True.
         """
         while not object_write_bucket_queue.empty():
             try:
@@ -649,7 +669,7 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
                     for tensor_item, tensor in tensor_tuples:
                         write_start_offset = buffer_io_writer.tell()
                         if use_optimized_write:
-                            self._save_tensor_optimized(tensor, buffer_io_writer)
+                            self._save_tensor_optimized(tensor, buffer_io_writer, non_blocking=non_blocking_d2h)
                         else:
                             torch.save(tensor, buffer_io_writer)
 
@@ -724,7 +744,7 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
 
         return object_manager_ext.delete_directories_async(list(siblings_to_delete))
 
-    def _save_tensor_optimized(self, tensor: torch.Tensor, buffer_io_writer):
+    def _save_tensor_optimized(self, tensor: torch.Tensor, buffer_io_writer: BufferIO, non_blocking: bool = False):
         """Saves a tensor to the buffer using a zero-copy approach where possible.
 
         NOTE: This method saves the tensor's data in a C-contiguous format,
@@ -737,6 +757,7 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         Args:
             tensor: The tensor to save.
             buffer_io_writer: The BufferIO instance to write to.
+            non_blocking: Whether to copy to CPU in a non-blocking manner. Defaults to False.
         """
         # Metadata
         tensor_header = TensorHeader(dtype=tensor.dtype, shape=tensor.shape)
@@ -760,4 +781,4 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
             dest_tensor = torch.frombuffer(dest_mv, dtype=tensor.dtype, count=tensor.numel()).reshape(tensor.shape)
 
             # Perform the actual copy.
-            dest_tensor.copy_(tensor)
+            dest_tensor.copy_(tensor, non_blocking=non_blocking)

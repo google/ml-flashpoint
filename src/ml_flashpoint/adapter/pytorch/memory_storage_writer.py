@@ -189,7 +189,7 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
     @log_execution_time(logger=_LOGGER, name="stage_write_data_buckets", level=logging.INFO)
     def stage_write_data_buckets(
         _: CheckpointContainerId, write_buckets: list[ObjectWriteBucket], non_blocking: bool = True
-    ):
+    ) -> list[ObjectWriteBucket]:
         _LOGGER.debug(
             "Executing stage_write_data_buckets with non_blocking=%s (staging from GPU to CPU)...", non_blocking
         )

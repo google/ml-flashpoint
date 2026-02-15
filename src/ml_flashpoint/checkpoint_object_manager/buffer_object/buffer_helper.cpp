@@ -235,7 +235,7 @@ absl::Status unmap_and_close(int fd, void* data_ptr, size_t data_size,
 
   // --- Core Cleanup Logic ---
   // Unregister from CUDA first
-  cudaError_t err = cudaHostUnregister(host_ptr);
+  cudaError_t err = cudaHostUnregister(data_ptr);
   if (err != cudaSuccess) {
     errors.push_back(absl::StrCat("cudaHostUnregister() failed: ",
                                   cudaGetErrorString(err)));

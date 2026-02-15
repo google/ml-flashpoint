@@ -23,10 +23,13 @@ add_library(buffer_object_lib STATIC
     buffer_helper.cpp
 )
 
+find_package(CUDAToolkit REQUIRED)
+
 target_link_libraries(buffer_object_lib PUBLIC
     absl::log
     absl::strings
     absl::status
+    CUDA::cudart
 )
 
 target_include_directories(buffer_object_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

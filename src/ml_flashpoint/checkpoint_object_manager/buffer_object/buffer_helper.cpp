@@ -20,6 +20,8 @@
 #include <sys/stat.h>  // For getting file status (fstat)
 #include <unistd.h>    // For POSIX API calls like close() and ftruncate()
 
+#include <cuda_runtime.h> // For cudaHostRegister
+
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -107,6 +109,9 @@ absl::Status create_file_and_mmap(const std::string& object_id, size_t size,
     close(fd);
     return ErrnoToStatus("mmap() failed for file: " + object_id);
   }
+
+  // Pin and register for GPU DMA.
+  cudaError_t err = cudaHostRegister(ptr, size, cudaHostRegisterMapped);
 
   // On success, set all the output parameters.
   out_fd = fd;

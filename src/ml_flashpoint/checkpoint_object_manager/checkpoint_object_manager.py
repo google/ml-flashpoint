@@ -16,6 +16,8 @@ import os
 import shutil
 from typing import Optional
 
+import cupy
+
 from ml_flashpoint.checkpoint_object_manager.buffer_io import BufferIO
 from ml_flashpoint.checkpoint_object_manager.buffer_metadata import METADATA_SIZE
 from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject
@@ -67,7 +69,6 @@ class CheckpointObjectManager:
 
         try:
             # Instantiate the underlying C++ BufferObject.
-            # This is a critical step where interaction with C++ code happens.
             _LOGGER.debug("Instantiating C++ BufferObject for '%s'.", object_id)
             buffer_obj = BufferObject(str(object_id), buffer_size, overwrite)
 

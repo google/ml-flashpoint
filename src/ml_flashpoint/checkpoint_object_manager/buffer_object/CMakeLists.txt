@@ -30,6 +30,7 @@ target_link_libraries(buffer_object_lib PUBLIC
     absl::strings
     absl::status
     CUDA::cudart
+    CUDA::toolkit
 )
 
 target_include_directories(buffer_object_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

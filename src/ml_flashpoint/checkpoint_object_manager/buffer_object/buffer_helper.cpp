@@ -220,16 +220,15 @@ absl::Status unmap_and_close(int fd, void* data_ptr, size_t data_size,
 
   // --- Parameter Validation ---
   // This section checks for logically inconsistent arguments that likely
-  // indicate a programming error on the caller's side. It helps catch bugs
-  // early.
+  // indicate a programming error on the caller's side, to fail fast.
   if (fd == -1 && truncate_size.has_value()) {
     errors.push_back(
-        "Programming error: truncate was requested, but the file descriptor is "
+        "Invalid arguments: truncate was requested, but the file descriptor is "
         "invalid.");
   }
   if (data_ptr != MAP_FAILED && data_size == 0) {
     errors.push_back(
-        "Programming error: unmap_and_close called with a valid data_ptr but a "
+        "Invalid arguments: unmap_and_close called with a valid data_ptr but a "
         "data_size of 0.");
   }
 

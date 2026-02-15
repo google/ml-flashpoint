@@ -33,7 +33,7 @@ target_link_libraries(buffer_object_lib PUBLIC
     CUDA::toolkit
 )
 
-target_include_directories(buffer_object_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(buffer_object_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CUDAToolkit_INCLUDE_DIRS})
 
 find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 find_package(pybind11 CONFIG REQUIRED)

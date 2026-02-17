@@ -99,6 +99,8 @@ dev = [
 requires = [
     "pybind11==3.0.1",
     "scikit-build-core==0.11.6",
+    "cmake==3.31.10",
+    "ninja==1.11.1.3",
 ]
 
 # The Python object that `pip` will call to execute the build.

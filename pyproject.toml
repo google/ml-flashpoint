@@ -19,7 +19,7 @@
 # ===================================================================
 [project]
 name = "ml-flashpoint"
-version = "0.0.0"
+dynamic = [ "version" ]
 description = "A memory-first, lightning fast, easy-to-use ML checkpointing library."
 
 # Specifies the minimum version of Python required to install and run this package.

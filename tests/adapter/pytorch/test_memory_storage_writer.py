@@ -76,7 +76,7 @@ class TestMemoryStorageWriter:
         writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
         # Then
         assert writer._checkpoint_saver is mock_saver
-        assert writer._mp_manager is mp_manager
+        assert writer._main_process_torchmp_manager is mp_manager
         assert type(writer._write_events_per_checkpoint_id).__name__ == "DictProxy"
         assert len(writer._write_events_per_checkpoint_id) == 0
         assert writer._thread_count == 1
@@ -1028,7 +1028,7 @@ class TestMemoryStorageWriter:
             wr = WriteResult(index=torchdistmeta.MetadataIndex("a"), size_in_bytes=10, storage_data="data_a")
             writer._write_results_per_checkpoint_id[checkpoint_id1] = [wr]
             # Manually initialize the event for checkpoint_id1, as prepare_write_data_buckets is not called
-            writer._write_events_per_checkpoint_id[checkpoint_id1] = writer._mp_manager.Event()
+            writer._write_events_per_checkpoint_id[checkpoint_id1] = writer._main_process_torchmp_manager.Event()
             writer._write_events_per_checkpoint_id[checkpoint_id1].set()
             checkpoint_id2 = CheckpointContainerId("/test_checkpoint2")
 
@@ -1180,7 +1180,7 @@ class TestMemoryStorageWriter:
             expected_wr1 = WriteResult(index=torchdistmeta.MetadataIndex("a"), size_in_bytes=10, storage_data="data_a")
             expected_wr2 = WriteResult(index=torchdistmeta.MetadataIndex("b"), size_in_bytes=20, storage_data="data_b")
             writer._write_results_per_checkpoint_id[checkpoint_id] = [expected_wr1, expected_wr2]
-            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._mp_manager.Event()
+            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._main_process_torchmp_manager.Event()
             writer._write_events_per_checkpoint_id[checkpoint_id].set()
 
             # Add another checkpoint ID to ensure isolation
@@ -1192,7 +1192,7 @@ class TestMemoryStorageWriter:
                 index=torchdistmeta.MetadataIndex("d"), size_in_bytes=40, storage_data="data_d"
             )
             writer._write_results_per_checkpoint_id[other_checkpoint_id] = [other_expected_wr1, other_expected_wr2]
-            writer._write_events_per_checkpoint_id[other_checkpoint_id] = writer._mp_manager.Event()
+            writer._write_events_per_checkpoint_id[other_checkpoint_id] = writer._main_process_torchmp_manager.Event()
             writer._write_events_per_checkpoint_id[other_checkpoint_id].set()
 
             # When
@@ -1216,7 +1216,7 @@ class TestMemoryStorageWriter:
             expected_wr1 = WriteResult(index=torchdistmeta.MetadataIndex("a"), size_in_bytes=10, storage_data="data_a")
             expected_wr2 = WriteResult(index=torchdistmeta.MetadataIndex("b"), size_in_bytes=20, storage_data="data_b")
             writer._write_results_per_checkpoint_id[checkpoint_id] = [expected_wr1, expected_wr2]
-            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._mp_manager.Event()
+            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._main_process_torchmp_manager.Event()
             writer._write_events_per_checkpoint_id[checkpoint_id].set()
 
             # Add another checkpoint ID to ensure isolation
@@ -1228,7 +1228,7 @@ class TestMemoryStorageWriter:
                 index=torchdistmeta.MetadataIndex("d"), size_in_bytes=40, storage_data="data_d"
             )
             writer._write_results_per_checkpoint_id[other_checkpoint_id] = [other_expected_wr1, other_expected_wr2]
-            writer._write_events_per_checkpoint_id[other_checkpoint_id] = writer._mp_manager.Event()
+            writer._write_events_per_checkpoint_id[other_checkpoint_id] = writer._main_process_torchmp_manager.Event()
             writer._write_events_per_checkpoint_id[other_checkpoint_id].set()
 
             # When
@@ -1245,7 +1245,7 @@ class TestMemoryStorageWriter:
             checkpoint_id = CheckpointContainerId("/test_get_copy")
             expected_wr1 = WriteResult(index=torchdistmeta.MetadataIndex("a"), size_in_bytes=10, storage_data="data_a")
             writer._write_results_per_checkpoint_id[checkpoint_id] = [expected_wr1]
-            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._mp_manager.Event()
+            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._main_process_torchmp_manager.Event()
             writer._write_events_per_checkpoint_id[checkpoint_id].set()
 
             # When
@@ -1308,7 +1308,7 @@ class TestMemoryStorageWriter:
             writer.reset(checkpoint_id.data)
             wr1 = WriteResult(index=torchdistmeta.MetadataIndex("a"), size_in_bytes=10, storage_data="data_a")
             writer._write_results_per_checkpoint_id[checkpoint_id] = [wr1]
-            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._mp_manager.Event()
+            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._main_process_torchmp_manager.Event()
             writer._write_events_per_checkpoint_id[checkpoint_id].set()
             metadata = TestMemoryStorageWriter._create_metadata()
 
@@ -1425,7 +1425,7 @@ class TestMemoryStorageWriter:
                 writer._write_events_per_checkpoint_id[checkpoint_id].set()
 
             # Manually initialize the event
-            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._mp_manager.Event()
+            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._main_process_torchmp_manager.Event()
 
             # When
             setter_thread = threading.Thread(target=set_event_and_results)
@@ -1449,7 +1449,7 @@ class TestMemoryStorageWriter:
 
             # Do NOT call write_staged_data_buckets, so the event is never set.
             # The event for this checkpoint_id will be initialized but never set.
-            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._mp_manager.Event()
+            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._main_process_torchmp_manager.Event()
 
             # When/Then
             with pytest.raises(
@@ -1488,7 +1488,7 @@ class TestMemoryStorageWriter:
             unpickled = pickle.loads(pickled)
 
             # Then
-            assert unpickled._mp_manager is None
+            assert unpickled._main_process_torchmp_manager is None
             assert unpickled._checkpoint_saver is not None
             assert isinstance(unpickled._checkpoint_saver, DefaultMLFlashpointCheckpointSaver)
             # Verify specific attributes of the saver to ensure it was pickled correctly

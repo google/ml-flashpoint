@@ -24,6 +24,7 @@
 // Constructor for creating a new buffer.
 BufferObject::BufferObject(const std::string& object_id, size_t capacity,
                            bool overwrite)
+
     // Initialize all members to a safe, "closed" state.
     : object_id_(object_id),
       fd_(-1),

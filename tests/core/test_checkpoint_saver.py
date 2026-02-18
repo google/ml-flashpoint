@@ -37,6 +37,7 @@ from torch.distributed.checkpoint.storage import WriteResult
 from ml_flashpoint.checkpoint_object_manager.buffer_io import BufferIO
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.checkpoint_object_manager.object_manager import object_manager_ext
+from ml_flashpoint.core.buffer_pool import BufferPool
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.checkpoint_saver import DefaultMLFlashpointCheckpointSaver, WriteItemResolver
 from ml_flashpoint.core.defaults import CheckpointFormat
@@ -99,8 +100,18 @@ class TestDefaultMLFlashpointCheckpointSaver:
         shutil.rmtree(_temp_dir)
 
     @pytest.fixture
-    def chkpt_object_manager(self):
-        return CheckpointObjectManager()
+    def chkpt_object_manager(self, temp_dir_path):
+        # Initialize BufferPool for tests
+        pool_dir = os.path.join(temp_dir_path, ".buffer_pool")
+        # Reset singleton?
+        BufferPool._instance = None
+        BufferPool(pool_dir)
+        manager = CheckpointObjectManager()
+        yield manager
+        # Teardown
+        if BufferPool._instance:
+            BufferPool._instance.teardown()
+            BufferPool._instance = None
 
     @pytest.fixture
     def replication_manager(self, mocker):
@@ -1438,7 +1449,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
             )
 
             # Mock the checkpoint object manager to raise an IOError during buffer creation
-            mocker.patch.object(saver._chkpt_obj_manager, "create_buffer", side_effect=IOError("Test IOError"))
+            mocker.patch.object(saver._chkpt_obj_manager, "acquire_buffer", side_effect=IOError("Test IOError"))
             with pytest.raises(IOError):
                 saver.write_data(
                     checkpoint_id,
@@ -2143,7 +2154,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
 
         # Create a real file using the manager to ensure proper format
         os.makedirs(os.path.dirname(object_id.data), exist_ok=True)
-        with chkpt_object_manager.create_buffer(object_id, 1024) as f:
+        with chkpt_object_manager.acquire_buffer(object_id, 1024) as f:
             f.write(b"test_async_replicate_object data")
 
         expected_futures = [concurrent.futures.Future(), concurrent.futures.Future(), concurrent.futures.Future()]

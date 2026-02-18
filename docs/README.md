@@ -28,8 +28,6 @@ We observe meaningful improvements even in small-scale tests, spanning just 300 
 We executed such tests on a [Vertex AI Training Cluster](https://docs.cloud.google.com/vertex-ai/docs/training/training-clusters/overview) and obtained the speedups listed below.
 These tests were conducted using ML Flashpoint _alongside_ NeMo's recommended checkpointing (as you would in production), where NeMo's default checkpointing used a 7-10 TB [Filestore](https://cloud.google.com/filestore) instance.
 
-Stay tuned and watch the [repository](https://github.com/google/ml-flashpoint) for more updates on additional improvements!
-
 [¶](#perf-summary){ #perf-summary }
 When comparing 
 
@@ -45,6 +43,8 @@ We observe:
     * Improvements reach **5%** (Gemma 27B) & **10%** (Llama 70B) when NeMo checkpointing is deferred to the end (300th step) instead of being done every 50 steps. 
     * These improvements only account for checkpoint _save_ efficiency, representing a "lower bound" value as it doesn't account for the speedups in _recovery_ time.
     * Any job interruptions would also benefit from ML Flashpoint's recovery performance gains.
+
+Stay tuned and watch the [repository](https://github.com/google/ml-flashpoint) for updates on future improvements!
 
 !!! info
 

@@ -133,7 +133,7 @@ from ml_flashpoint.replication.replication_manager import ReplicationManager
 
 # Megatron Checkpointing
 from megatron.core import dist_checkpointing as mcore_dist_checkpointing
-from ml_flashpoint.adapter.megatron.utils import save_local_aware_megatron_checkpoint
+from ml_flashpoint.adapter.megatron.save_utils import save_local_aware_megatron_checkpoint
 ```
 
 #### Save Strategy
@@ -151,7 +151,7 @@ megatron_save_strategy = MLFlashpointMegatronAsyncSaveStrategy(
 )
 ```
 
-Because Megatron's `dist_checkpointing.save()` function writes "common" data only on global rank 0, which does not align with local checkpointing, use the provided helper function `save_local_aware_megatron_checkpoint()` from the `ml_flashpoint.adapter.megatron.utils` module.
+Because Megatron's `dist_checkpointing.save()` function writes "common" data only on global rank 0, which does not align with local checkpointing, use the provided helper function `save_local_aware_megatron_checkpoint()` from the `ml_flashpoint.adapter.megatron.save_utils` module.
 
 This helper mimics `dist_checkpointing.save()`, but saves common data on each node (via local rank 0) rather than solely on the coordinator node (global rank 0).
 

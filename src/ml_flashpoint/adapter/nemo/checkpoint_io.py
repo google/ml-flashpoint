@@ -38,7 +38,7 @@ from ml_flashpoint.adapter.megatron.load_strategies import (
 from ml_flashpoint.adapter.megatron.save_strategies import (
     MLFlashpointMegatronAsyncSaveStrategy,
 )
-from ml_flashpoint.adapter.megatron.utils import save_local_aware_megatron_checkpoint
+from ml_flashpoint.adapter.megatron.save_utils import save_local_aware_megatron_checkpoint
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import (
     CheckpointObjectManager,
 )
@@ -135,7 +135,7 @@ class MLFlashpointCheckpointIO(AsyncCompatibleCheckpointIO):
         _LOGGER.info("Use ML Flashpoint checkpoint io. Async_save: '%s'", self.async_save)
 
         # Use the helper for local-aware megatron save
-        result = save_local_aware_megatron_checkpoint(
+        optional_async_request = save_local_aware_megatron_checkpoint(
             checkpoint=checkpoint,
             checkpoint_dir=path,
             save_strategy=self.save_strategy,
@@ -147,7 +147,7 @@ class MLFlashpointCheckpointIO(AsyncCompatibleCheckpointIO):
             _LOGGER.debug("Saving context...")
             self._save_context(path)
 
-        return result
+        return optional_async_request
 
     @log_execution_time(logger=_LOGGER, name="MLFlashpointCheckpointIO._save_context", level=logging.INFO)
     def _save_context(self, path: _PATH) -> Optional[threading.Thread]:

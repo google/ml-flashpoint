@@ -27,12 +27,32 @@ from torch.futures import Future as TorchFuture
 
 from ml_flashpoint.adapter.pytorch.memory_storage_writer import MemoryStorageWriter, _StorageDataContext
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
-from ml_flashpoint.core.checkpoint_saver import MLFlashpointCheckpointSaver, ObjectWriteBucket
+from ml_flashpoint.core.checkpoint_saver import (
+    DefaultMLFlashpointCheckpointSaver,
+    MLFlashpointCheckpointSaver,
+    ObjectWriteBucket,
+)
 
 _EXPECTED_RESET_ERROR_MSG = re.escape("MemoryStorageWriter has not been reset. Call reset() before using this method.")
 
 
 class DummySaver:
+    pass
+
+
+def _return_zero():
+    return 0
+
+
+def _return_none():
+    return None
+
+
+class DummyObjectManager:
+    pass
+
+
+class DummyReplicationManager:
     pass
 
 
@@ -1445,13 +1465,23 @@ class TestMemoryStorageWriter:
             writer._checkpoint_saver.write_data.assert_not_called()
 
     class TestPickling:
-        def test_pickling_excludes_mp_manager(self, mp_manager):
+        def test_pickling_excludes_mp_manager(self, mp_manager, mocker):
             """Tests that pickling excludes the _mp_manager attribute."""
             # Given
             import pickle
 
-            dummy_saver = DummySaver()
-            writer = MemoryStorageWriter(checkpoint_saver=dummy_saver, mp_manager=mp_manager)
+            # Use dummy objects to verify pickling behavior without mocking complexities
+            dummy_object_manager = DummyObjectManager()
+            dummy_replication_manager = DummyReplicationManager()
+
+            saver = DefaultMLFlashpointCheckpointSaver(
+                global_rank_getter=_return_zero,
+                local_rank_getter=_return_zero,
+                global_barrier_func=_return_none,
+                ckpt_obj_manager=dummy_object_manager,
+                replication_manager=dummy_replication_manager,
+            )
+            writer = MemoryStorageWriter(checkpoint_saver=saver, mp_manager=mp_manager)
 
             # When
             pickled = pickle.dumps(writer)
@@ -1460,7 +1490,13 @@ class TestMemoryStorageWriter:
             # Then
             assert unpickled._mp_manager is None
             assert unpickled._checkpoint_saver is not None
-            assert isinstance(unpickled._checkpoint_saver, DummySaver)
+            assert isinstance(unpickled._checkpoint_saver, DefaultMLFlashpointCheckpointSaver)
+            # Verify specific attributes of the saver to ensure it was pickled correctly
+            assert unpickled._checkpoint_saver._initial_buffer_size_bytes == saver._initial_buffer_size_bytes
+            # Verify that object manager was preserved (it's not excluded in __getstate__)
+            assert isinstance(unpickled._checkpoint_saver._chkpt_obj_manager, DummyObjectManager)
+            # Verify that replication manager was excluded (it IS excluded in __getstate__)
+            assert unpickled._checkpoint_saver._replication_manager is None
 
 
 def _create_rich_object_write_buckets(checkpoint_id: CheckpointContainerId, count: int = 3):

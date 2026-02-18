@@ -433,3 +433,41 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
 
             # Then
             finalize_checkpoint_spy.assert_not_called()
+
+        @pytest.mark.parametrize(
+            "is_dist_initialized, dist_rank, expected_rank",
+            [
+                (True, 5, 5),
+                (False, 0, -1),
+            ],
+        )
+        def test_async_save_rank_determination(
+            self,
+            mocker,
+            async_save_setup,
+            is_dist_initialized,
+            dist_rank,
+            expected_rank,
+        ):
+            """Tests that the rank passed to async_fn is correct based on dist initialization."""
+            # Given
+            strategy, checkpoint_id, sharded_state_dict, _ = async_save_setup
+
+            # Mock torch.distributed
+            mocker.patch("torch.distributed.is_initialized", return_value=is_dist_initialized)
+            if is_dist_initialized:
+                mocker.patch("torch.distributed.get_rank", return_value=dist_rank)
+
+            # Mock dependencies to ensure success path
+            mock_statedictsaver = mocker.patch("ml_flashpoint.adapter.megatron.save_strategies.statedictsaver")
+            mock_statedictsaver.generate_plan.return_value = (
+                mocker.MagicMock(),
+                mocker.MagicMock(),
+                mocker.MagicMock(),
+            )
+
+            # When
+            actual_async_request = strategy.async_save(sharded_state_dict, checkpoint_id.data)
+
+            # Then
+            assert actual_async_request.async_fn_kwargs["rank"] == expected_rank

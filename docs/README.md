@@ -28,6 +28,8 @@ We observe meaningful improvements even in small-scale tests, spanning just 300 
 We executed such tests on a [Vertex AI Training Cluster](https://docs.cloud.google.com/vertex-ai/docs/training/training-clusters/overview) and obtained the speedups listed below.
 These tests were conducted using ML Flashpoint _alongside_ NeMo's recommended checkpointing (as you would in production), where NeMo's default checkpointing used a 7-10 TB [Filestore](https://cloud.google.com/filestore) instance.
 
+Stay tuned and watch the [repository](https://github.com/google/ml-flashpoint) for more updates on additional improvements!
+
 [¶](#perf-summary){ #perf-summary }
 When comparing 
 
@@ -36,8 +38,7 @@ When comparing
 
 We observe:
 
-* Data write times that are up to 120x faster for ML Flashpoint specifically, currently reaching up to ~30 GB/s/node write throughput.
-(More improvements are on the way).
+* Data write times that are up to 120x faster for ML Flashpoint specifically, currently reaching up to ~30 GB/s/node write throughput (scales linearly with size).
 * Total checkpoint recovery times that are ~7-12x faster for ML Flashpoint specifically, depending on number of nodes lost (includes the time it takes to do checkpoint detection, cross-node coordination, replication, read into model state and be ready to resume training).
 * For _async_ checkpointing: 
     * Improvements averaging **3%** (Gemma 27B) & **6%** (Llama 70B) for _overall job time_ in the hybrid approach.

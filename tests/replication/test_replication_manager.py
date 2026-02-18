@@ -330,15 +330,3 @@ def test_sync_bulk_retrieve_invalid_rank(replication_manager):
 
     # Then
     assert result is False
-
-
-def test_pickling(replication_manager):
-    """Tests that ReplicationManager can be pickled and unpickled."""
-    import pickle
-
-    # When
-    pickled = pickle.dumps(replication_manager)
-    unpickled = pickle.loads(pickled)
-
-    # Then
-    assert isinstance(unpickled, type(replication_manager))

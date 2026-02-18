@@ -21,6 +21,20 @@
 name = "ml-flashpoint"
 dynamic = [ "version" ]
 description = "A memory-first, lightning fast, easy-to-use ML checkpointing library."
+readme = "README.md"
+license = { file = "LICENSE" }
+classifiers = [
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 
 # Specifies the minimum version of Python required to install and run this package.
 requires-python = ">=3.10"
@@ -101,6 +115,7 @@ requires = [
     "scikit-build-core==0.11.6",
     "cmake==3.31.10",
     "ninja==1.11.1.3",
+    "setuptools-scm==9.2.2",
 ]
 
 # The Python object that `pip` will call to execute the build.
@@ -113,6 +128,9 @@ build-backend = "scikit_build_core.build"
 # This section configures the behavior of the `scikit-build-core` build tool.
 # ===================================================================
 [tool.scikit-build]
+
+# Tells scikit-build-core to use setuptools-scm to retrieve the version from git.
+metadata.version-provider = "scikit_build_core.metadata.setuptools_scm"
 
 # Specifies the minimum version of CMake that must be present on the system.
 cmake.version = ">=3.18"

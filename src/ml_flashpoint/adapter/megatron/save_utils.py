@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+from pathlib import Path
 from typing import Any, Optional, Union
 
 import torch
@@ -27,7 +28,7 @@ _LOGGER = get_logger(__name__)
 
 def save_local_aware_megatron_checkpoint(
     checkpoint: dict[str, Any],
-    checkpoint_dir: Union[str, "Path"],
+    checkpoint_dir: Union[str, Path],
     save_strategy,
     async_save: bool = True,
 ) -> Optional[AsyncRequest]:

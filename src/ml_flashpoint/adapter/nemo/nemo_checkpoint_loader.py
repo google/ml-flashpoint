@@ -14,7 +14,7 @@
 
 import os
 from pathlib import Path
-from typing import List, Set
+from typing import Callable, List, Set
 
 from typing_extensions import override
 
@@ -33,6 +33,12 @@ class NeMoMLFlashpointCheckpointLoader(DefaultMLFlashpointCheckpointLoader):
         self,
         checkpoint_object_manager: CheckpointObjectManager,
         replication_manager: ReplicationManager,
+        *,
+        global_rank_getter: Callable[[], int],
+        local_rank_getter: Callable[[], int],
+        broadcast_object_list_func: Callable[..., None],
+        all_gather_object_func: Callable[..., None],
+        world_size_getter: Callable[[], int],
         recover_context: bool = False,
     ):
         """Initializes the NeMoMLFlashpointCheckpointLoader.
@@ -42,9 +48,24 @@ class NeMoMLFlashpointCheckpointLoader(DefaultMLFlashpointCheckpointLoader):
                 reading data.
             replication_manager: The replication manager to use for retrieving
                 missing checkpoint objects from peer nodes.
+            global_rank_getter: A callable that returns the global rank.
+            local_rank_getter: A callable that returns the node-local rank.
+            broadcast_object_list_func: A callable with the same signature as
+                ``torch.distributed.broadcast_object_list``.
+            all_gather_object_func: A callable with the same signature as
+                ``torch.distributed.all_gather_object``.
+            world_size_getter: A callable that returns the world size.
             recover_context: Whether to recover the context directory if missing.
         """
-        super().__init__(checkpoint_object_manager, replication_manager)
+        super().__init__(
+            checkpoint_object_manager,
+            replication_manager,
+            global_rank_getter=global_rank_getter,
+            local_rank_getter=local_rank_getter,
+            broadcast_object_list_func=broadcast_object_list_func,
+            all_gather_object_func=all_gather_object_func,
+            world_size_getter=world_size_getter,
+        )
         self._recover_context = recover_context
 
     @override

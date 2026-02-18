@@ -19,6 +19,7 @@ from typing import Optional
 from ml_flashpoint.checkpoint_object_manager.buffer_io import BufferIO
 from ml_flashpoint.checkpoint_object_manager.buffer_metadata import METADATA_SIZE
 from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject
+from ml_flashpoint.core.buffer_pool import BufferPool
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.mlf_logging import get_logger
 
@@ -32,60 +33,70 @@ class CheckpointObjectManager:
     awareness of buffers (within a rank).
     """
 
-    def create_buffer(self, object_id: CheckpointObjectId, buffer_size: int, overwrite: bool = False) -> "BufferIO":
-        """Creates a new underlying C++ BufferObject and wraps it in a BufferIO stream.
+    def acquire_buffer(self, object_id: CheckpointObjectId, buffer_size: int, overwrite: bool = True) -> "BufferIO":
+        """Acquires a buffer, preferring the BufferPool if available.
 
-        This method handles the instantiation of the low-level buffer and its
-        registration within the manager's tracking map.
+        This method attempts to acquire a buffer from the rank level BufferPool. If the pool
+        is not initialized or is exhausted, it falls back to creating a standalone
+        BufferObject directly at the `object_id` path.
 
         Args:
-            object_id: A unique identifier for the new buffer object.
+            object_id: A unique identifier (logical path) for the new buffer object.
             buffer_size: The desired size of the buffer in bytes.
-            overwrite: If True, allows overwriting an existing object. Defaults to False.
+            overwrite: If True, allows overwriting an existing object. Defaults to True.
 
         Returns:
-            A new BufferIO instance wrapping the created buffer on success.
+            A BufferIO instance.
 
         Raises:
             ValueError: If the provided buffer_size is not a positive integer.
-            RuntimeError: If the underlying C++ BufferObject or the BufferIO wrapper
-                        fails to initialize for any reason (e.g., file system errors).
+            RuntimeError: If the buffer cannot be created or acquired.
         """
         # Validate the buffer size argument.
         if buffer_size <= 0:
-            _LOGGER.error("Failed to create buffer: buffer_size must be a positive integer, but got %d.", buffer_size)
+            _LOGGER.error("Failed to acquire buffer: buffer_size must be a positive integer, but got %d.", buffer_size)
             raise ValueError("Buffer size must be a positive integer.")
 
         buffer_size += METADATA_SIZE
-        _LOGGER.info(
-            "Creating a new buffer for object_id='%s' with size=%d bytes (includes additional overhead), "
-            + "overwrite=%s.",
+        _LOGGER.debug(
+            "Acquiring buffer for object_id='%s' with size=%d bytes (includes overhead), overwrite=%s.",
             object_id,
             buffer_size,
             overwrite,
         )
 
+        # 1. Try to acquire from BufferPool
         try:
-            # Instantiate the underlying C++ BufferObject.
-            # This is a critical step where interaction with C++ code happens.
-            _LOGGER.debug("Instantiating C++ BufferObject for '%s'.", object_id)
-            buffer_obj = BufferObject(str(object_id), buffer_size, overwrite)
+            # Ensure parent dir exists for the link
+            os.makedirs(os.path.dirname(str(object_id)), exist_ok=True)
 
-            # Wrap the C++ object in our Python BufferIO file-like object.
-            _LOGGER.debug("Wrapping C++ object in BufferIO for '%s'.", object_id)
-            buffer_io = BufferIO(buffer_obj)
+            # Remove existing link/file if overwrite is True
+            if os.path.exists(str(object_id)):
+                if overwrite:
+                    os.remove(str(object_id))
+                else:
+                    raise FileExistsError(f"File {object_id} already exists and overwrite=False")
+
+            pool = BufferPool.get_instance()
+            # Pool manages the physical creation/resizing AND the logical link (symlink) creation.
+            buffer_io = pool.acquire(associated_symlink=str(object_id))
+
+            _LOGGER.debug("Acquired buffer for '%s'", object_id)
+
+            return buffer_io
+
+        except RuntimeError:
+            _LOGGER.debug("BufferPool unavailable or exhausted. Falling back to standalone buffer creation.")
+
+        # 2. Fallback: Create a standalone BufferObject
+        try:
+            _LOGGER.debug("Instantiating standalone C++ BufferObject for '%s'.", object_id)
+            buffer_obj = BufferObject(str(object_id), buffer_size, overwrite)
+            return BufferIO(buffer_obj)
 
         except Exception as e:
-            # This block catches any error during the C++ object creation or the
-            # BufferIO wrapper initialization (e.g., from pybind11 or BufferIO's __init__).
-            _LOGGER.exception("An unexpected error occurred during buffer creation for object_id='%s'", object_id)
-            # Re-raise it as a more generic RuntimeError to signal a fundamental
-            # failure in the creation process.
-            raise RuntimeError(f"Failed to create and wrap buffer for '{object_id}'") from e
-
-        _LOGGER.debug("Successfully created and wrapped buffer for '%s'.", object_id)
-
-        return buffer_io
+            _LOGGER.exception("Failed to create buffer for object_id='%s'", object_id)
+            raise RuntimeError(f"Failed to create buffer for '{object_id}'") from e
 
     def get_buffer(
         self,

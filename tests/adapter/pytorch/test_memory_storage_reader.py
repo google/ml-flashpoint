@@ -190,7 +190,7 @@ class TestMemoryStorageReader:
         chkpt_obj_id = CheckpointObjectId(str(file_path))
         tensor_to_save = torch.randn(2, 3)
         buffer_size = tensor_to_save.nbytes * 100  # Create enough extra room for storing the serialized form
-        with chkpt_object_manager.create_buffer(chkpt_obj_id, buffer_size=buffer_size) as buffer:
+        with chkpt_object_manager.acquire_buffer(chkpt_obj_id, buffer_size=buffer_size) as buffer:
             torch.save(tensor_to_save, buffer)
             tensor_data_size = buffer.tell()
 

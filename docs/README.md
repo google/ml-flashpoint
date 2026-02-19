@@ -36,14 +36,15 @@ When comparing
 
 We observe:
 
-* Data write times that are up to 20-30x faster for ML Flashpoint specifically, with little to no optimization.
-This is expected to further improve with additional optimizations.
-* Total checkpoint recovery times that are ~7-10x faster for ML Flashpoint specifically (includes the time it takes to do checkpoint detection, cross-node coordination, replication, read into model state and be ready to resume training).
+* Data write times that are up to 120x faster for ML Flashpoint specifically, currently reaching up to ~30 GB/s/node write throughput (scales linearly with cluster size).
+* Total checkpoint recovery times that are ~7-12x faster for ML Flashpoint specifically, depending on number of nodes lost (includes the time it takes to do checkpoint detection, cross-node coordination, replication, read into model state and be ready to resume training).
 * For _async_ checkpointing: 
     * Improvements averaging **3%** (Gemma 27B) & **6%** (Llama 70B) for _overall job time_ in the hybrid approach.
     * Improvements reach **5%** (Gemma 27B) & **10%** (Llama 70B) when NeMo checkpointing is deferred to the end (300th step) instead of being done every 50 steps. 
     * These improvements only account for checkpoint _save_ efficiency, representing a "lower bound" value as it doesn't account for the speedups in _recovery_ time.
     * Any job interruptions would also benefit from ML Flashpoint's recovery performance gains.
+
+Stay tuned and watch the [repository](https://github.com/google/ml-flashpoint) for updates on future improvements!
 
 !!! info
 
@@ -69,8 +70,7 @@ To use ML Flashpoint, the basic requirements for the training environment are:
     * This is enforced so that the pairwise strategy doesn't put a higher memory burden on one node than the others, and so the general capacity requirements are roughly consistent across nodes.
 1. A `tmpfs` mount is strongly recommended to be used for the container base path, that is separate from `/dev/shm`.
 E.g. a `/tmp` mount, which can be added to `/etc/fstab` on Linux machines to mount it persistently (A3-Mega example):
-    1. `tmpfs         /tmp            tmpfs           rw,nosuid,nodev,size=1024G,mode=1777,noswap,huge=within_size   0 0`
-    1. `huge=within_size` is recommended to use huge pages for any files large enough, since checkpoint data is on the order of many GBs.
+    1. `tmpfs         /tmp            tmpfs           rw,nosuid,nodev,size=1024G,mode=1777,noswap   0 0`
     1. `noswap` is recommended to avoid degrading performance.
    This can be omitted if you prefer to allow transparent disk swapping to accommodate more checkpoint storage than can fit in memory, at the cost of poorer checkpointing performance.
     1. The amount of memory needed is at least equal to the checkpoint size per node x 4, to account for replicas and in-progress checkpoints. 

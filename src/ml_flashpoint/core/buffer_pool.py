@@ -272,16 +272,16 @@ class BufferPool:
 
             for buf in self.free_buffers:
                 try:
-                    buf.close(truncate=False)
+                    buf.close(truncate=True)
                 except Exception:
-                    pass
+                    _LOGGER.warning("BufferIOProxy: Failed to close buffer during teardown.", exc_info=True)
             self.free_buffers.clear()
 
             for buf in self.active_buffers:
                 try:
-                    buf.close(truncate=False)
+                    buf.close(truncate=True)
                 except Exception:
-                    pass
+                    _LOGGER.warning("BufferIOProxy: Failed to close buffer during teardown.", exc_info=True)
             self.active_buffers.clear()
 
     @log_execution_time(logger=_LOGGER, name="_reuse_buffer", level=logging.INFO)

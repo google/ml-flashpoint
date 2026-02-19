@@ -75,8 +75,8 @@ def _teardown_pool_in_worker():
     """Teardown the BufferPool in the worker process."""
     try:
         BufferPool.get_instance().teardown()
-    except Exception:
-        pass
+    except Exception as e:
+        _LOGGER.debug("Failed to teardown BufferPool, it might have been closed already: %s", e)
 
 
 class MLFlashpointCheckpointIO(AsyncCompatibleCheckpointIO):
@@ -328,13 +328,9 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
         # We access the storage writer thread count from the save strategy.
         # Note: accessing private member _storage_writer and _thread_count.
         # This assumes MLFlashpointMegatronAsyncSaveStrategy structure.
-        write_thread_count = 1
-        try:
-            write_thread_count = self.mlf_checkpoint_io.save_strategy._storage_writer._thread_count
-        except AttributeError:
-            _LOGGER.warning("Could not determine write thread count, defaulting to 1 for BufferPool sizing.")
-
-        num_buffers = 3 * write_thread_count
+        # TODO: Get the thread count from the save strategy in a public way.
+        # TODO: Revisit this magic number 3.
+        num_buffers = 3 * self.mlf_checkpoint_io.save_strategy._storage_writer._thread_count
 
         self._pool_init_args = (
             os.path.join(str(self.mlf_checkpoint_io.flashpoint_base_dir), "buffer_pool"),

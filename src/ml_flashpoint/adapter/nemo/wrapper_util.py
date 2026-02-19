@@ -15,6 +15,10 @@
 from typing import Union
 
 import torch
+from megatron.core.dist_checkpointing.strategies.fully_parallel import (
+    FullyParallelLoadStrategyWrapper,
+    FullyParallelSaveStrategyWrapper,
+)
 from nemo import lightning as nl
 from nemo.lightning.io.pl import MegatronCheckpointIO
 from nemo.lightning.pytorch import strategies as nl_strategies
@@ -35,7 +39,6 @@ from ml_flashpoint.core.checkpoint_loader import DefaultMLFlashpointCheckpointLo
 from ml_flashpoint.core.checkpoint_saver import DEFAULT_INITIAL_BUFFER_SIZE_BYTES, DefaultMLFlashpointCheckpointSaver
 from ml_flashpoint.replication.replication_manager import ReplicationManager
 
-from megatron.core.dist_checkpointing.strategies.fully_parallel import FullyParallelSaveStrategyWrapper, FullyParallelLoadStrategyWrapper
 
 def wrap_trainer_and_auto_resume_with_mlflashpoint(
     trainer: nl_trainer.Trainer,
@@ -47,7 +50,6 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
     initial_write_buffer_size_bytes: int = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
     use_optimized_save: bool = True,
     use_fully_parallel_wrapper: bool = False,
-
 ) -> MLFlashpointAutoResume:
     """Wraps the trainer and creates an MLFlashpointAutoResume instance wrapping `default_auto_resume`.
 
@@ -93,7 +95,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
         write_thread_count=write_thread_count,
         initial_write_buffer_size_bytes=initial_write_buffer_size_bytes,
         use_optimized_save=use_optimized_save,
-        use_fully_parallel_wrapper=use_fully_parallel_wrapper
+        use_fully_parallel_wrapper=use_fully_parallel_wrapper,
     )
 
     default_auto_resume_args = vars(default_auto_resume) if default_auto_resume else {}
@@ -116,7 +118,6 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
     initial_write_buffer_size_bytes: int = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
     use_optimized_save: bool = True,
     use_fully_parallel_wrapper: bool = False,
-
 ):
     """Wraps the trainer's checkpoint I/O with ML Flashpoint capabilities.
 

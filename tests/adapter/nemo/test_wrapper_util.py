@@ -17,6 +17,10 @@
 import dataclasses
 
 import pytest
+from megatron.core.dist_checkpointing.strategies.fully_parallel import (
+    FullyParallelLoadStrategyWrapper,
+    FullyParallelSaveStrategyWrapper,
+)
 from nemo import lightning as nl
 from nemo.lightning.io.pl import MegatronCheckpointIO
 from nemo.lightning.pytorch import strategies as nl_strategies
@@ -41,10 +45,6 @@ from ml_flashpoint.core.checkpoint_saver import (
     DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
 )
 from ml_flashpoint.replication.replication_manager import ReplicationManager
-from megatron.core.dist_checkpointing.strategies.fully_parallel import (
-            FullyParallelSaveStrategyWrapper,
-            FullyParallelLoadStrategyWrapper,
-        )
 
 
 class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
@@ -107,7 +107,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
             write_thread_count=1,
             initial_write_buffer_size_bytes=DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
             use_optimized_save=True,
-            use_fully_parallel_wrapper=False
+            use_fully_parallel_wrapper=False,
         )
 
         # 3. Result is correct type and has correct attributes

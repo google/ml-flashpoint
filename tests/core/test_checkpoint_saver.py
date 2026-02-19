@@ -2132,3 +2132,54 @@ class TestDefaultMLFlashpointCheckpointSaver:
         assert buffer_io.buffer_obj.get_id() == str(object_id)
         assert buffer_io.read() == b"test_async_replicate_object data"
         buffer_io.close()
+
+    @staticmethod
+    def _return_zero():
+        return 0
+
+    @staticmethod
+    def _return_none():
+        return None
+
+    def test_pickling_excludes_replication_manager(self, chkpt_object_manager, replication_manager):
+        # Given
+        saver = DefaultMLFlashpointCheckpointSaver(
+            global_rank_getter=self._return_zero,
+            local_rank_getter=self._return_zero,
+            global_barrier_func=self._return_none,
+            ckpt_obj_manager=chkpt_object_manager,
+            replication_manager=replication_manager,
+            initial_buffer_size_bytes=1024,
+            use_optimized_save=False,
+        )
+
+        # When
+        pickled_saver = pickle.dumps(saver)
+        unpickled_saver = pickle.loads(pickled_saver)
+
+        # Then
+        assert unpickled_saver._replication_manager is None
+        # Verify other attributes are preserved
+        assert unpickled_saver._initial_buffer_size_bytes == 1024
+        assert unpickled_saver._use_optimized_save is False
+        # Verify callables are restored
+        assert unpickled_saver._global_rank_getter() == 0
+
+    def test_async_replicate_object_raises_when_manager_is_none(
+        self, chkpt_object_manager, replication_manager, temp_dir_path
+    ):
+        # Given
+        saver = DefaultMLFlashpointCheckpointSaver(
+            global_rank_getter=self._return_zero,
+            local_rank_getter=self._return_zero,
+            global_barrier_func=self._return_none,
+            ckpt_obj_manager=chkpt_object_manager,
+            replication_manager=replication_manager,
+        )
+        # Simulate state after unpickling in a worker or if initialized with None
+        saver._replication_manager = None
+        object_id = CheckpointObjectId.from_container(CheckpointContainerId(f"{temp_dir_path}/c1"), "obj1")
+
+        # When/Then
+        with pytest.raises(RuntimeError, match="ReplicationManager is not available"):
+            saver.async_replicate_object(object_id)

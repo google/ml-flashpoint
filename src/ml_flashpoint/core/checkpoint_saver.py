@@ -320,6 +320,21 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         self._initial_buffer_size_bytes = initial_buffer_size_bytes
         self._use_optimized_save = use_optimized_save
 
+    def __getstate__(self):
+        """Custom pickling to exclude _replication_manager."""
+        state = self.__dict__.copy()
+        # Exclude _replication_manager from the pickled state as it is not needed in workers
+        # and may be unpickleable or expensive to transfer.
+        if "_replication_manager" in state:
+            del state["_replication_manager"]
+        return state
+
+    def __setstate__(self, state):
+        """Custom unpickling to restore state and set _replication_manager to None."""
+        self.__dict__.update(state)
+        # Restore _replication_manager as None in the worker process
+        self._replication_manager = None
+
     @override
     @log_execution_time(logger=_LOGGER, name="initialize_checkpoint")
     def initialize_checkpoint(self, checkpoint_id: CheckpointContainerId) -> None:
@@ -506,6 +521,11 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
 
     @log_execution_time(logger=_LOGGER, name="async_replicate_object")
     def async_replicate_object(self, object_id: CheckpointObjectId) -> list[concurrent.futures.Future]:
+        if self._replication_manager is None:
+            # This can happen in worker processes where we don't pickle the manager.
+            # If this is called, it means replicate_after_write=True was passed erroneously or
+            # the strategy is trying to replicate in a worker where it shouldn't.
+            raise RuntimeError("ReplicationManager is not available (None). Cannot replicate object.")
         object_buffer_io = self._chkpt_obj_manager.get_buffer(object_id)
         return self._replication_manager.async_replicate(object_buffer_io)
 

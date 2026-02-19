@@ -70,8 +70,7 @@ To use ML Flashpoint, the basic requirements for the training environment are:
     * This is enforced so that the pairwise strategy doesn't put a higher memory burden on one node than the others, and so the general capacity requirements are roughly consistent across nodes.
 1. A `tmpfs` mount is strongly recommended to be used for the container base path, that is separate from `/dev/shm`.
 E.g. a `/tmp` mount, which can be added to `/etc/fstab` on Linux machines to mount it persistently (A3-Mega example):
-    1. `tmpfs         /tmp            tmpfs           rw,nosuid,nodev,size=1024G,mode=1777,noswap,huge=within_size   0 0`
-    1. `huge=within_size` is recommended to use huge pages for any files large enough, since checkpoint data is on the order of many GBs.
+    1. `tmpfs         /tmp            tmpfs           rw,nosuid,nodev,size=1024G,mode=1777,noswap   0 0`
     1. `noswap` is recommended to avoid degrading performance.
    This can be omitted if you prefer to allow transparent disk swapping to accommodate more checkpoint storage than can fit in memory, at the cost of poorer checkpointing performance.
     1. The amount of memory needed is at least equal to the checkpoint size per node x 4, to account for replicas and in-progress checkpoints. 

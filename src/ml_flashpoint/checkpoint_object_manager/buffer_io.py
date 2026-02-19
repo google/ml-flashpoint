@@ -433,8 +433,8 @@ class BufferIO:
             raise ValueError("Failed to recreate memoryview after resize.")
 
         if len(self._mv) < METADATA_SIZE:
-            # This should be caught by C++ check ideally, or validated before calling resize
-            pass
+            # This should not happen if new_size is validated correctly before calling resize.
+            raise ValueError(f"Resize resulted in a buffer smaller than metadata size: {len(self._mv)}")
 
         # 4. Re-map metadata
         # Since the buffer might have moved in memory, we need to refresh the metadata view.

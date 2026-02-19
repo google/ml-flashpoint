@@ -72,10 +72,6 @@ class BufferObject {
   void close(std::optional<size_t> truncate_size = std::nullopt) noexcept;
 
   // Resizes the buffer to the new capacity.
-  // This involves unmapping the existing memory, resizing the file (ftruncate),
-  // and remapping with the new size.
-  // The data_ptr_ and capacity_ members are updated.
-  // Throws std::runtime_error on failure.
   void resize(size_t new_capacity);
 
  private:

@@ -282,11 +282,8 @@ absl::Status resize_mmap(int fd, size_t new_size, void*& out_data_ptr,
     return absl::InvalidArgumentError("Invalid file descriptor for resize.");
   }
   if (out_data_ptr == MAP_FAILED || out_data_size == 0) {
-    // Attempt to just truncate and mmap if previously failed or empty?
-    // For safety, let's enforce valid existing map or require caller to handle
-    // initial map. Actually, if we are resizing, we assume it WAS mapped. But
-    // let's allow "first map" scenario if ptr is nullptr? No, caller should use
-    // create/open for that.
+    return absl::InvalidArgumentError(
+        "Invalid data pointer or size for resize.");
   }
 
   // 1. Unmap existing

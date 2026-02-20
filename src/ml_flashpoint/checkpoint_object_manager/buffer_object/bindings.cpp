@@ -53,6 +53,9 @@ PYBIND11_MODULE(buffer_object_ext, m) {
            "Gets the buffer object capacity.",
            py::call_guard<py::gil_scoped_release>())
 
+      .def("resize", &BufferObject::resize, "Resizes the buffer object.",
+           py::arg("new_capacity"), py::call_guard<py::gil_scoped_release>())
+
       .def(
           "get_data_ptr",
           [](const BufferObject& self) -> std::uintptr_t {

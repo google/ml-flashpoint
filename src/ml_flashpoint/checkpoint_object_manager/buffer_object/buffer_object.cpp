@@ -24,6 +24,7 @@
 // Constructor for creating a new buffer.
 BufferObject::BufferObject(const std::string& object_id, size_t capacity,
                            bool overwrite)
+
     // Initialize all members to a safe, "closed" state.
     : object_id_(object_id),
       fd_(-1),
@@ -172,4 +173,27 @@ void BufferObject::close(std::optional<size_t> truncate_size) noexcept {
   fd_ = -1;
   data_ptr_ = nullptr;
   capacity_ = 0;
+}
+
+void BufferObject::resize(size_t new_capacity) {
+  if (is_closed()) {
+    throw std::runtime_error("Cannot resize a closed buffer.");
+  }
+  if (is_readonly()) {
+    throw std::runtime_error("Cannot resize a read-only buffer.");
+  }
+  if (new_capacity == 0) {
+    throw std::runtime_error("Cannot resize buffer to 0.");
+  }
+
+  LOG(INFO) << "BufferObject::resize: Resizing object_id=" << object_id_
+            << " from " << capacity_ << " to " << new_capacity;
+
+  absl::Status status =
+      ml_flashpoint::checkpoint_object_manager::buffer_object::internal::
+          resize_mmap(fd_, new_capacity, data_ptr_, capacity_);
+
+  if (!status.ok()) {
+    throw std::runtime_error(status.ToString());
+  }
 }

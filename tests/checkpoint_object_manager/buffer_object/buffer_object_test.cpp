@@ -407,3 +407,60 @@ TEST_F(BufferObjectTest, MoveAssignmentToSelfIsSafe) {
   EXPECT_EQ(obj.get_id(), original_id);
   EXPECT_EQ(obj.is_readonly(), original_readonly);
 }
+// --- Tests for resize ---
+
+TEST_F(BufferObjectTest, ResizeSucceeds) {
+  const size_t initial_capacity = 1024;
+  const size_t new_capacity = 2048;
+
+  BufferObject buffer(test_path_, initial_capacity);
+  ASSERT_EQ(buffer.get_capacity(), initial_capacity);
+
+  ASSERT_NO_THROW(buffer.resize(new_capacity));
+  EXPECT_EQ(buffer.get_capacity(), new_capacity);
+  EXPECT_FALSE(buffer.is_closed());
+
+  // Verify size on disk
+  EXPECT_EQ(std::filesystem::file_size(test_path_), new_capacity);
+}
+
+TEST_F(BufferObjectTest, ResizePreservesData) {
+  const size_t initial_capacity = 1024;
+  const size_t new_capacity = 2048;
+  const std::string content = "Important Data";
+
+  BufferObject buffer(test_path_, initial_capacity);
+  std::memcpy(buffer.get_data_ptr(), content.c_str(), content.size());
+
+  buffer.resize(new_capacity);
+
+  // Verify data is still there
+  EXPECT_EQ(std::memcmp(buffer.get_data_ptr(), content.c_str(), content.size()),
+            0);
+}
+
+TEST_F(BufferObjectTest, ResizeFailsOnClosedBuffer) {
+  BufferObject buffer(test_path_, 1024);
+  buffer.close();
+  ASSERT_TRUE(buffer.is_closed());
+
+  ASSERT_THROW(buffer.resize(2048), std::runtime_error);
+}
+
+TEST_F(BufferObjectTest, ResizeFailsOnReadOnlyBuffer) {
+  // Create file
+  {
+    BufferObject writer(test_path_, 1024);
+  }
+
+  // Open RO
+  BufferObject reader(test_path_);
+  ASSERT_TRUE(reader.is_readonly());
+
+  ASSERT_THROW(reader.resize(2048), std::runtime_error);
+}
+
+TEST_F(BufferObjectTest, ResizeFailsOnZeroCapacity) {
+  BufferObject buffer(test_path_, 1024);
+  ASSERT_THROW(buffer.resize(0), std::runtime_error);
+}

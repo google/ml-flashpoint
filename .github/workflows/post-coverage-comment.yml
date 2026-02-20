@@ -33,7 +33,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Download coverage reports artifact
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d1c # ratchet:actions/download-artifact@v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # ratchet:actions/download-artifact@v7
         continue-on-error: true # Artifact might be missing on very early failures
         with:
           name: coverage-reports
@@ -53,13 +53,13 @@ jobs:
           else
             echo "pr_found=false" >> $GITHUB_OUTPUT
           fi
-          
+
           if [ -f python-code-coverage-results.md ]; then
             echo "python_found=true" >> $GITHUB_OUTPUT
           else
             echo "python_found=false" >> $GITHUB_OUTPUT
           fi
-          
+
           if [ -f cpp-code-coverage-results.md ]; then
             echo "cpp_found=true" >> $GITHUB_OUTPUT
           else

@@ -159,7 +159,7 @@ jobs:
         if: always()
         with:
           name: coverage-reports
-          if-no-files-found: ignore
+          if-no-files-found: warn # Default, but setting explicitly for awareness as non-PRs won't have pr_number.txt
           path: |
             htmlcov/
             python-coverage.xml

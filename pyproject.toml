@@ -153,6 +153,15 @@ cmake.source-dir = "."
 # wheel.packages = ["src/ml_flashpoint"]
 
 # ===================================================================
+# Tool-specific Configuration for setuptools-scm
+# ===================================================================
+[tool.setuptools_scm]
+# Fallback version to use if git is not available or the directory is not a git repo.
+# This prevents build failures in environments like some CI runners or /tmp clones.
+fallback_version = "0.0.0"
+
+
+# ===================================================================
 # Tool-specific Configuration for Ruff
 # ===================================================================
 [tool.ruff]

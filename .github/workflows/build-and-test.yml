@@ -134,7 +134,8 @@ jobs:
           fi
 
       - name: Save PR number
-        if: github.event_name == 'pull_request'
+        # Use always() so this runs even if previous coverage/test steps failed.
+        if: always() && github.event_name == 'pull_request'
         run: |
           echo ${{ github.event.number }} > pr_number.txt
 
@@ -143,6 +144,7 @@ jobs:
         if: always()
         with:
           name: coverage-reports
+          if-no-files-found: ignore
           path: |
             htmlcov/
             python-coverage.xml

@@ -114,7 +114,7 @@ jobs:
 
       - name: C++ Coverage Summary
         uses: irongut/CodeCoverageSummary@51cc3a756ddcd398d447c044c02cb6aa83fdae95 # ratchet:irongut/CodeCoverageSummary@v1.3.0
-        if: always()
+        if: always() # Run even if threshold check above fails
         with:
           filename: cxx-coverage.xml
           badge: true
@@ -134,7 +134,7 @@ jobs:
           fi
 
       - name: Save PR number
-        if: always() && github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request'
         run: |
           echo ${{ github.event.number }} > pr_number.txt
 

@@ -108,6 +108,13 @@ absl::Status create_file_and_mmap(const std::string& object_id, size_t size,
     return ErrnoToStatus("mmap() failed for file: " + object_id);
   }
 
+  // On success, set kernel memory hints:
+  // MADV_WILLNEED: expect access in the near future, so can prefetch
+  // pages into memory in the background.
+  // MADV_HUGEPAGE: use huge pages when possible, to minimize TLB misses and
+  // improve read/write throughput.
+  madvise(ptr, size, MADV_WILLNEED | MADV_HUGEPAGE);
+
   // On success, set all the output parameters.
   out_fd = fd;
   out_data_size = size;
@@ -172,6 +179,13 @@ absl::Status open_file_and_mmap_ro(const std::string& object_id, int& out_fd,
     close(fd);
     return ErrnoToStatus("mmap() failed for file: " + object_id);
   }
+
+  // On success, set kernel memory hints:
+  // MADV_WILLNEED: expect access in the near future, so can prefetch
+  // pages into memory in the background.
+  // MADV_HUGEPAGE: use huge pages when possible, to minimize TLB misses and
+  // improve read throughput.
+  madvise(ptr, size, MADV_WILLNEED | MADV_HUGEPAGE);
 
   // On success, set all the output parameters.
   out_fd = fd;

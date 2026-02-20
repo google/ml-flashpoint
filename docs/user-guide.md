@@ -133,6 +133,7 @@ from ml_flashpoint.replication.replication_manager import ReplicationManager
 
 # Megatron Checkpointing
 from megatron.core import dist_checkpointing as mcore_dist_checkpointing
+from ml_flashpoint.adapter.megatron.save_utils import save_local_aware_megatron_checkpoint
 ```
 
 #### Save Strategy
@@ -150,8 +151,19 @@ megatron_save_strategy = MLFlashpointMegatronAsyncSaveStrategy(
 )
 ```
 
-Because Megatron's `dist_checkpointing.save()` function writes "common" data only on global rank 0, which does not align with local checkpointing, you can orchestrate saves using the save strategy the same way it's done in [`MLFlashpointCheckpointIO.save_checkpoint()`](https://github.com/google/ml-flashpoint/blob/b9767583520106f59743b9e8050769523cfbef6e/src/ml_flashpoint/adapter/nemo/checkpoint_io.py#L137-L171) in the `ml_flashpoint.adapter.nemo` package.
-You'll notice that the logic there aims to mimic `dist_checkpointing.save`, but it saves common data on each node (via local rank 0) as opposed to solely on the coordinator node (global rank 0).
+Because Megatron's `dist_checkpointing.save()` function writes "common" data only on global rank 0, which does not align with local checkpointing, use the provided helper function `save_local_aware_megatron_checkpoint()` from the `ml_flashpoint.adapter.megatron.save_utils` module.
+
+This helper mimics `dist_checkpointing.save()`, but saves common data on each node (via local rank 0) rather than solely on the coordinator node (global rank 0).
+
+```python
+# In your save loop
+async_request = save_local_aware_megatron_checkpoint(
+    checkpoint=state_dict,
+    checkpoint_dir=str(curr_step_checkpoint_id),
+    save_strategy=megatron_save_strategy,
+    async_save=True,
+)
+```
 
 !!! note
 

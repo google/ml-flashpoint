@@ -189,7 +189,7 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
 
             mock_memory_storage_writer_cls.assert_called_once_with(
                 checkpoint_saver=checkpoint_saver,
-                mp_manager=storage_writer._mp_manager,
+                mp_manager=storage_writer._main_process_torchmp_manager,
                 thread_count=storage_writer._thread_count,
             )
             mock_new_storage_writer_instance.reset.assert_called_once_with(checkpoint_id.data)
@@ -229,7 +229,7 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             # Then
             mock_memory_storage_writer_cls.assert_called_once_with(
                 checkpoint_saver=checkpoint_saver,
-                mp_manager=storage_writer._mp_manager,
+                mp_manager=storage_writer._main_process_torchmp_manager,
                 thread_count=expected_thread_count,
             )
 
@@ -275,7 +275,9 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             assert kwargs["state_dict"] == pyt_state_dict
             assert actual_storage_writer_used is not None
             assert isinstance(actual_storage_writer_used, MemoryStorageWriter)
-            assert actual_storage_writer_used._mp_manager is storage_writer._mp_manager
+            assert (
+                actual_storage_writer_used._main_process_torchmp_manager is storage_writer._main_process_torchmp_manager
+            )
             assert kwargs["planner"] is mock_planner
             assert "world_dist_wrapper" in kwargs
             assert kwargs["world_dist_wrapper"].use_dist is False
@@ -372,8 +374,8 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
                 "ml_flashpoint.adapter.megatron.save_strategies.MemoryStorageWriter"
             )
             mock_storage_writer_instance = mock_memory_storage_writer_cls.return_value
-            # We need to set _mp_manager on the mock because the test asserts on it later
-            mock_storage_writer_instance._mp_manager = storage_writer._mp_manager
+            # We need to set _main_process_torchmp_manager on the mock because the test asserts on it later
+            mock_storage_writer_instance._main_process_torchmp_manager = storage_writer._main_process_torchmp_manager
             mock_storage_writer_instance.stage_write_data_buckets.return_value = dummy_write_buckets
 
             expected_kwarg_keys = {"checkpoint_id", "storage_writer", "global_metadata", "world_dist_wrapper"}
@@ -405,7 +407,9 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             assert kwargs["checkpoint_id"] == checkpoint_id
             assert actual_storage_writer_used is not None
             assert actual_storage_writer_used is mock_storage_writer_instance
-            assert actual_storage_writer_used._mp_manager is storage_writer._mp_manager
+            assert (
+                actual_storage_writer_used._main_process_torchmp_manager is storage_writer._main_process_torchmp_manager
+            )
             assert kwargs["global_metadata"] == dummy_metadata
             assert kwargs["world_dist_wrapper"].use_dist is False
 
@@ -433,3 +437,41 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
 
             # Then
             finalize_checkpoint_spy.assert_not_called()
+
+        @pytest.mark.parametrize(
+            "is_dist_initialized, dist_rank, expected_rank",
+            [
+                (True, 5, 5),
+                (False, 0, -1),
+            ],
+        )
+        def test_async_save_rank_determination(
+            self,
+            mocker,
+            async_save_setup,
+            is_dist_initialized,
+            dist_rank,
+            expected_rank,
+        ):
+            """Tests that the rank passed to async_fn is correct based on dist initialization."""
+            # Given
+            strategy, checkpoint_id, sharded_state_dict, _ = async_save_setup
+
+            # Mock torch.distributed
+            mocker.patch("torch.distributed.is_initialized", return_value=is_dist_initialized)
+            if is_dist_initialized:
+                mocker.patch("torch.distributed.get_rank", return_value=dist_rank)
+
+            # Mock dependencies to ensure success path
+            mock_statedictsaver = mocker.patch("ml_flashpoint.adapter.megatron.save_strategies.statedictsaver")
+            mock_statedictsaver.generate_plan.return_value = (
+                mocker.MagicMock(),
+                mocker.MagicMock(),
+                mocker.MagicMock(),
+            )
+
+            # When
+            actual_async_request = strategy.async_save(sharded_state_dict, checkpoint_id.data)
+
+            # Then
+            assert actual_async_request.async_fn_kwargs["rank"] == expected_rank

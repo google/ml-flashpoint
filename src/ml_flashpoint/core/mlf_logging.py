@@ -30,6 +30,8 @@ _MISSING_NONNEG_NUMERIC_VAL = -1
 # -1 is the default sentinel (invalid) value.
 _TRAINING_STEP = multiprocessing.Value("i", _MISSING_NONNEG_NUMERIC_VAL)
 
+_STATIC_RANK = _MISSING_NONNEG_NUMERIC_VAL
+
 
 def update_training_step(new_val: int):
     """Updates the global training step value used in logs.
@@ -40,6 +42,23 @@ def update_training_step(new_val: int):
     """
     with _TRAINING_STEP.get_lock():
         _TRAINING_STEP.value = new_val
+
+
+def get_current_step() -> int:
+    """Returns the current training step."""
+    return _TRAINING_STEP.value
+
+
+def setup_worker_logging(rank: int, step: int):
+    """Sets up logging context for a worker process.
+
+    Args:
+        rank: The rank to log.
+        step: The step to log.
+    """
+    global _STATIC_RANK
+    _STATIC_RANK = rank
+    update_training_step(step)
 
 
 class TrainingContextFormatter(logging.Formatter):
@@ -55,7 +74,12 @@ class TrainingContextFormatter(logging.Formatter):
         Returns:
             The formatted log record as a string.
         """
-        rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else _MISSING_NONNEG_NUMERIC_VAL
+        if _STATIC_RANK != _MISSING_NONNEG_NUMERIC_VAL:
+            rank = _STATIC_RANK
+        elif torch.distributed.is_initialized():
+            rank = torch.distributed.get_rank()
+        else:
+            rank = _MISSING_NONNEG_NUMERIC_VAL
         record.rank = rank
         step_val = _TRAINING_STEP.value
         record.curr_step = step_val

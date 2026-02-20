@@ -109,9 +109,23 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
             _LOGGER.warning("thread_count must be >= 1, but was %d. Setting to 1.", thread_count)
             thread_count = 1
         self._thread_count = thread_count
-        self._mp_manager = mp_manager
+        # _main_process_torchmp_manager should only be used in the main process, not in the spawned processes.
+        # This is because mp_manager is not picklable.
+        self._main_process_torchmp_manager = mp_manager
         self._write_events_per_checkpoint_id: dict[CheckpointContainerId, torch_mp.Event] = mp_manager.dict()
         self._write_results_per_checkpoint_id: dict[CheckpointContainerId, list[WriteResult]] = mp_manager.dict()
+
+    def __getstate__(self):
+        """Custom pickling to exclude unpicklable mp_manager."""
+        state = self.__dict__.copy()
+        if "_main_process_torchmp_manager" in state:
+            del state["_main_process_torchmp_manager"]
+        return state
+
+    def __setstate__(self, state):
+        """Custom unpickling to restore state and set mp_manager to None."""
+        self.__dict__.update(state)
+        self._main_process_torchmp_manager = None
 
     def _check_checkpoint_id(self) -> None:
         if self._current_checkpoint_id is None:
@@ -177,7 +191,7 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
     ) -> list[ObjectWriteBucket]:
         # Create a new, unset Event for this specific checkpoint save
         if checkpoint_id not in self._write_events_per_checkpoint_id:
-            self._write_events_per_checkpoint_id[checkpoint_id] = self._mp_manager.Event()
+            self._write_events_per_checkpoint_id[checkpoint_id] = self._main_process_torchmp_manager.Event()
 
         write_buckets = self.checkpoint_saver.prepare_write_data(
             checkpoint_id, plan.items, planner, plan.storage_data.prefix, bucket_count=self._thread_count

@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# This workflow is independent as it requires write permissions, which GitHub blocks
+# on forks for security reasons. Thus, in order to be able to post comments with
+# code coverage details on PRs, we run a separate workflow in the context of the
+# base repository after any PR build workflow completes, relying on files uploaded
+# by the PR's build.
 name: Post Coverage Comment
 
 on:

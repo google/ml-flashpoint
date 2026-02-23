@@ -1019,6 +1019,7 @@ class TestFormatSignature:
 class TestResizeOperations:
     def test_resize_increases_capacity(self, temp_dir_path):
         """Test that resize increases the buffer capacity and preserves data."""
+        # Given
         file_path = str(temp_dir_path / "resize_capacity.bin")
         initial_size = METADATA_SIZE + 1024
         buffer_obj = BufferObject(file_path, initial_size, overwrite=True)
@@ -1030,10 +1031,11 @@ class TestResizeOperations:
             data = b"some data before resize"
             bio.write(data)
 
-            # Resize
+            # When
             new_size = initial_size * 2
             bio.resize(new_size)
 
+            # Then
             # Verify capacity
             assert bio.buffer_obj.get_capacity() == new_size
 
@@ -1043,6 +1045,7 @@ class TestResizeOperations:
 
     def test_resize_updates_memoryview(self, temp_dir_path):
         """Test that resize updates the internal memoryview and it is valid."""
+        # Given
         file_path = str(temp_dir_path / "resize_mv.bin")
         initial_size = METADATA_SIZE + 1024
         buffer_obj = BufferObject(file_path, initial_size, overwrite=True)
@@ -1050,10 +1053,11 @@ class TestResizeOperations:
         with BufferIO(buffer_obj) as bio:
             old_mv_len = len(bio._mv)
 
-            # Resize
+            # When
             new_size = initial_size + 1024
             bio.resize(new_size)
 
+            # Then
             # Verify memoryview length updated
             assert len(bio._mv) == new_size
 
@@ -1063,16 +1067,19 @@ class TestResizeOperations:
 
     def test_resize_fails_on_closed_buffer(self, temp_dir_path):
         """Test that resize raises ValueError on closed buffer."""
+        # Given
         file_path = str(temp_dir_path / "resize_closed.bin")
         buffer_obj = BufferObject(file_path, METADATA_SIZE + 1024, overwrite=True)
         bio = BufferIO(buffer_obj)
         bio.close()
 
+        # When/Then
         with pytest.raises(ValueError, match="I/O operation on a closed BufferIO object"):
             bio.resize(METADATA_SIZE + 2048)
 
     def test_resize_fails_on_readonly_buffer(self, temp_dir_path):
-        """Test that resize raises ValueError on read-only buffer."""
+        """Test that resize raises TypeError on read-only buffer."""
+        # Given
         file_path = str(temp_dir_path / "resize_readonly.bin")
         buffer_obj = BufferObject(file_path, METADATA_SIZE + 1024, overwrite=True)
 
@@ -1081,14 +1088,17 @@ class TestResizeOperations:
             bio.close()
             bio_ro = BufferIO(BufferObject(file_path))  # Re-open as read-only
 
-            with pytest.raises(ValueError, match="Cannot resize a read-only buffer"):
+            # When/Then
+            with pytest.raises(TypeError, match="Operation 'write' is not supported in read-only mode"):
                 bio_ro.resize(METADATA_SIZE + 2048)
 
     def test_resize_fails_on_zero_capacity(self, temp_dir_path):
         """Test that resize raises ValueError on zero capacity."""
+        # Given
         file_path = str(temp_dir_path / "resize_zero.bin")
         buffer_obj = BufferObject(file_path, METADATA_SIZE + 1024, overwrite=True)
 
         with BufferIO(buffer_obj) as bio:
-            with pytest.raises(ValueError, match="Cannot resize buffer to 0"):
+            # When/Then
+            with pytest.raises(ValueError, match=f"New size must be at least {METADATA_SIZE} bytes, got 0"):
                 bio.resize(0)

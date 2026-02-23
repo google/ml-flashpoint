@@ -615,11 +615,11 @@ TEST_F(BufferHelperTest, UnmapAndCloseFailsWithValidPtrAndZeroSize) {
 
 // Verifies that resizing to a larger size succeeds and preserves data.
 TEST_F(BufferHelperTest, ResizeMmapSucceedsToLargerSize) {
+  // Given
   const size_t initial_size = 1024;
   const size_t new_size = 2048;
   const std::string content = "Some data to preserve";
 
-  // create file and write data
   int fd = -1;
   size_t out_size = 0;
   void* ptr = MAP_FAILED;
@@ -629,27 +629,29 @@ TEST_F(BufferHelperTest, ResizeMmapSucceedsToLargerSize) {
 
   std::memcpy(ptr, content.c_str(), content.size());
 
-  // resize
+  // When
   status = resize_mmap(fd, new_size, ptr, out_size);
+
+  // Then
   ASSERT_TRUE(status.ok());
   EXPECT_EQ(out_size, new_size);
   EXPECT_NE(ptr, nullptr);
   EXPECT_NE(ptr, MAP_FAILED);
 
-  // verify content preserved
+  // Verify content preserved
   EXPECT_EQ(std::memcmp(ptr, content.c_str(), content.size()), 0);
 
-  // clean up
+  // Cleanup
   SafeUnmapAndClose(fd, ptr, out_size);
 }
 
 // Verifies that resizing to a smaller size succeeds and truncates data.
 TEST_F(BufferHelperTest, ResizeMmapSucceedsToSmallerSize) {
+  // Given
   const size_t initial_size = 1024;
   const size_t new_size = 512;
   const std::string content = "Some data to preserve";
 
-  // create file and write data
   int fd = -1;
   size_t out_size = 0;
   void* ptr = MAP_FAILED;
@@ -659,72 +661,64 @@ TEST_F(BufferHelperTest, ResizeMmapSucceedsToSmallerSize) {
 
   std::memcpy(ptr, content.c_str(), content.size());
 
-  // resize
+  // When
   status = resize_mmap(fd, new_size, ptr, out_size);
+
+  // Then
   ASSERT_TRUE(status.ok());
   EXPECT_EQ(out_size, new_size);
   EXPECT_NE(ptr, nullptr);
   EXPECT_NE(ptr, MAP_FAILED);
 
-  // verify content preserved (it fits in new size)
+  // Verify content preserved (it fits in new size)
   EXPECT_EQ(std::memcmp(ptr, content.c_str(), content.size()), 0);
 
-  // clean up
+  // Cleanup
   SafeUnmapAndClose(fd, ptr, out_size);
 }
 
 // Verifies that resize fails with invalid fd
 TEST_F(BufferHelperTest, ResizeMmapFailsOnInvalidFd) {
+  // Given
   void* ptr = nullptr;
   size_t size = 1024;
+
+  // When
   absl::Status status = resize_mmap(-1, 2048, ptr, size);
+
+  // Then
   EXPECT_FALSE(status.ok());
   EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
 }
 
 // Verifies failure when ftruncate fails (e.g., read-only fd)
 TEST_F(BufferHelperTest, ResizeMmapFailsOnFtruncateFailure) {
-  // Create file first
+  // Given
   CreateEmptyFile(test_path_);
+  CreateFileWithContent(test_path_, "data");
 
   // Open as Read-Only
   int fd = open(test_path_.c_str(), O_RDONLY);
   ASSERT_NE(fd, -1);
 
   // Map it (read-only map)
-  size_t size = 0;
-  void* ptr = nullptr;
-  // We need a valid map to simulate a real resize attempt,
-  // or at least a valid pointer if the function checks it.
-  // But resize_mmap calls ftruncate first or munmap first?
-  // It calls munmap, then ftruncate.
-  // We need to pass a valid-looking ptr/size so it tries to unmap (which might
-  // work or fail depending on if we actually mapped it), then it tries
-  // ftruncate which should fail on RO fd.
-
-  // To be safe, let's actually map it RO.
   struct stat sb;
-  // Need non-zero size for mmap
-  // So let's write something first.
-  close(fd);
-  CreateFileWithContent(test_path_, "data");
-  fd = open(test_path_.c_str(), O_RDONLY);
   fstat(fd, &sb);
-  size = sb.st_size;
-  ptr = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+  size_t size = sb.st_size;
+  void* ptr = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
   ASSERT_NE(ptr, MAP_FAILED);
 
+  // When
   absl::Status status = resize_mmap(fd, size * 2, ptr, size);
+
+  // Then
   EXPECT_FALSE(status.ok());
-  // Expect ftruncate failure
   EXPECT_THAT(status.message(), testing::HasSubstr("ftruncate() failed"));
 
   // Cleanup
-  if (ptr != nullptr && ptr != MAP_FAILED)
-    munmap(ptr, size);  // Resize might have unmapped it?
-  // Actually resize_mmap sets ptr to nullptr after unmap.
-  // If it failed at ftruncate, ptr is nullptr.
-  // But we still need to close fd.
+  if (ptr != nullptr && ptr != MAP_FAILED) {
+    munmap(ptr, size);
+  }
   close(fd);
 }
 

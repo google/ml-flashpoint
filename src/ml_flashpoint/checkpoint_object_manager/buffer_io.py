@@ -413,6 +413,9 @@ class BufferIO:
         self._check_validity("write")
         _LOGGER.info("Resizing BufferIO from %d to %d bytes.", len(self._mv), new_size)
 
+        if new_size < METADATA_SIZE:
+            raise ValueError(f"New size must be at least {METADATA_SIZE} bytes, got {new_size}.")
+
         # 1. Release the memoryview
         if self._mv:
             self._mv.release()
@@ -431,10 +434,6 @@ class BufferIO:
         except Exception:
             _LOGGER.exception("Failed to recreate memoryview after resize.")
             raise ValueError("Failed to recreate memoryview after resize.")
-
-        if len(self._mv) < METADATA_SIZE:
-            # This should not happen if new_size is validated correctly before calling resize.
-            raise ValueError(f"Resize resulted in a buffer smaller than metadata size: {len(self._mv)}")
 
         # 4. Re-map metadata
         # Since the buffer might have moved in memory, we need to refresh the metadata view.

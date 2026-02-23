@@ -270,5 +270,45 @@ absl::Status unmap_and_close(int fd, void* data_ptr, size_t data_size,
   return absl::OkStatus();
 }
 
+absl::Status resize_mmap(int fd, size_t new_size, void*& out_data_ptr,
+                         size_t& out_data_size) {
+  // @brief Resizes the memory map.
+  //
+  // This function assumes `out_data_ptr` is currently mapped with
+  // `out_data_size`. It unmaps it, ftruncates the file, and remaps it with
+  // `new_size`.
+
+  if (fd == -1) {
+    return absl::InvalidArgumentError("Invalid file descriptor for resize.");
+  }
+  if (out_data_ptr == MAP_FAILED || out_data_size == 0) {
+    return absl::InvalidArgumentError(
+        "Invalid data pointer or size for resize.");
+  }
+
+  // 1. Unmap existing
+  if (munmap(out_data_ptr, out_data_size) == -1) {
+    return ErrnoToStatus("munmap() failed during resize");
+  }
+  out_data_ptr = nullptr;
+
+  // 2. Truncate
+  if (ftruncate(fd, new_size) == -1) {
+    return ErrnoToStatus("ftruncate() failed during resize");
+  }
+
+  // 3. Mmap new size
+  void* ptr = mmap(NULL, new_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if (ptr == MAP_FAILED) {
+    return ErrnoToStatus("mmap() failed during resize");
+  }
+
+  out_data_ptr = ptr;
+  out_data_size = new_size;
+
+  LOG(INFO) << "Successfully resized mmap to " << new_size;
+  return absl::OkStatus();
+}
+
 }  // namespace
    // ml_flashpoint::checkpoint_object_manager::buffer_object::internal

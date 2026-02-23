@@ -46,6 +46,10 @@ absl::Status open_file_and_mmap_ro(const std::string& object_id, int& out_fd,
 absl::Status unmap_and_close(int fd, void* data_ptr, size_t data_size,
                              std::optional<size_t> truncate_size);
 
+// Resizes the file and remaps it into memory.
+absl::Status resize_mmap(int fd, size_t new_size, void*& out_data_ptr,
+                         size_t& out_data_size);
+
 };  // namespace
     // ml_flashpoint::checkpoint_object_manager::buffer_object::internal
 

@@ -197,6 +197,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
             + f"'{checkpoint_io.__class__.__name__}'."
         )
 
+    ctx = torch_mp.get_context("spawn")
     save_strategy = MLFlashpointMegatronAsyncSaveStrategy(
         storage_writer=MemoryStorageWriter(
             checkpoint_saver=DefaultMLFlashpointCheckpointSaver(
@@ -208,7 +209,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
                 initial_buffer_size_bytes=initial_write_buffer_size_bytes,
                 use_optimized_save=use_optimized_save,
             ),
-            mp_manager=torch_mp.Manager(),
+            mp_manager=ctx.Manager(),
             thread_count=write_thread_count,
         )
     )

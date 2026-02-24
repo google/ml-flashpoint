@@ -794,6 +794,44 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         _, kwargs = spy_memory_storage_writer_init.call_args
         assert kwargs["thread_count"] == expected_thread_count
 
+    def test_spawn_context_used_for_mp_manager(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
+        """Tests that torch_mp.get_context('spawn').Manager() is correctly instantiated and passed."""
+        # Given
+        trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.callbacks = [mocker.MagicMock(spec=MLFlashpointCheckpointCallback)]
+        trainer.strategy = mocker.MagicMock(spec=nl_strategies.MegatronStrategy)
+        original_checkpoint_io = mocker.MagicMock(spec=MegatronCheckpointIO)
+        trainer.strategy.checkpoint_io = original_checkpoint_io
+        base_container = "/test_base_container"
+
+        mock_get_context = mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.torch_mp.get_context")
+
+        mock_ctx = mock_get_context.return_value  # The mocked context object
+        mock_manager_instance = mock_ctx.Manager.return_value  # The mocked manager instance
+
+        spy_memory_storage_writer_init = mocker.spy(MemoryStorageWriter, "__init__")
+
+        # When
+        wrap_trainer_checkpoint_io_with_mlflashpoint(
+            trainer,
+            base_container,
+            mock_ckpt_obj_manager,
+            mock_replication_manager,
+            async_save=True,
+            checkpoint_loader=mocker.MagicMock(spec=DefaultMLFlashpointCheckpointLoader),
+        )
+
+        # Verify get_context was called explicitly with 'spawn'
+        mock_get_context.assert_called_once_with("spawn")
+
+        # Verify Manager() was called on the correct spawn context
+        mock_ctx.Manager.assert_called_once()
+
+        # Verify the exact Manager instance was passed to MemoryStorageWriter
+        spy_memory_storage_writer_init.assert_called_once()
+        _, kwargs = spy_memory_storage_writer_init.call_args
+        assert kwargs["mp_manager"] is mock_manager_instance
+
     @pytest.mark.parametrize("always_save_context, expected_value", [(True, True), (False, False)])
     def test_always_save_context_forwarding(
         self, mocker, mock_ckpt_obj_manager, mock_replication_manager, always_save_context, expected_value

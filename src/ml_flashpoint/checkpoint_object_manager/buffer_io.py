@@ -405,10 +405,10 @@ class BufferIO:
             self._pos = -1
 
     def resize(self, new_size: int) -> None:
-        """Resizes the buffer to the new size.
+        """Resizes the buffer to the new size (including metadata size).
 
         Args:
-            new_size: The new size of the buffer in bytes.
+            new_size: The new size of the buffer in bytes. Must be >= METADATA_SIZE.
         """
         self._check_validity("write")
         _LOGGER.info("Resizing BufferIO from %d to %d bytes.", len(self._mv), new_size)

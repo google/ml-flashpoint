@@ -614,10 +614,20 @@ TEST_F(BufferHelperTest, UnmapAndCloseFailsWithValidPtrAndZeroSize) {
 // --- Tests for resize_mmap ---
 
 // Verifies that resizing to a larger size succeeds and preserves data.
-TEST_F(BufferHelperTest, ResizeMmapSucceedsToLargerSize) {
+struct ResizeParams {
+  size_t initial_size;
+  size_t new_size;
+};
+
+class ResizeMmapParamsTest
+    : public BufferHelperTest,
+      public ::testing::WithParamInterface<ResizeParams> {};
+
+TEST_P(ResizeMmapParamsTest, ResizeMmapSucceedsToLargerSize) {
   // Given
-  const size_t initial_size = 1024;
-  const size_t new_size = 2048;
+  const ResizeParams& params = GetParam();
+  const size_t initial_size = params.initial_size;
+  const size_t new_size = params.new_size;
   const std::string content = "Some data to preserve";
 
   int fd = -1;
@@ -644,6 +654,16 @@ TEST_F(BufferHelperTest, ResizeMmapSucceedsToLargerSize) {
   // Cleanup
   SafeUnmapAndClose(fd, ptr, out_size);
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    ResizeMmapTests, ResizeMmapParamsTest,
+    ::testing::Values(ResizeParams{1024, 2048},  // Aligned -> Aligned
+                      ResizeParams{1024, 2011},  // Aligned -> Unaligned
+                      ResizeParams{1025, 2048},  // Unaligned -> Aligned
+                      ResizeParams{1025, 2011},  // Unaligned -> Unaligned
+                      ResizeParams{4096, 8192},  // Page -> Page
+                      ResizeParams{4096, 4097}   // Page -> Unaligned
+                      ));
 
 // Verifies that resizing to a smaller size succeeds and truncates data.
 TEST_F(BufferHelperTest, ResizeMmapSucceedsToSmallerSize) {

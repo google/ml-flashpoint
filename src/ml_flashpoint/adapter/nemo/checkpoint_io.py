@@ -20,14 +20,13 @@ from typing import Any, Optional, Union, cast
 import torch
 from lightning.fabric.utilities.types import _PATH
 from megatron.core import dist_checkpointing as mcore_dist_checkpointing
-from megatron.core.dist_checkpointing import state_dict_utils as mcore_state_dict_utils
 from megatron.core.dist_checkpointing.strategies.async_utils import (
     AsyncCallsQueue,
 )
 from megatron.core.dist_checkpointing.strategies.async_utils import (
     AsyncRequest as MegatronAsyncRequest,
 )
-from megatron.core.dist_checkpointing.strategies.common import COMMON_STATE_FNAME, TorchCommonLoadStrategy
+from megatron.core.dist_checkpointing.strategies.common import TorchCommonLoadStrategy
 from nemo.lightning.io.pl import MegatronCheckpointIO, TrainerContext, _fix_tensors_device
 from nemo.lightning.pytorch.trainer import Trainer
 from nemo.utils.callbacks.dist_ckpt_io import AsyncCompatibleCheckpointIO, AsyncFinalizableCheckpointIO
@@ -39,6 +38,7 @@ from ml_flashpoint.adapter.megatron.load_strategies import (
 from ml_flashpoint.adapter.megatron.save_strategies import (
     MLFlashpointMegatronAsyncSaveStrategy,
 )
+from ml_flashpoint.adapter.megatron.save_utils import save_local_aware_megatron_checkpoint
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import (
     CheckpointObjectManager,
 )
@@ -134,41 +134,20 @@ class MLFlashpointCheckpointIO(AsyncCompatibleCheckpointIO):
             return self.fallback_checkpoint_io.save_checkpoint(checkpoint, path)
         _LOGGER.info("Use ML Flashpoint checkpoint io. Async_save: '%s'", self.async_save)
 
-        # Mimic the CommonStrategy logic, on each rank.
-        # We split the "common" data from the "sharded" data, write the common data to a specific file on each rank,
-        # and continue with checkpointing on the "sharded" data.
-        # We do this explicitly here rather than using the mcore_dist_checkpointing.save API directly because that
-        # has rank-specific logic that writes common data only on global rank 0, and we want to write it on all ranks.
-        # Other than that, this logic should mimic `megatron.core.dist_checkpointing.save`.
-        sharded_state_dict, common_state_dict = mcore_state_dict_utils.save_preprocess(checkpoint)
+        # Use the helper for local-aware megatron save
+        optional_async_request = save_local_aware_megatron_checkpoint(
+            checkpoint=checkpoint,
+            checkpoint_dir=path,
+            save_strategy=self.save_strategy,
+            async_save=self.async_save,
+        )
 
-        if torch.distributed.get_node_local_rank() == 0:
-            # Since we are writing the common state directly here before executing the save orchestration,
-            # we need to ensure the parent checkpoint dir exists.
-            _LOGGER.debug("Saving common_state_dict...")
-            os.makedirs(path, exist_ok=True)
-            torch.save(common_state_dict, os.path.join(path, COMMON_STATE_FNAME))
+        # Handle optional context save (only if enabled)
         if self.always_save_context:
             _LOGGER.debug("Saving context...")
             self._save_context(path)
 
-        try:
-            if self.async_save:
-                async_request = self.save_strategy.async_save(
-                    sharded_state_dict=sharded_state_dict,
-                    checkpoint_dir=path,
-                )
-                return async_request
-            else:
-                # For sync save, no AsyncRequest is needed, so returning None.
-                self.save_strategy.save(
-                    sharded_state_dict=sharded_state_dict,
-                    checkpoint_dir=path,
-                )
-                return None
-        except Exception:
-            _LOGGER.exception("Failed to save ML Flashpoint checkpoint. Skipping saving and continuing.")
-            return None
+        return optional_async_request
 
     @log_execution_time(logger=_LOGGER, name="MLFlashpointCheckpointIO._save_context", level=logging.INFO)
     def _save_context(self, path: _PATH) -> Optional[threading.Thread]:
@@ -323,7 +302,7 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
             raise ValueError("Incompatible wrapped checkpoint_io type: %s", type(checkpoint_io))
 
         super().__init__(checkpoint_io)
-        self._mlf_async_calls_queue = AsyncCallsQueue()
+        self._mlf_async_calls_queue = AsyncCallsQueue(persistent=True)
         self._alt_async_calls_queue = AsyncCallsQueue()
 
     @property
@@ -420,3 +399,15 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
         ):
             # Can't do finalization now because some ranks might be lost
             _LOGGER.warning("Some async checkpoint saves might be not finalized properly.")
+
+        if hasattr(self._mlf_async_calls_queue, "close"):
+            self._mlf_async_calls_queue.close()
+            # Monkeypatch persistent caller's close method to prevent double-close error at exit
+            # which happens if __del__ is called after process group destruction.
+            # We access the caller directly if possible as AsyncCallsQueue might store it as 'persistent_caller'.
+            caller = getattr(self._mlf_async_calls_queue, "persistent_caller", None)
+            if caller and hasattr(caller, "close"):
+                # We already closed the queue (and hopefully the caller), so we prevent future closes.
+                # Specifically, PersistentAsyncCaller.__del__ calls close() which calls torch.distributed.get_rank(),
+                # causing a crash if the process group is already destroyed.
+                caller.close = lambda: None

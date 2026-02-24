@@ -30,6 +30,20 @@ def training_step_fixture():
     _TRAINING_STEP.value = initial_value
 
 
+@pytest.fixture(autouse=True)
+def reset_static_rank():
+    """Fixture to reset the static rank value for tests."""
+    # Import locally to avoid early import issues if any
+    from ml_flashpoint.core import mlf_logging
+
+    initial_value = mlf_logging._STATIC_RANK
+    # Force reset to default before test (in case polluted by previous tests)
+    mlf_logging._STATIC_RANK = mlf_logging._MISSING_NONNEG_NUMERIC_VAL
+    yield
+    # Restore after test
+    mlf_logging._STATIC_RANK = initial_value
+
+
 class TestRankFormatter:
     @pytest.fixture
     def formatter(self):
@@ -68,6 +82,25 @@ class TestRankFormatter:
 
         assert "[Rank -1]" in formatted_message
         torch.distributed.is_initialized.assert_called_once()
+
+    def test_format_with_static_rank_precedence(self, mocker, formatter, record):
+        """Tests that _STATIC_RANK takes precedence over torch.distributed."""
+        # Given
+        from ml_flashpoint.core import mlf_logging
+
+        static_rank = 99
+        dist_rank = 1
+        mlf_logging._STATIC_RANK = static_rank
+        mocker.patch("torch.distributed.is_initialized", return_value=True)
+        mocker.patch("torch.distributed.get_rank", return_value=dist_rank)
+
+        # When
+        formatted_message = formatter.format(record)
+
+        # Then
+        assert f"[Rank {static_rank}]" in formatted_message
+        # Should NOT call get_rank if static rank is present (optimization check)
+        torch.distributed.get_rank.assert_not_called()
 
     @pytest.mark.parametrize("step_value", [0, 1, 100])
     def test_format_with_valid_training_step(self, mocker, formatter, record, step_value, training_step_fixture):
@@ -198,3 +231,19 @@ class TestUpdateTrainingStep:
 
         # Then
         assert _TRAINING_STEP.value == new_value
+
+
+class TestSetupWorkerLogging:
+    def test_setup_worker_logging(self, training_step_fixture):
+        # Given
+        from ml_flashpoint.core import mlf_logging
+
+        rank = 42
+        step = 100
+
+        # When
+        mlf_logging.setup_worker_logging(rank, step)
+
+        # Then
+        assert mlf_logging._STATIC_RANK == rank
+        assert mlf_logging.get_current_step() == step

@@ -197,18 +197,26 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
             + f"'{checkpoint_io.__class__.__name__}'."
         )
 
+    # Use 'spawn' instead of 'fork' for the multiprocessing context.
+    # By default, 'fork' causes the background SyncManager process to inherit
+    # the parent's CUDA context. If the main training process is forcefully
+    # killed (e.g., via SIGKILL during NVRX in-job restarts), the orphaned
+    # manager process keeps the GPU memory locked, leading to CUDA Out-Of-Memory
+    # (OOM) errors upon restart. 'spawn' launches a clean interpreter without
+    # the inherited CUDA state, allowing the GPU memory to be freed instantly.
+    ctx = torch_mp.get_context("spawn")
     save_strategy = MLFlashpointMegatronAsyncSaveStrategy(
         storage_writer=MemoryStorageWriter(
             checkpoint_saver=DefaultMLFlashpointCheckpointSaver(
                 global_rank_getter=torch.distributed.get_rank,
                 local_rank_getter=torch.distributed.get_node_local_rank,
-                global_barrier_func=lambda: torch.distributed.barrier(),
+                global_barrier_func=torch.distributed.barrier,
                 ckpt_obj_manager=ckpt_obj_manager,
                 replication_manager=replication_manager,
                 initial_buffer_size_bytes=initial_write_buffer_size_bytes,
                 use_optimized_save=use_optimized_save,
             ),
-            mp_manager=torch_mp.Manager(),
+            mp_manager=ctx.Manager(),
             thread_count=write_thread_count,
         )
     )

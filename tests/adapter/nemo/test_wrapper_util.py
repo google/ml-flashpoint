@@ -821,6 +821,7 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
             checkpoint_loader=mocker.MagicMock(spec=DefaultMLFlashpointCheckpointLoader),
         )
 
+        # Then
         # Verify get_context was called explicitly with 'spawn'
         mock_get_context.assert_called_once_with("spawn")
 

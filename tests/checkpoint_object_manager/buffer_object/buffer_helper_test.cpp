@@ -611,5 +611,120 @@ TEST_F(BufferHelperTest, UnmapAndCloseFailsWithValidPtrAndZeroSize) {
   ASSERT_EQ(errno, EBADF);
 }
 
+// --- Tests for resize_mmap ---
+
+// Verifies that resizing to a larger size succeeds and preserves data.
+struct ResizeParams {
+  size_t initial_size;
+  size_t new_size;
+};
+
+class ResizeMmapCombinedTest
+    : public BufferHelperTest,
+      public ::testing::WithParamInterface<ResizeParams> {};
+
+TEST_P(ResizeMmapCombinedTest, ResizeMmapSucceeds) {
+  // Given
+  const ResizeParams& params = GetParam();
+  const size_t initial_size = params.initial_size;
+  const size_t new_size = params.new_size;
+  const std::string content = "Some data to preserve";
+
+  int fd = -1;
+  size_t out_size = 0;
+  void* ptr = MAP_FAILED;
+  absl::Status status = create_file_and_mmap(test_path_, initial_size, fd,
+                                             out_size, ptr, /*overwrite=*/true);
+  ASSERT_TRUE(status.ok());
+
+  // Ensure content fits in initial size
+  ASSERT_LE(content.size(), initial_size);
+  std::memcpy(ptr, content.c_str(), content.size());
+
+  // When
+  status = resize_mmap(fd, new_size, ptr, out_size);
+
+  // Then
+  ASSERT_TRUE(status.ok());
+  EXPECT_EQ(out_size, new_size);
+  EXPECT_NE(ptr, nullptr);
+  EXPECT_NE(ptr, MAP_FAILED);
+
+  // Verify content preserved (up to the new size)
+  size_t expected_len = std::min(content.size(), new_size);
+  EXPECT_EQ(std::memcmp(ptr, content.c_str(), expected_len), 0);
+
+  // Cleanup
+  SafeUnmapAndClose(fd, ptr, out_size);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ResizeMmapCombinedTests, ResizeMmapCombinedTest,
+    ::testing::Values(
+        // Larger
+        ResizeParams{1024, 2048},  // Aligned -> Aligned
+        ResizeParams{1024, 2011},  // Aligned -> Unaligned
+        ResizeParams{1025, 2048},  // Unaligned -> Aligned
+        ResizeParams{1025, 2011},  // Unaligned -> Unaligned
+        ResizeParams{4096, 8192},  // Page -> Page
+        ResizeParams{4096, 4097},  // Page -> Unaligned
+        // Smaller
+        ResizeParams{2048, 1024},  // Aligned -> Aligned
+        ResizeParams{2048, 1011},  // Aligned -> Unaligned
+        ResizeParams{2049, 1024},  // Unaligned -> Aligned
+        ResizeParams{2049, 1011},  // Unaligned -> Unaligned
+        ResizeParams{8192, 4096},  // Page -> Page
+        ResizeParams{8192, 4097},  // Page -> Unaligned
+        // Same
+        ResizeParams{1024, 1024},  // Aligned -> Aligned (Same)
+        ResizeParams{4096, 4096},  // Page -> Page (Same)
+        ResizeParams{1025, 1025}   // Unaligned -> Unaligned (Same)
+        ));
+
+// Verifies that resize fails with invalid fd
+TEST_F(BufferHelperTest, ResizeMmapFailsOnInvalidFd) {
+  // Given
+  void* ptr = nullptr;
+  size_t size = 1024;
+
+  // When
+  absl::Status status = resize_mmap(-1, 2048, ptr, size);
+
+  // Then
+  EXPECT_FALSE(status.ok());
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+}
+
+// Verifies failure when ftruncate fails (e.g., read-only fd)
+TEST_F(BufferHelperTest, ResizeMmapFailsOnFtruncateFailure) {
+  // Given
+  CreateEmptyFile(test_path_);
+  CreateFileWithContent(test_path_, "data");
+
+  // Open as Read-Only
+  int fd = open(test_path_.c_str(), O_RDONLY);
+  ASSERT_NE(fd, -1);
+
+  // Map it (read-only map)
+  struct stat sb;
+  fstat(fd, &sb);
+  size_t size = sb.st_size;
+  void* ptr = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+  ASSERT_NE(ptr, MAP_FAILED);
+
+  // When
+  absl::Status status = resize_mmap(fd, size * 2, ptr, size);
+
+  // Then
+  EXPECT_FALSE(status.ok());
+  EXPECT_THAT(status.message(), testing::HasSubstr("ftruncate() failed"));
+
+  // Cleanup
+  if (ptr != nullptr && ptr != MAP_FAILED) {
+    munmap(ptr, size);
+  }
+  close(fd);
+}
+
 }  // namespace
    // ml_flashpoint::checkpoint_object_manager::buffer_object::internal

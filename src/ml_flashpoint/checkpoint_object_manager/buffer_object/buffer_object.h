@@ -71,6 +71,9 @@ class BufferObject {
   // close the buffer object, optionally truncates the file before closing
   void close(std::optional<size_t> truncate_size = std::nullopt) noexcept;
 
+  // Resizes the buffer to the new capacity.
+  void resize(size_t new_capacity);
+
  private:
   std::string object_id_;  // The unique identifier of the buffer, typically the
                            // filename.

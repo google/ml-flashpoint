@@ -1014,3 +1014,179 @@ class TestFormatSignature:
         with BufferIO(buffer_obj) as bio:
             with pytest.raises(ValueError, match="Format signature must be at most 8 bytes"):
                 bio.set_format_signature(b"TOO_LONG_SIGNATURE")
+
+
+class TestResizeOperations:
+    def test_resize_increases_capacity(self, temp_dir_path):
+        """Test that resize increases the buffer capacity and preserves data."""
+        # Given
+        file_path = str(temp_dir_path / "resize_capacity.bin")
+        initial_size = METADATA_SIZE + 1024
+        buffer_obj = BufferObject(file_path, initial_size, overwrite=True)
+
+        with BufferIO(buffer_obj) as bio:
+            assert bio.buffer_obj.get_capacity() == initial_size
+
+            # Write some data
+            data = b"some data before resize"
+            bio.write(data)
+
+            # When
+            new_size = initial_size * 2
+            bio.resize(new_size)
+
+            # Then
+            # Verify capacity
+            assert bio.buffer_obj.get_capacity() == new_size
+
+            # Verify content is preserved
+            bio.seek(0)
+            assert bio.read(len(data)) == data
+
+    def test_resize_updates_memoryview(self, temp_dir_path):
+        """Test that resize updates the internal memoryview and it is valid."""
+        # Given
+        file_path = str(temp_dir_path / "resize_mv.bin")
+        initial_size = METADATA_SIZE + 1024
+        buffer_obj = BufferObject(file_path, initial_size, overwrite=True)
+
+        with BufferIO(buffer_obj) as bio:
+            old_mv_len = len(bio._mv)
+
+            # When
+            new_size = initial_size + 1024
+            bio.resize(new_size)
+
+            # Then
+            # Verify memoryview length updated
+            assert len(bio._mv) == new_size
+
+            # Verify we can write to the new area
+            bio.seek(old_mv_len - METADATA_SIZE)  # Go to end of old area
+            bio.write(b"new data")  # Should succeed
+
+    def test_resize_fails_on_closed_buffer(self, temp_dir_path):
+        """Test that resize raises ValueError on closed buffer."""
+        # Given
+        file_path = str(temp_dir_path / "resize_closed.bin")
+        buffer_obj = BufferObject(file_path, METADATA_SIZE + 1024, overwrite=True)
+        bio = BufferIO(buffer_obj)
+        bio.close()
+
+        # When/Then
+        with pytest.raises(ValueError, match="I/O operation on a closed BufferIO object"):
+            bio.resize(METADATA_SIZE + 2048)
+
+    def test_resize_fails_on_readonly_buffer(self, temp_dir_path):
+        """Test that resize raises TypeError on read-only buffer."""
+        # Given
+        file_path = str(temp_dir_path / "resize_readonly.bin")
+        buffer_obj = BufferObject(file_path, METADATA_SIZE + 1024, overwrite=True)
+
+        with BufferIO(buffer_obj) as bio:
+            # Make it read-only
+            bio.close()
+            bio_ro = BufferIO(BufferObject(file_path))  # Re-open as read-only
+
+            # When/Then
+            with pytest.raises(TypeError, match="Operation 'write' is not supported in read-only mode"):
+                bio_ro.resize(METADATA_SIZE + 2048)
+
+    def test_resize_fails_on_zero_capacity(self, temp_dir_path):
+        """Test that resize raises ValueError on zero capacity."""
+        # Given
+        file_path = str(temp_dir_path / "resize_zero.bin")
+        buffer_obj = BufferObject(file_path, METADATA_SIZE + 1024, overwrite=True)
+
+        with BufferIO(buffer_obj) as bio:
+            # When/Then
+            with pytest.raises(ValueError, match=f"New size must be at least {METADATA_SIZE} bytes, got 0"):
+                bio.resize(0)
+
+    def test_resize_boundary_values(self, temp_dir_path):
+        """Test resize with boundary values around METADATA_SIZE."""
+        # Given
+        file_path = str(temp_dir_path / "resize_boundary.bin")
+        buffer_obj = BufferObject(file_path, METADATA_SIZE + 1024, overwrite=True)
+
+        with BufferIO(buffer_obj) as bio:
+            # 1. METADATA_SIZE - 1 (Should Fail)
+            with pytest.raises(ValueError, match=f"New size must be at least {METADATA_SIZE} bytes"):
+                bio.resize(METADATA_SIZE - 1)
+
+            # 2. METADATA_SIZE (Should Succeed)
+            bio.resize(METADATA_SIZE)
+            assert bio.buffer_obj.get_capacity() == METADATA_SIZE
+            assert len(bio._mv) == METADATA_SIZE
+
+            # 3. METADATA_SIZE + 1 (Should Succeed)
+            bio.resize(METADATA_SIZE + 1)
+            assert bio.buffer_obj.get_capacity() == METADATA_SIZE + 1
+            assert len(bio._mv) == METADATA_SIZE + 1
+
+    def test_resize_preserves_metadata_integrity(self, temp_dir_path):
+        """Test that metadata (e.g. format signature and len_written_data) remains correct after a resize."""
+        # Given
+        file_path = str(temp_dir_path / "resize_metadata.bin")
+        buffer_obj = BufferObject(file_path, METADATA_SIZE + 1024, overwrite=True)
+        custom_sig = b"TESTSIGN"
+        test_data = b"Some data to adjust len_written_data"
+
+        with BufferIO(buffer_obj) as bio:
+            # Set metadata before resize
+            bio.set_format_signature(custom_sig)
+            bio.write(test_data)
+
+            # Verify initial state
+            assert bio.format_signature == custom_sig
+            assert bio._metadata.len_written_data == len(test_data)
+
+            # Capture the full metadata structure as bytes
+            original_metadata_bytes = bytes(bio._metadata)
+
+            # When
+            # Resize to a larger size (which might move memory)
+            bio.resize(METADATA_SIZE + 2048)
+
+            # Then
+            # Verify metadata is still accessible and correct
+            assert bio.format_signature == custom_sig
+            assert bio._metadata.len_written_data == len(test_data)
+
+            # Verify the FULL metadata structure is byte-identical
+            assert bytes(bio._metadata) == original_metadata_bytes
+
+            # Verify we can still update it
+            new_sig = b"NEWSIGN!"
+            bio.set_format_signature(new_sig)
+            assert bio.format_signature == new_sig
+
+            # Verify we can still update len_written_data via write
+            more_data = b" more"
+            bio.write(more_data)
+            assert bio._metadata.len_written_data == len(test_data) + len(more_data)
+
+    def test_resize_failure_propagates_and_invalidates_buffer(self, mock_writable_buffer_obj, mocker):
+        """Test that if C++ resize fails, the exception propagates and memoryview remains released."""
+        # Given
+        bio = BufferIO(mock_writable_buffer_obj)
+        error_message = "Resize failed!"
+
+        # Mock the resize method on the underlying object to raise an exception
+        # Note: MockBufferObject doesn't naturally have resize, so we attach a mock.
+        mock_writable_buffer_obj.resize = mocker.Mock(side_effect=RuntimeError(error_message))
+
+        # When
+        with pytest.raises(RuntimeError, match=error_message):
+            bio.resize(METADATA_SIZE + 2048)
+
+        # Then
+        # 1. Verify memoryview is None (it was released before the C++ call)
+        assert bio._mv is None
+
+        # 2. Verify subsequent operations fail because _mv is None
+        # Note: The exact error depends on implementation, usually TypeError or AttributeError
+        # when accessing None, or ValueError if checked.
+        # In BufferIO.write: len(self._mv) -> TypeError: object of type 'NoneType' has no len()
+        with pytest.raises(TypeError):
+            bio.write(b"data")

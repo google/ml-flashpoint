@@ -404,6 +404,46 @@ class BufferIO:
             # Set position to -1, a common convention for a closed stream.
             self._pos = -1
 
+    def resize(self, new_size: int) -> None:
+        """Resizes the buffer to the new size (including metadata size).
+
+        Args:
+            new_size: The new size of the buffer in bytes. Must be >= METADATA_SIZE.
+        """
+        self._check_validity("write")
+        _LOGGER.info("Resizing BufferIO from %d to %d bytes.", len(self._mv), new_size)
+
+        if new_size < METADATA_SIZE:
+            raise ValueError(f"New size must be at least {METADATA_SIZE} bytes, got {new_size}.")
+
+        # 1. Release the memoryview
+        if self._mv:
+            self._mv.release()
+            self._mv = None
+
+        # 2. Call C++ resize
+        try:
+            self.buffer_obj.resize(new_size)
+        except Exception:
+            _LOGGER.exception("Failed to resize underlying BufferObject.")
+            raise
+
+        # 3. Recreate the memoryview
+        try:
+            self._mv = memoryview(self.buffer_obj)
+        except Exception:
+            _LOGGER.exception("Failed to recreate memoryview after resize.")
+            raise ValueError("Failed to recreate memoryview after resize.")
+
+        # 4. Re-map metadata
+        # Since the buffer might have moved in memory, we need to refresh the metadata view.
+        try:
+            # We are always in writable mode if we are resizing (resize checks !readonly)
+            self._metadata = BufferMetadataType.from_buffer(self._mv[:METADATA_SIZE])
+        except Exception as e:
+            _LOGGER.exception("Failed to recreate metadata object from buffer slice.")
+            raise IOError(f"Could not initialize metadata from buffer: {e}") from e
+
     # --- Properties and Context Manager ---
 
     @property

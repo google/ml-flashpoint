@@ -28,6 +28,8 @@ from megatron.core.dist_checkpointing.strategies.torch import (
     _replace_state_dict_keys_with_sharded_keys,
     mcore_to_pyt_state_dict,
 )
+from torch.distributed.checkpoint.metadata import Metadata
+from torch.distributed.checkpoint.planner import SavePlan
 from torch.distributed.checkpoint.utils import _DistWrapper
 from typing_extensions import override
 
@@ -94,6 +96,13 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         self._storage_writer: MemoryStorageWriter = storage_writer
         self._checkpoint_saver: MLFlashpointCheckpointSaver = storage_writer.checkpoint_saver
 
+        # Cache for state dict saving
+        self.cached_central_plan: SavePlan | None = None
+        self.cached_local_plan: SavePlan | None = None
+        self.cached_global_metadata: Metadata | None = None
+        self.validated_cache_reuse: bool = False
+        self.use_cached_ckpt_structure: bool = True
+
     @override
     def can_handle_sharded_objects(self) -> bool:
         # Not currently used, but in case it is, ensure this strategy is used for ShardedObjects as well.
@@ -157,13 +166,44 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         # we also use Megatron's SavePlanner during saving for compatibility.
         planner: MCoreSavePlanner = MCoreSavePlanner(can_run_decentralized_global_plan=False)
         world_dist_wrapper = _DistWrapper(group=None, use_dist=not disable_dist, coordinator_rank=0)
-        plan, write_buckets, global_metadata = statedictsaver.generate_plan(
+        # Try twice to validate the generated `central_plan` is the same across iterations
+        # If so, reuse `cached_central_plan` and `cached_global_metadata`
+        # From the 3rd iteration, `save_state_dict_async_plan` will not generate `global_metadata`
+        # (return None) so `self.cached_global_metadata` is reused
+        args_cached_plans = None
+        loaded_all_plans = None
+        if self.use_cached_ckpt_structure:
+            if self.cached_global_metadata:
+                loaded_all_plans = getattr(self.cached_global_metadata, "all_local_plans", None)
+
+            args_cached_plans = (
+                self.cached_central_plan,
+                self.cached_local_plan,
+                self.validated_cache_reuse,
+            )
+
+        (
+            (plan, write_buckets, global_metadata),
+            self.cached_central_plan,
+            self.cached_local_plan,
+            self.validated_cache_reuse,
+        ) = statedictsaver.generate_plan(
             checkpoint_id=checkpoint_id,
             state_dict=pyt_state_dict,
             storage_writer=self._storage_writer,
             planner=planner,
             world_dist_wrapper=world_dist_wrapper,
+            cached_ckpt_structure=args_cached_plans,
+            loaded_all_plans=loaded_all_plans,
         )
+
+        if self.validated_cache_reuse:
+            if global_metadata is None and self.cached_global_metadata:
+                global_metadata = self.cached_global_metadata
+
+        # If we have a valid global_metadata (either new or reused), cache it for next time
+        if global_metadata is not None:
+            self.cached_global_metadata = global_metadata
 
         # 5. Stage to CPU.
         staged_write_buckets = self._storage_writer.stage_write_data_buckets(

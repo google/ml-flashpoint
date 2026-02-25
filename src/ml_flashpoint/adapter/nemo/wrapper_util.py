@@ -73,11 +73,9 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
         An MLFlashpointAutoResume instance configured for ML Flashpoint, wrapping `default_auto_resume`.
     """
     if not flashpoint_base_container:
-        raise ValueError(
-            "The 'flashpoint_base_container' argument cannot be empty.")
+        raise ValueError("The 'flashpoint_base_container' argument cannot be empty.")
 
-    flashpoint_base_container = CheckpointContainerId(
-        flashpoint_base_container)
+    flashpoint_base_container = CheckpointContainerId(flashpoint_base_container)
     ckpt_obj_manager = CheckpointObjectManager()
     replication_manager = ReplicationManager()
     replication_manager.initialize(checkpoint_object_manager=ckpt_obj_manager)
@@ -102,12 +100,10 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
         use_fully_parallel_wrapper=use_fully_parallel_wrapper,
     )
 
-    default_auto_resume_args = vars(
-        default_auto_resume) if default_auto_resume else {}
+    default_auto_resume_args = vars(default_auto_resume) if default_auto_resume else {}
     mlf_auto_resume = MLFlashpointAutoResume(
-        checkpoint_base_container=flashpoint_base_container,
-        checkpoint_loader=ckpt_loader,
-        **default_auto_resume_args)
+        checkpoint_base_container=flashpoint_base_container, checkpoint_loader=ckpt_loader, **default_auto_resume_args
+    )
 
     return mlf_auto_resume
 
@@ -160,8 +156,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
     if trainer is None:
         raise ValueError("The 'trainer' argument cannot be None.")
     if not flashpoint_base_container:
-        raise ValueError(
-            "The 'flashpoint_base_container' argument cannot be empty.")
+        raise ValueError("The 'flashpoint_base_container' argument cannot be empty.")
     if checkpoint_loader is None:
         raise ValueError("The 'checkpoint_loader' argument cannot be None.")
     if ckpt_obj_manager is None:
@@ -169,23 +164,20 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
     if replication_manager is None:
         raise ValueError("The 'replication_manager' argument cannot be None.")
     if write_thread_count < 1:
-        raise ValueError(
-            f"write_thread_count must be >= 1, got {write_thread_count}.")
+        raise ValueError(f"write_thread_count must be >= 1, got {write_thread_count}.")
     if initial_write_buffer_size_bytes <= 0:
-        raise ValueError(
-            f"initial_write_buffer_size_bytes must be > 0, got {initial_write_buffer_size_bytes}."
-        )
+        raise ValueError(f"initial_write_buffer_size_bytes must be > 0, got {initial_write_buffer_size_bytes}.")
 
     callbacks = trainer.callbacks
-    mlflashpoint_enabled = any(
-        isinstance(cb, MLFlashpointCheckpointCallback) for cb in callbacks)
+    mlflashpoint_enabled = any(isinstance(cb, MLFlashpointCheckpointCallback) for cb in callbacks)
     if not mlflashpoint_enabled:
         return
 
     if not isinstance(trainer.strategy, nl_strategies.MegatronStrategy):
         raise ValueError(
-            "Only MegatronStrategy is supported for ML Flashpoint, but got " +
-            f"{trainer.strategy.__class__.__name__} instead.")
+            "Only MegatronStrategy is supported for ML Flashpoint, but got "
+            + f"{trainer.strategy.__class__.__name__} instead."
+        )
 
     checkpoint_io = trainer.strategy.checkpoint_io
 
@@ -213,7 +205,8 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
     if not isinstance(checkpoint_io, expected_type):
         raise ValueError(
             f"Expected checkpoint_io to be of type '{expected_type.__name__}', but was: "
-            + f"'{checkpoint_io.__class__.__name__}'.")
+            + f"'{checkpoint_io.__class__.__name__}'."
+        )
 
     save_strategy = MLFlashpointMegatronAsyncSaveStrategy(
         storage_writer=MemoryStorageWriter(
@@ -228,7 +221,8 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
             ),
             mp_manager=torch_mp.Manager(),
             thread_count=write_thread_count,
-        ))
+        )
+    )
     load_strategy = MLFlashpointMegatronLoadStrategy(
         replication_manager=replication_manager,
         checkpoint_loader=checkpoint_loader,
@@ -250,7 +244,6 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
     )
 
     if async_finalizable_wrapped:
-        ml_flashpoint_checkpoint_io = MLFlashpointAsyncFinalizableCheckpointIO(
-            ml_flashpoint_checkpoint_io)
+        ml_flashpoint_checkpoint_io = MLFlashpointAsyncFinalizableCheckpointIO(ml_flashpoint_checkpoint_io)
 
     trainer.strategy.checkpoint_io = ml_flashpoint_checkpoint_io

@@ -619,11 +619,11 @@ struct ResizeParams {
   size_t new_size;
 };
 
-class ResizeMmapParamsTest
+class ResizeMmapCombinedTest
     : public BufferHelperTest,
       public ::testing::WithParamInterface<ResizeParams> {};
 
-TEST_P(ResizeMmapParamsTest, ResizeMmapSucceedsToLargerSize) {
+TEST_P(ResizeMmapCombinedTest, ResizeMmapSucceeds) {
   // Given
   const ResizeParams& params = GetParam();
   const size_t initial_size = params.initial_size;
@@ -637,6 +637,8 @@ TEST_P(ResizeMmapParamsTest, ResizeMmapSucceedsToLargerSize) {
                                              out_size, ptr, /*overwrite=*/true);
   ASSERT_TRUE(status.ok());
 
+  // Ensure content fits in initial size
+  ASSERT_LE(content.size(), initial_size);
   std::memcpy(ptr, content.c_str(), content.size());
 
   // When
@@ -648,54 +650,36 @@ TEST_P(ResizeMmapParamsTest, ResizeMmapSucceedsToLargerSize) {
   EXPECT_NE(ptr, nullptr);
   EXPECT_NE(ptr, MAP_FAILED);
 
-  // Verify content preserved
-  EXPECT_EQ(std::memcmp(ptr, content.c_str(), content.size()), 0);
+  // Verify content preserved (up to the new size)
+  size_t expected_len = std::min(content.size(), new_size);
+  EXPECT_EQ(std::memcmp(ptr, content.c_str(), expected_len), 0);
 
   // Cleanup
   SafeUnmapAndClose(fd, ptr, out_size);
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    ResizeMmapTests, ResizeMmapParamsTest,
-    ::testing::Values(ResizeParams{1024, 2048},  // Aligned -> Aligned
-                      ResizeParams{1024, 2011},  // Aligned -> Unaligned
-                      ResizeParams{1025, 2048},  // Unaligned -> Aligned
-                      ResizeParams{1025, 2011},  // Unaligned -> Unaligned
-                      ResizeParams{4096, 8192},  // Page -> Page
-                      ResizeParams{4096, 4097}   // Page -> Unaligned
-                      ));
-
-// Verifies that resizing to a smaller size succeeds and truncates data.
-TEST_F(BufferHelperTest, ResizeMmapSucceedsToSmallerSize) {
-  // Given
-  const size_t initial_size = 1024;
-  const size_t new_size = 512;
-  const std::string content = "Some data to preserve";
-
-  int fd = -1;
-  size_t out_size = 0;
-  void* ptr = MAP_FAILED;
-  absl::Status status = create_file_and_mmap(test_path_, initial_size, fd,
-                                             out_size, ptr, /*overwrite=*/true);
-  ASSERT_TRUE(status.ok());
-
-  std::memcpy(ptr, content.c_str(), content.size());
-
-  // When
-  status = resize_mmap(fd, new_size, ptr, out_size);
-
-  // Then
-  ASSERT_TRUE(status.ok());
-  EXPECT_EQ(out_size, new_size);
-  EXPECT_NE(ptr, nullptr);
-  EXPECT_NE(ptr, MAP_FAILED);
-
-  // Verify content preserved (it fits in new size)
-  EXPECT_EQ(std::memcmp(ptr, content.c_str(), content.size()), 0);
-
-  // Cleanup
-  SafeUnmapAndClose(fd, ptr, out_size);
-}
+    ResizeMmapCombinedTests, ResizeMmapCombinedTest,
+    ::testing::Values(
+        // Larger
+        ResizeParams{1024, 2048},  // Aligned -> Aligned
+        ResizeParams{1024, 2011},  // Aligned -> Unaligned
+        ResizeParams{1025, 2048},  // Unaligned -> Aligned
+        ResizeParams{1025, 2011},  // Unaligned -> Unaligned
+        ResizeParams{4096, 8192},  // Page -> Page
+        ResizeParams{4096, 4097},  // Page -> Unaligned
+        // Smaller
+        ResizeParams{2048, 1024},  // Aligned -> Aligned
+        ResizeParams{2048, 1011},  // Aligned -> Unaligned
+        ResizeParams{2049, 1024},  // Unaligned -> Aligned
+        ResizeParams{2049, 1011},  // Unaligned -> Unaligned
+        ResizeParams{8192, 4096},  // Page -> Page
+        ResizeParams{8192, 4097},  // Page -> Unaligned
+        // Same
+        ResizeParams{1024, 1024},  // Aligned -> Aligned (Same)
+        ResizeParams{4096, 4096},  // Page -> Page (Same)
+        ResizeParams{1025, 1025}   // Unaligned -> Unaligned (Same)
+        ));
 
 // Verifies that resize fails with invalid fd
 TEST_F(BufferHelperTest, ResizeMmapFailsOnInvalidFd) {

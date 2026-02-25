@@ -49,6 +49,7 @@ from ml_flashpoint.core.mlf_logging import get_logger
 from ml_flashpoint.core.utils import log_execution_time
 
 _LOGGER = get_logger(__name__)
+DEFAULT_BUFFER_POOL_SLACK_FACTOR = 3
 
 
 def _is_ml_flashpoint_checkpoint(flashpoint_base_dir: Union[str, CheckpointContainerId], path: _PATH) -> bool:
@@ -325,12 +326,7 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
 
         # We want to have enough buffers to cover all threads + some slack.
         # 3x thread count seems reasonable to avoid waiting for buffers.
-        # We access the storage writer thread count from the save strategy.
-        # Note: accessing private member _storage_writer and _thread_count.
-        # This assumes MLFlashpointMegatronAsyncSaveStrategy structure.
-        # TODO: Get the thread count from the save strategy in a public way.
-        # TODO: Revisit this magic number 3.
-        num_buffers = 3 * self.mlf_checkpoint_io.save_strategy._storage_writer._thread_count
+        num_buffers = DEFAULT_BUFFER_POOL_SLACK_FACTOR * self.mlf_checkpoint_io.save_strategy.thread_count
 
         self._pool_init_args = (
             os.path.join(str(self.mlf_checkpoint_io.flashpoint_base_dir), "buffer_pool"),

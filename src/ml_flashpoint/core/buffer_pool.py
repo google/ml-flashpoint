@@ -27,7 +27,7 @@ from ml_flashpoint.core.utils import log_execution_time
 _LOGGER = get_logger(__name__)
 
 # Constants for buffer resizing
-PADDING_SIZE = 1024
+PADDING_SIZE = 1024 * 1024
 RESIZE_FACTOR = 1.1
 
 

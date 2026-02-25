@@ -97,6 +97,9 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
                 handling the actual checkpoint saving logic.
             mp_manager: A `torch.multiprocessing.Manager` instance for managing
                 shared state across processes, particularly for write results and events.
+                It is highly recommended to create this manager using a 'spawn'
+                multiprocessing context to avoid inheriting the parent's CUDA context,
+                which prevents CUDA OOM errors during failure recoveries
             thread_count: Optional. The number of threads to use for writing checkpoint data.
                 Defaults to 1. If a value less than 1 is provided, it will be reset to 1,
                 and a warning will be logged.

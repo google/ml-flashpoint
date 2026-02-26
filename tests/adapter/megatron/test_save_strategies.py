@@ -512,6 +512,8 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             # Given
             mock_statedictsaver = mocker.patch("ml_flashpoint.adapter.megatron.save_strategies.statedictsaver")
             strategy, checkpoint_id, sharded_state_dict, _ = async_save_setup
+            # Enable caching significantly for this test
+            strategy.use_cached_ckpt_structure = True
 
             cached_plan = mocker.MagicMock()
             cached_metadata = mocker.MagicMock()
@@ -565,3 +567,35 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             assert "cached_global_metadata" not in kwargs
             # And cached_global_metadata in strategy should still be the same
             assert strategy.cached_global_metadata == cached_metadata
+
+        def test_async_save_caching_disabled_by_default(self, mocker, async_save_setup, storage_writer):
+            """Tests that caching is disabled by default."""
+            # Given
+            mock_statedictsaver = mocker.patch("ml_flashpoint.adapter.megatron.save_strategies.statedictsaver")
+            strategy, checkpoint_id, sharded_state_dict, _ = async_save_setup
+
+            cached_plan = mocker.MagicMock()
+
+            # Call: Returns a plan that could be cached
+            mock_statedictsaver.generate_plan.return_value = (
+                (mocker.MagicMock(), [], mocker.MagicMock()),
+                cached_plan,
+                mocker.MagicMock(),
+                False,
+            )
+
+            # When
+            strategy.async_save(sharded_state_dict, checkpoint_id.data)
+
+            # Then
+            # Should NOT have updated the specific cached plan attribute if we assume
+            # generate_plan returns it regardless?
+            # actually statedictsaver.generate_plan returns the plan to be cached.
+            # But the strategy should NOT pass it back in the next call if use_cached_ckpt_structure is False.
+
+            # Let's verify the next call doesn't pass it.
+            strategy.async_save(sharded_state_dict, checkpoint_id.data)
+
+            _, kwargs = mock_statedictsaver.generate_plan.call_args
+            assert kwargs["cached_ckpt_structure"] is None
+            assert strategy.use_cached_ckpt_structure is False

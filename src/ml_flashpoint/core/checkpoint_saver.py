@@ -571,6 +571,7 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
             checkpoint_id: The checkpoint ID that is going to be created.
         """
         dirty_marker_file_path = self._get_dirty_marker_file_path(checkpoint_id)
+        os.makedirs(os.path.dirname(dirty_marker_file_path), exist_ok=True)
         with open(dirty_marker_file_path, "w") as _:
             pass  # empty file
 

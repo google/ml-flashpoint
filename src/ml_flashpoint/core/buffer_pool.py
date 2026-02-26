@@ -108,22 +108,25 @@ class BufferIOProxy:
         self._buffer_io.resize(new_size)
 
     def write(self, data: bytes) -> int:
-        try:
-            return self._buffer_io.write(data)
-        except ValueError as e:
-            if "exceeds buffer capacity" in str(e):
-                self._auto_resize(len(data))
-                return self._buffer_io.write(data)
-            raise
+        data_len = len(data)
+        current_pos = self._buffer_io.tell()
+        current_capacity = self._buffer_io.buffer_obj.get_capacity()
+        required_capacity = METADATA_SIZE + current_pos + data_len
+
+        if required_capacity > current_capacity:
+            self._auto_resize(data_len)
+
+        return self._buffer_io.write(data)
 
     def next_buffer_slice(self, size: int) -> memoryview:
-        try:
-            return self._buffer_io.next_buffer_slice(size)
-        except ValueError as e:
-            if "exceeds buffer capacity" in str(e):
-                self._auto_resize(size)
-                return self._buffer_io.next_buffer_slice(size)
-            raise
+        current_pos = self._buffer_io.tell()
+        current_capacity = self._buffer_io.buffer_obj.get_capacity()
+        required_capacity = METADATA_SIZE + current_pos + size
+
+        if required_capacity > current_capacity:
+            self._auto_resize(size)
+
+        return self._buffer_io.next_buffer_slice(size)
 
 
 class BufferPool:

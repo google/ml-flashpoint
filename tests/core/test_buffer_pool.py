@@ -332,12 +332,9 @@ class TestBufferIOProxy:
         mock_buffer_io.write.assert_called_with(data)
 
     def test_write_auto_resize(self, proxy, mock_buffer_io):
-        """Verifies write triggers auto-resize when BufferIO raises ValueError."""
-        # Setup mock to raise ValueError on first write, then succeed
-        mock_buffer_io.write.side_effect = [
-            ValueError("exceeds buffer capacity"),
-            10,  # Return bytes written on retry
-        ]
+        """Verifies write triggers auto-resize when capacity is insufficient."""
+        # Setup mock to succeed immediately (resize happens proactively)
+        mock_buffer_io.write.return_value = 1500
 
         # Current capacity 1000, current pos 0
         mock_buffer_io.buffer_obj.get_capacity.return_value = 1000
@@ -351,8 +348,8 @@ class TestBufferIOProxy:
         # Verify resize was called
         # Calculation: max(1000 * 1.1, METADATA_SIZE + 0 + 1500 + PADDING_SIZE)
         assert mock_buffer_io.resize.called
-        # Check that it called write again
-        assert mock_buffer_io.write.call_count == 2
+        # Check that it called write exactly once (after resize)
+        assert mock_buffer_io.write.call_count == 1
         mock_buffer_io.write.assert_called_with(data)
 
     def test_next_buffer_slice_delegation_success(self, proxy, mock_buffer_io):
@@ -362,10 +359,7 @@ class TestBufferIOProxy:
 
     def test_next_buffer_slice_auto_resize(self, proxy, mock_buffer_io, mocker):
         """Verifies next_buffer_slice triggers resize."""
-        mock_buffer_io.next_buffer_slice.side_effect = [
-            ValueError("exceeds buffer capacity"),
-            mocker.Mock(),  # Return a mock slice on retry
-        ]
+        mock_buffer_io.next_buffer_slice.return_value = mocker.Mock()
 
         mock_buffer_io.buffer_obj.get_capacity.return_value = 1000
         mock_buffer_io.tell.return_value = 900
@@ -374,7 +368,7 @@ class TestBufferIOProxy:
         proxy.next_buffer_slice(200)
 
         assert mock_buffer_io.resize.called
-        assert mock_buffer_io.next_buffer_slice.call_count == 2
+        assert mock_buffer_io.next_buffer_slice.call_count == 1
 
     def test_close_truncate(self, proxy, mock_buffer_io, mocker):
         """Verifies close calls buffer_obj.resize if truncate is True."""

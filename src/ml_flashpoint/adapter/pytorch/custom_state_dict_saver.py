@@ -131,9 +131,9 @@ def generate_plan(
 
     return (
         (final_local_plan, write_buckets, global_metadata),
-        central_plan,  # cached_central_plan
-        local_plan,  # cached_local_plan
-        cached_central_plan == central_plan,  # validated_cache_reuse
+        central_plan,
+        local_plan,
+        cached_central_plan == central_plan,
     )
 
 

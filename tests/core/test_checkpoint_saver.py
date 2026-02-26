@@ -406,7 +406,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
             assert not os.path.exists(checkpoint_id.data)
 
         @pytest.mark.parametrize("local_rank", [0, 1, 8])
-        def test_initialize_checkpoint_creates_container_dir_when_not_exists_local_rank_0(
+        def test_initialize_checkpoint_creates_container_dir_when_not_exists(
             self,
             local_rank,
             temp_dir_path,
@@ -427,12 +427,9 @@ class TestDefaultMLFlashpointCheckpointSaver:
             saver.initialize_checkpoint(checkpoint_id)
 
             # Then
-            # Check for directory creation only on local rank 0
-            if local_rank == 0:
-                assert os.path.exists(checkpoint_id.data)
-                assert os.path.isdir(checkpoint_id.data)
-            else:
-                assert not os.path.exists(checkpoint_id.data)
+            # Check for directory creation on all ranks
+            assert os.path.exists(checkpoint_id.data)
+            assert os.path.isdir(checkpoint_id.data)
 
         @pytest.mark.parametrize("local_rank", [0, 1])
         def test_initialize_checkpoint_leaves_container_dir_when_exists(
@@ -494,11 +491,8 @@ class TestDefaultMLFlashpointCheckpointSaver:
 
             # Then
             assert os.path.exists(expected_dirty_marker_path)
-            if local_rank == 0:
-                assert os.path.exists(checkpoint_id.data)
-                assert os.path.isdir(checkpoint_id.data)
-            else:
-                assert not os.path.exists(checkpoint_id.data)
+            assert os.path.exists(checkpoint_id.data)
+            assert os.path.isdir(checkpoint_id.data)
 
         def test_initialize_checkpoint_ensures_parent_dir_exists(
             self,

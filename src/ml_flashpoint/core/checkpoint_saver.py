@@ -339,9 +339,8 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
     @log_execution_time(logger=_LOGGER, name="initialize_checkpoint")
     def initialize_checkpoint(self, checkpoint_id: CheckpointContainerId) -> None:
         self._create_dirty_checkpoint_marker(checkpoint_id)
-        if self._local_rank_getter() == 0:
-            os.makedirs(checkpoint_id.data, exist_ok=True)
-            _LOGGER.info("Created checkpoint directory: '%s'", checkpoint_id.data)
+        os.makedirs(checkpoint_id.data, exist_ok=True)
+        _LOGGER.info("Created checkpoint directory: '%s'", checkpoint_id.data)
 
     @override
     @log_execution_time(logger=_LOGGER, name="stage_data", level=logging.INFO)

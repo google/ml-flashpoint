@@ -512,13 +512,11 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             # Given
             mock_statedictsaver = mocker.patch("ml_flashpoint.adapter.megatron.save_strategies.statedictsaver")
             strategy, checkpoint_id, sharded_state_dict, _ = async_save_setup
-            # Enable caching significantly for this test
-            strategy.use_cached_ckpt_structure = True
-
             cached_plan = mocker.MagicMock()
             cached_metadata = mocker.MagicMock()
 
-            # First call: No cache
+            # --- Call 1: No cache ---
+            # Given
             mock_statedictsaver.generate_plan.return_value = (
                 (mocker.MagicMock(), [], mocker.MagicMock()),
                 cached_plan,  # cached_central_plan returned
@@ -526,14 +524,15 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
                 False,
             )
 
-            # When 1
+            # When
             strategy.async_save(sharded_state_dict, checkpoint_id.data)
 
-            # Then 1
+            # Then
             assert strategy.cached_central_plan == cached_plan
             assert strategy.validated_cache_reuse is False
 
-            # Second call: Cache validation success
+            # --- Call 2: Cache validation success ---
+            # Given
             mock_statedictsaver.generate_plan.return_value = (
                 (mocker.MagicMock(), [], cached_metadata),
                 cached_plan,
@@ -541,14 +540,15 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
                 True,  # validated_cache_reuse
             )
 
-            # When 2
+            # When
             strategy.async_save(sharded_state_dict, checkpoint_id.data)
 
-            # Then 2
+            # Then
             assert strategy.validated_cache_reuse is True
             assert strategy.cached_global_metadata == cached_metadata
 
-            # Third call: Reuse cache
+            # --- Call 3: Reuse cache ---
+            # Given
             mock_statedictsaver.generate_plan.return_value = (
                 (mocker.MagicMock(), [], None),  # Returns None for metadata
                 cached_plan,
@@ -556,12 +556,10 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
                 True,
             )
 
-            # During third call, async_save should use self.cached_global_metadata
-
-            # When 3
+            # When
             strategy.async_save(sharded_state_dict, checkpoint_id.data)
 
-            # Then 3
+            # Then
             # Ensure generate_plan was called without cached_global_metadata
             _, kwargs = mock_statedictsaver.generate_plan.call_args
             assert "cached_global_metadata" not in kwargs

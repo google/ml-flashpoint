@@ -85,12 +85,15 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         storage_writer: MemoryStorageWriter,
         backend: str = default_backend_format_name(),
         version: int = default_backend_format_version(),
+        use_cached_ckpt_structure: bool = False,
     ):
         """
         Args:
             storage_writer (MemoryStorageWriter): The storage writer to use for saving operations.
             backend (str, optional): The name of the backend format. Defaults to "ml_flashpoint", which is recommended.
             version (int, optional): The version of the checkpoint format. Defaults to the latest version.
+            use_cached_ckpt_structure (bool, optional): Whether to reuse the checkpoint structure (plan)
+                from the previous save. Defaults to False.
         """
         super().__init__(backend=backend, version=version)
         self._storage_writer: MemoryStorageWriter = storage_writer
@@ -101,7 +104,7 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         self.cached_local_plan: SavePlan | None = None
         self.cached_global_metadata: Metadata | None = None
         self.validated_cache_reuse: bool = False
-        self.use_cached_ckpt_structure: bool = True
+        self.use_cached_ckpt_structure: bool = use_cached_ckpt_structure
 
     @override
     def can_handle_sharded_objects(self) -> bool:

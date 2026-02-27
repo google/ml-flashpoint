@@ -14,7 +14,8 @@
 
 import os
 import shutil
-from typing import Optional
+import threading
+from typing import Any, ClassVar, Dict, Optional
 
 from ml_flashpoint.checkpoint_object_manager.buffer_io import BufferIO
 from ml_flashpoint.checkpoint_object_manager.buffer_metadata import METADATA_SIZE
@@ -32,6 +33,108 @@ class CheckpointObjectManager:
     An instance should be reused across a process (within a rank), for caching and "global"
     awareness of buffers (within a rank).
     """
+
+    # Class-level registry for BufferPools in the worker process.
+    # Key: pool_dir_path (str), Value: BufferPool instance
+    _worker_pools: ClassVar[Dict[str, BufferPool]] = {}
+    _worker_pools_lock = threading.Lock()
+
+    def __init__(self, pool_config: Optional[Dict[str, Any]] = None):
+        """Initializes the CheckpointObjectManager.
+
+        Args:
+            pool_config: Optional configuration for the BufferPool.
+        """
+        self.pool_config = pool_config
+        # Buffer pool is used for worker process only.
+        self._worker_process_buffer_pool: Optional[BufferPool] = None
+        self._worker_process_pool_lock = threading.Lock()
+
+    def set_pool_config(self, pool_config: Dict[str, Any]):
+        """Sets the configuration for the BufferPool.
+
+        Args:
+            pool_config: Configuration dictionary for the BufferPool.
+        """
+        self.pool_config = pool_config
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # Exclude lock and buffer pool from pickled state
+        del state["_worker_process_pool_lock"]
+        # buffer_pool is not picklable (contains lock), and we want to re-init it in worker anyway
+        state["_worker_process_buffer_pool"] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # Re-initialize lock and ensure buffer pool is None
+        self._worker_process_pool_lock = threading.Lock()
+        self._worker_process_buffer_pool = None
+
+    def _get_or_create_buffer_pool(self) -> Optional[BufferPool]:
+        """Lazily initializes and returns the BufferPool instance.
+
+        Check the class-level registry first to reuse existing pools in this process.
+        """
+        # 1. Fast path: instance already has it
+        if self._worker_process_buffer_pool:
+            return self._worker_process_buffer_pool
+
+        if not self.pool_config:
+            return None
+
+        pool_dir = self.pool_config.get("pool_dir_path")
+        if not pool_dir:
+            _LOGGER.warning("pool_config missing 'pool_dir_path', cannot use worker registry.")
+            return None
+
+        # 2. Registry lookup / Creation
+        with self._worker_pools_lock:
+            # Re-check instance variable just in case
+            if self._worker_process_buffer_pool:
+                return self._worker_process_buffer_pool
+
+            # Check registry
+            if pool_dir in self._worker_pools:
+                _LOGGER.debug("Reusing existing BufferPool for %s from worker registry.", pool_dir)
+                self._worker_process_buffer_pool = self._worker_pools[pool_dir]
+                return self._worker_process_buffer_pool
+
+            # Create new
+            try:
+                _LOGGER.info("Initializing BufferPool with config: %s", self.pool_config)
+                pool = BufferPool(**self.pool_config)
+                self._worker_pools[pool_dir] = pool
+                self._worker_process_buffer_pool = pool
+            except Exception as e:
+                _LOGGER.error("Failed to initialize BufferPool: %s", e)
+                # Keep _buffer_pool as None
+                pass
+
+        return self._worker_process_buffer_pool
+
+    def teardown_pool(self):
+        """Teardown the BufferPool if it exists and remove from registry."""
+        # If we don't have a local reference, try to find it via config (e.g. after unpickling)
+        pool_to_teardown = self._worker_process_buffer_pool
+        pool_dir = None
+
+        if self.pool_config:
+            pool_dir = self.pool_config.get("pool_dir_path")
+
+        with self._worker_pools_lock:
+            if pool_dir and pool_dir in self._worker_pools:
+                pool_to_teardown = self._worker_pools.pop(pool_dir)
+
+            # Also clear local reference
+            self._worker_process_buffer_pool = None
+
+        if pool_to_teardown:
+            try:
+                pool_to_teardown.teardown()
+            except Exception as e:
+                _LOGGER.debug("Failed to teardown BufferPool: %s", e)
 
     def acquire_buffer(self, object_id: CheckpointObjectId, buffer_size: int, overwrite: bool = True) -> "BufferIO":
         """Acquires a buffer, preferring the BufferPool if available.
@@ -77,9 +180,20 @@ class CheckpointObjectManager:
                 else:
                     raise FileExistsError(f"File {object_id} already exists and overwrite=False")
 
-            pool = BufferPool.get_instance()
-            # Pool manages the physical creation/resizing AND the logical link (symlink) creation.
-            buffer_io = pool.acquire(associated_symlink=str(object_id))
+            pool = self._get_or_create_buffer_pool()
+            if pool:
+                # Pool manages the physical creation/resizing AND the logical link (symlink) creation.
+                buffer_io = pool.acquire(associated_symlink=str(object_id))
+
+                _LOGGER.debug("Acquired buffer for '%s'", object_id)
+
+                return buffer_io
+            else:
+                _LOGGER.debug(
+                    "BufferPool not configured or validation failed. Falling back to standalone buffer creation."
+                )
+        except RuntimeError:
+            _LOGGER.debug("BufferPool exhausted. Falling back to standalone buffer creation.")
 
             _LOGGER.debug("Acquired buffer for '%s'", object_id)
 

@@ -42,7 +42,6 @@ from ml_flashpoint.adapter.megatron.save_utils import save_local_aware_megatron_
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import (
     CheckpointObjectManager,
 )
-from ml_flashpoint.core.buffer_pool import BufferPool
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId
 from ml_flashpoint.core.checkpoint_saver import DEFAULT_INITIAL_BUFFER_SIZE_BYTES
 from ml_flashpoint.core.mlf_logging import get_logger
@@ -62,22 +61,6 @@ def _is_ml_flashpoint_checkpoint(flashpoint_base_dir: Union[str, CheckpointConta
         bool: True if the path is an ML Flashpoint checkpoint, False otherwise.
     """
     return str(path).startswith(str(flashpoint_base_dir))
-
-
-def _init_pool_in_worker(path: str, r: int, num_buffers: int, size: int):
-    """Initializes the BufferPool in the worker process."""
-    _LOGGER.info(
-        "Initializing BufferPool with directory: %s, rank: %d, num_buffers: %d, size: %d", path, r, num_buffers, size
-    )
-    BufferPool(path, rank=r, num_buffers=num_buffers, buffer_size=size)
-
-
-def _teardown_pool_in_worker():
-    """Teardown the BufferPool in the worker process."""
-    try:
-        BufferPool.get_instance().teardown()
-    except Exception as e:
-        _LOGGER.debug("Failed to teardown BufferPool, it might have been closed already: %s", e)
 
 
 class MLFlashpointCheckpointIO(AsyncCompatibleCheckpointIO):
@@ -328,13 +311,13 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
         # 3x thread count seems reasonable to avoid waiting for buffers.
         num_buffers = DEFAULT_BUFFER_POOL_SLACK_FACTOR * self.mlf_checkpoint_io.save_strategy.thread_count
 
-        self._pool_init_args = (
-            os.path.join(str(self.mlf_checkpoint_io.flashpoint_base_dir), "buffer_pool"),
-            self.mlf_checkpoint_io.trainer.global_rank,
-            num_buffers,
-            DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
-        )
-        self._pool_initialized = False
+        pool_config = {
+            "pool_dir_path": os.path.join(str(self.mlf_checkpoint_io.flashpoint_base_dir), "buffer_pool"),
+            "rank": self.mlf_checkpoint_io.trainer.global_rank,
+            "num_buffers": num_buffers,
+            "buffer_size": DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
+        }
+        self.mlf_checkpoint_io.chkpt_obj_manager.set_pool_config(pool_config)
 
     @property
     def mlf_checkpoint_io(self) -> MLFlashpointCheckpointIO:
@@ -375,14 +358,7 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
         if _is_ml_flashpoint_checkpoint(self.mlf_checkpoint_io.flashpoint_base_dir, path):
             queue_type = "ml_flashpoint"
             corresponding_async_calls_queue = self._mlf_async_calls_queue
-            if not self._pool_initialized:
-                _LOGGER.info("Initializing BufferPool on first save...")
-                self._mlf_async_calls_queue.schedule_async_request(
-                    MegatronAsyncRequest(
-                        async_fn=_init_pool_in_worker, async_fn_args=self._pool_init_args, finalize_fns=[]
-                    )
-                )
-                self._pool_initialized = True
+
         else:
             queue_type = "alternative"
             corresponding_async_calls_queue = self._alt_async_calls_queue
@@ -444,7 +420,11 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
         if hasattr(self, "_mlf_async_calls_queue") and self._mlf_async_calls_queue:
             try:
                 self._mlf_async_calls_queue.schedule_async_request(
-                    MegatronAsyncRequest(async_fn=_teardown_pool_in_worker, async_fn_args=(), finalize_fns=[])
+                    MegatronAsyncRequest(
+                        async_fn=self.mlf_checkpoint_io.chkpt_obj_manager.teardown_pool,
+                        async_fn_args=(),
+                        finalize_fns=[],
+                    )
                 )
             except Exception:
                 # Queue might be closed already

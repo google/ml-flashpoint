@@ -578,6 +578,7 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         mlf_io.trainer.global_rank = 0
         mlf_io.save_strategy = mocker.MagicMock()
         mlf_io.save_strategy._storage_writer._thread_count = 1
+        mlf_io.chkpt_obj_manager = mock_ckpt_obj_manager
         original_async_wrapped_mlf_io = MLFlashpointAsyncFinalizableCheckpointIO(mlf_io)
 
         trainer.strategy.checkpoint_io = original_async_wrapped_mlf_io
@@ -716,6 +717,7 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         mlf_io.trainer.global_rank = 0
         mlf_io.save_strategy = mocker.MagicMock()
         mlf_io.save_strategy._storage_writer._thread_count = 1
+        mlf_io.chkpt_obj_manager = mock_ckpt_obj_manager
         original_async_wrapped_mlf_io = MLFlashpointAsyncFinalizableCheckpointIO(mlf_io)
         trainer.strategy.checkpoint_io = original_async_wrapped_mlf_io
 

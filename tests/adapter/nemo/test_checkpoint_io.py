@@ -27,9 +27,7 @@ from nemo.lightning.io.pl import MegatronCheckpointIO
 from ml_flashpoint.adapter.nemo.checkpoint_io import (
     MLFlashpointAsyncFinalizableCheckpointIO,
     MLFlashpointCheckpointIO,
-    _init_pool_in_worker,
     _is_ml_flashpoint_checkpoint,
-    _teardown_pool_in_worker,
 )
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import (
     CheckpointObjectManager,
@@ -825,6 +823,8 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             assert instance.checkpoint_io == mock_checkpoint_io
             assert instance._mlf_async_calls_queue == mock_mlf_queue
             assert instance._alt_async_calls_queue == mock_alt_queue
+            # Verify pool config was set
+            mock_checkpoint_io.chkpt_obj_manager.set_pool_config.assert_called_once()
 
         def test_incompatible_checkpoint_io_type_raises_error(self, mocker):
             """Tests that a ValueError is raised for an incompatible CheckpointIO type."""
@@ -910,86 +910,6 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             mock_checkpoint_io.save_checkpoint.assert_called_once_with(checkpoint, path, None)
             mock_alt_queue.schedule_async_request.assert_called_once_with(mock_async_request)
             mock_mlf_queue.schedule_async_request.assert_not_called()
-
-        def test_buffer_pool_init_scheduled_on_first_save(self, mocker):
-            """Tests that BufferPool initialization is scheduled on the first MLF save."""
-            # Given
-            mock_checkpoint_io = mocker.Mock(
-                spec=MLFlashpointCheckpointIO,
-                trainer=mocker.MagicMock(),
-                save_strategy=mocker.MagicMock(),
-                load_strategy=mocker.MagicMock(),
-                chkpt_obj_manager=mocker.MagicMock(),
-                fallback_checkpoint_io=mocker.MagicMock(),
-                async_save=True,
-                flashpoint_base_dir="/mlf/checkpoints",
-            )
-            mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
-            mock_checkpoint_io.flashpoint_base_dir = "/mlf/checkpoints"
-            mock_mlf_queue = mocker.MagicMock()
-            mock_alt_queue = mocker.MagicMock()
-            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
-            instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
-            mock_async_request = mocker.MagicMock(spec=MegatronAsyncRequest)
-            mock_checkpoint_io.save_checkpoint.return_value = mock_async_request
-            path = "/mlf/checkpoints/step-100"
-            checkpoint = {"some": "data"}
-
-            # When
-            instance.save_checkpoint(checkpoint, path)
-
-            # Then
-            # Verify initialization was scheduled
-            # It should be the first call to schedule_async_request
-            first_call_args = mock_mlf_queue.schedule_async_request.call_args_list[0]
-            scheduled_request = first_call_args[0][0]
-            assert scheduled_request.async_fn == _init_pool_in_worker
-            # Expecting (path, rank, num_buffers, size)
-            # num_buffers = 3 * 1 (thread_count) = 3
-            assert scheduled_request.async_fn_args == (
-                "/mlf/checkpoints/buffer_pool",
-                0,
-                3,
-                16000000000,
-            )
-
-        def test_buffer_pool_init_not_scheduled_on_subsequent_save(self, mocker):
-            """Tests that BufferPool initialization is NOT scheduled on subsequent MLF saves."""
-            # Given
-            mock_checkpoint_io = mocker.Mock(
-                spec=MLFlashpointCheckpointIO,
-                trainer=mocker.MagicMock(),
-                save_strategy=mocker.MagicMock(),
-                load_strategy=mocker.MagicMock(),
-                chkpt_obj_manager=mocker.MagicMock(),
-                fallback_checkpoint_io=mocker.MagicMock(),
-                async_save=True,
-                flashpoint_base_dir="/mlf/checkpoints",
-            )
-            mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
-            mock_checkpoint_io.flashpoint_base_dir = "/mlf/checkpoints"
-            mock_mlf_queue = mocker.MagicMock()
-            mock_alt_queue = mocker.MagicMock()
-            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
-            instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
-            mock_async_request = mocker.MagicMock(spec=MegatronAsyncRequest)
-            mock_checkpoint_io.save_checkpoint.return_value = mock_async_request
-            path1 = "/mlf/checkpoints/step-100"
-            path2 = "/mlf/checkpoints/step-200"
-            checkpoint = {"some": "data"}
-
-            # When
-            instance.save_checkpoint(checkpoint, path1)
-            # Reset mocks to clear the first save calls
-            mock_mlf_queue.schedule_async_request.reset_mock()
-            instance.save_checkpoint(checkpoint, path2)
-
-            # Then
-            # Verify initialization was NOT scheduled again
-            # Only the save request should be scheduled
-            mock_mlf_queue.schedule_async_request.assert_called_once_with(mock_async_request)
 
         def test_save_with_external_finalize_fn(self, mocker):
             """Tests that an external finalize function is added to the async request."""
@@ -1282,7 +1202,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             assert len(calls) > 0
             teardown_call = calls[0]
             scheduled_request = teardown_call[0][0]
-            assert scheduled_request.async_fn == _teardown_pool_in_worker
+            assert scheduled_request.async_fn == mock_checkpoint_io.chkpt_obj_manager.teardown_pool
             assert scheduled_request.async_fn_args == ()
 
     class TestIntegration:

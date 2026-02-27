@@ -142,17 +142,6 @@ class BufferPool:
     associated symlinks (checkpoints) are deleted.
     """
 
-    _instance: Optional["BufferPool"] = None
-    _lock = threading.Lock()
-
-    def __new__(cls, *args, **kwargs):
-        if not cls._instance:
-            with cls._lock:
-                if not cls._instance:
-                    cls._instance = super(BufferPool, cls).__new__(cls)
-                    cls._instance._initialized = False
-        return cls._instance
-
     def __init__(
         self,
         pool_dir_path: str,
@@ -168,37 +157,23 @@ class BufferPool:
             num_buffers: The fixed number of buffers to allocate in the pool.
             buffer_size: The initial size of each buffer in bytes.
         """
-        if self._initialized:
-            return
+        self.pool_dir = pool_dir_path
+        self.rank = rank
+        self.num_buffers = num_buffers
+        self.buffer_size = buffer_size
+        self.free_buffers: List[BufferIO] = []
+        # active_buffers maps BufferIO -> associated_symlink_path (str)
+        self.active_buffers: Dict[BufferIO, str] = {}
+        self._lock = threading.Lock()
 
-        with self._lock:
-            if self._initialized:
-                return
-
-            self.pool_dir = pool_dir_path
-            self.rank = rank
-            self.num_buffers = num_buffers
-            self.buffer_size = buffer_size
-            self.free_buffers: List[BufferIO] = []
-            # active_buffers maps BufferIO -> associated_symlink_path (str)
-            self.active_buffers: Dict[BufferIO, str] = {}
-
-            if self.pool_dir and self.buffer_size > 0:
-                try:
-                    os.makedirs(self.pool_dir, exist_ok=True)
-                    _LOGGER.info("BufferPool initialized with directory: %s", self.pool_dir)
-                    self._preallocate_buffers()
-                except OSError as e:
-                    _LOGGER.error("Failed to create/populate BufferPool: %s", e)
-                    raise
-
-            self._initialized = True
-
-    @classmethod
-    def get_instance(cls) -> "BufferPool":
-        if not cls._instance:
-            raise RuntimeError("BufferPool has not been initialized.")
-        return cls._instance
+        if self.pool_dir and self.buffer_size > 0:
+            try:
+                os.makedirs(self.pool_dir, exist_ok=True)
+                _LOGGER.info("BufferPool initialized with directory: %s", self.pool_dir)
+                self._preallocate_buffers()
+            except OSError as e:
+                _LOGGER.error("Failed to create/populate BufferPool: %s", e)
+                raise
 
     @log_execution_time(logger=_LOGGER, name="acquire", level=logging.INFO)
     def acquire(self, associated_symlink: Optional[str] = None) -> BufferIOProxy:

@@ -115,12 +115,19 @@ class TestBufferPool:
         # Since we don't know exactly which buffer was picked, checks size
         assert len(buffer_pool.active_buffers) == 0
 
-    def test_init_missing_pool_dir(self):
-        """Verifies that initialization fails if pool_dir_path is missing."""
-        BufferPool._instance = None
-        with pytest.raises(TypeError, match="missing 1 required positional argument: 'pool_dir_path'"):
-            BufferPool(rank=0, num_buffers=3, buffer_size=1024)
-        BufferPool._instance = None
+    def test_init_invalid_args(self):
+        """Verifies that initialization raises ValueError for invalid arguments."""
+        # Test num_buffers <= 0
+        with pytest.raises(ValueError, match="Number of buffers must be positive"):
+            BufferPool(pool_dir_path="/tmp", num_buffers=0, buffer_size=1024)
+
+        # Test buffer_size <= 0
+        with pytest.raises(ValueError, match="Buffer size must be positive"):
+            BufferPool(pool_dir_path="/tmp", num_buffers=3, buffer_size=0)
+
+        # Test missing pool_dir_path (empty string)
+        with pytest.raises(ValueError, match="Pool directory path must be provided"):
+            BufferPool(pool_dir_path="", num_buffers=3, buffer_size=1024)
 
 
 class TestBufferIOProxy:

@@ -157,6 +157,12 @@ class BufferPool:
             num_buffers: The fixed number of buffers to allocate in the pool.
             buffer_size: The initial size of each buffer in bytes.
         """
+        if num_buffers <= 0:
+            raise ValueError(f"Number of buffers must be positive. Got {num_buffers}.")
+        if buffer_size <= 0:
+            raise ValueError(f"Buffer size must be positive. Got {buffer_size}.")
+        if not pool_dir_path:
+            raise ValueError("Pool directory path must be provided.")
         self.pool_dir = pool_dir_path
         self.rank = rank
         self.num_buffers = num_buffers
@@ -166,14 +172,13 @@ class BufferPool:
         self.active_buffers: Dict[str, tuple[BufferIO, str]] = {}
         self._lock = threading.Lock()
 
-        if self.pool_dir and self.buffer_size > 0:
-            try:
-                os.makedirs(self.pool_dir, exist_ok=True)
-                _LOGGER.info("BufferPool initialized with directory: %s", self.pool_dir)
-                self._preallocate_buffers()
-            except OSError as e:
-                _LOGGER.error("Failed to create/populate BufferPool: %s", e)
-                raise
+        try:
+            os.makedirs(self.pool_dir, exist_ok=True)
+            _LOGGER.info("BufferPool initialized with directory: %s", self.pool_dir)
+            self._preallocate_buffers()
+        except OSError as e:
+            _LOGGER.error("Failed to create/populate BufferPool: %s", e)
+            raise
 
     @log_execution_time(logger=_LOGGER, name="acquire", level=logging.INFO)
     def acquire(self, associated_symlink: Optional[str] = None) -> BufferIOProxy:
@@ -216,8 +221,9 @@ class BufferPool:
                     self.free_buffers.append(free_buffer)
                     raise
 
-            # 2. If no free buffer, raise error (Fixed Size Pool)
-            raise RuntimeError(f"BufferPool exhausted. All {self.num_buffers} buffers are in use.")
+            # 2. If no free buffer, return None
+            _LOGGER.info("BufferPool exhausted. All %d buffers are in use.", self.num_buffers)
+            return None
 
     def _gc(self) -> None:
         """Releases buffers whose associated symlinks no longer exist."""

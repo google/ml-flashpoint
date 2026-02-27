@@ -30,6 +30,7 @@ steps:
   # 2. Build the manylinux wheels using cibuildwheel.
   # This step builds for the native architecture of the GCB worker (x86_64 or ARM64).
   # Multiple parallel builds on different architectures can safely upload to the same AR repository.
+  # We set BUILD_TESTING=OFF to ignore tests during the artifact build.
   - name: 'python:3.10'
     id: 'build-wheels'
     entrypoint: 'bash'
@@ -42,7 +43,7 @@ steps:
 
         echo "Detected architecture: $(uname -m)"
 
-        echo "Building C++ extensions with editable install (local check)..."
+        echo "Building C++ extensions with editable install..."
         SKBUILD_CMAKE_ARGS="-DBUILD_TESTING=OFF" pip install -e .
 
         echo "Running cibuildwheel..."
@@ -55,13 +56,14 @@ steps:
     waitFor: ['build-sdist']
 
   # 3. Upload to internal Artifact Registry (AR) for OSS Exit Gate.
+  # OSS Exit Gate fetches artifacts from this repository.
   - name: 'python:3.10'
     id: 'upload-to-ar'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        pip install twine keyring keyrings.google-artifactregistry-auth
+        pip install -U twine keyring keyrings.google-artifactregistry-auth
         twine upload --repository-url https://us-python.pkg.dev/oss-exit-gate-prod/${_PROJECT_NAME}--pypi dist/*
     waitFor: ['build-wheels']
 

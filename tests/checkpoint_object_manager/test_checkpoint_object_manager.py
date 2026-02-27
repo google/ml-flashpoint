@@ -16,11 +16,13 @@ import os
 import pathlib
 import shutil
 import tempfile
+import threading
 
 import pytest
 
 from ml_flashpoint.checkpoint_object_manager.buffer_io import METADATA_SIZE, BufferIO
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
+from ml_flashpoint.core.buffer_pool import BufferPool
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 
 
@@ -52,6 +54,13 @@ def manager_setup(request, mocker, temp_dir_path):
         mocks["BufferIO"] = mocker.patch(
             "ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager.BufferIO", autospec=True
         )
+        mocks["BufferPool"] = mocker.patch(
+            "ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager.BufferPool", autospec=True
+        )
+        # Default behavior: Pool not initialized (fail constructor or return mock that fails acquire?)
+        # Actually in the new design, we check if pool_config is set.
+        # If we want to simulate "not initialized", we just don't set pool_config.
+        pass
 
     manager = CheckpointObjectManager()
     yield manager, is_mock, mocks, temp_dir_path
@@ -67,7 +76,14 @@ def mock_buffer_manager(mocker, temp_dir_path):
         "BufferIO": mocker.patch(
             "ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager.BufferIO", autospec=True
         ),
+        "BufferPool": mocker.patch(
+            "ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager.BufferPool", autospec=True
+        ),
     }
+    # Ensure BufferPool constructor returns a mock
+    # mocks["BufferPool"].return_value is the instance returned by BufferPool()
+    pass
+
     manager = CheckpointObjectManager()
     yield manager, mocks, temp_dir_path
 
@@ -80,9 +96,9 @@ def real_buffer_manager(temp_dir_path):
 
 
 # --- Test Cases ---
-class TestCreateBuffer:
-    def test_create_buffer_success(self, manager_setup, mocker):
-        """Tests that create_buffer successfully returns a BufferIO instance."""
+class TestAcquireBuffer:
+    def test_acquire_buffer_success(self, manager_setup, mocker):
+        """Tests that acquire_buffer successfully returns a BufferIO instance."""
         manager, is_mock, mocks, temp_dir_path = manager_setup
         object_id = CheckpointObjectId(str(temp_dir_path / "new_buffer.bin"))
         buffer_size = 1024
@@ -92,27 +108,27 @@ class TestCreateBuffer:
             mock_io_instance = mocker.MagicMock()
             mocks["BufferObject"].return_value = mock_instance
             mocks["BufferIO"].return_value = mock_io_instance
-            buffer_io = manager.create_buffer(object_id, buffer_size=buffer_size, overwrite=False)
+            buffer_io = manager.acquire_buffer(object_id, buffer_size=buffer_size, overwrite=False)
             mocks["BufferObject"].assert_called_once_with(object_id, buffer_size + METADATA_SIZE, False)
             mocks["BufferIO"].assert_called_once_with(mock_instance)
             assert buffer_io is mock_io_instance
         else:
-            buffer_io = manager.create_buffer(object_id, buffer_size=buffer_size, overwrite=False)
+            buffer_io = manager.acquire_buffer(object_id, buffer_size=buffer_size, overwrite=False)
             assert isinstance(buffer_io, BufferIO)
             assert os.path.exists(str(object_id))
             assert os.path.getsize(str(object_id)) == buffer_size + METADATA_SIZE
         buffer_io.close()
 
-    def test_create_buffer_succeeds_with_overwrite_on_non_existent_buffer(self, manager_setup, mocker):
+    def test_acquire_buffer_succeeds_with_overwrite_on_non_existent_buffer(self, manager_setup, mocker):
         """
-        Tests that create_buffer with overwrite=True succeeds when the buffer does not already exist.
+        Tests that acquire_buffer with overwrite=True succeeds when the buffer does not already exist.
         """
         manager, is_mock, mocks, temp_dir_path = manager_setup
         object_id = CheckpointObjectId(str(temp_dir_path / "new_with_overwrite.bin"))
         buffer_size = 1024
 
         # Capture the return value of the method call.
-        returned_buffer = manager.create_buffer(object_id, buffer_size=buffer_size, overwrite=True)
+        returned_buffer = manager.acquire_buffer(object_id, buffer_size=buffer_size, overwrite=True)
 
         if is_mock:
             # In mock mode, verify the full chain of calls and the return value.
@@ -128,21 +144,56 @@ class TestCreateBuffer:
             assert isinstance(returned_buffer, BufferIO)
         returned_buffer.close()
 
-    def test_create_buffer_fails_with_non_positive_size(self, manager_setup):
+    def test_acquire_buffer_falls_back_on_pool_exhaustion(self, manager_setup, mocker):
         """
-        Tests that create_buffer fails if buffer_size is zero or negative.
+        Tests that acquire_buffer falls back to standalone creation if the pool is exhausted.
+        """
+        manager, is_mock, mocks, temp_dir_path = manager_setup
+        object_id = CheckpointObjectId(str(temp_dir_path / "fallback.bin"))
+        buffer_size = 1024
+
+        # Verify fallback logic ONLY in mock mode where we can control pool behavior cleanly
+        if is_mock:
+            # Setup: Pool exists but raises RuntimeError on acquire
+            mock_pool = mocker.MagicMock(spec=BufferPool)
+            mock_pool.acquire.side_effect = RuntimeError("Pool exhausted")
+            manager._worker_process_buffer_pool = mock_pool
+
+            # Setup: Standalone creation succeeds
+            mock_instance = mocker.MagicMock()
+            mocks["BufferObject"].return_value = mock_instance
+            mock_io_instance = mocker.MagicMock()
+            mocks["BufferIO"].return_value = mock_io_instance
+
+            # Execute
+            buffer_io = manager.acquire_buffer(object_id, buffer_size=buffer_size)
+
+            # verify
+            mock_pool.acquire.assert_called_once_with(associated_symlink=str(object_id))
+            # Should have fallen back to creating new BufferObject
+            mocks["BufferObject"].assert_called_once_with(object_id, buffer_size + METADATA_SIZE, True)
+            assert buffer_io is mock_io_instance
+        else:
+            # In real mode, we can't easily force "exhaustion" without filling the pool,
+            # which is complex. We rely on the mock test for the logic flow,
+            # or we could construct a pool with 0 buffers? (invalid config).
+            pass
+
+    def test_acquire_buffer_fails_with_non_positive_size(self, manager_setup):
+        """
+        Tests that acquire_buffer fails if buffer_size is zero or negative.
         """
         manager, _, _, _ = manager_setup
 
         with pytest.raises(ValueError, match="Buffer size must be a positive integer"):
-            manager.create_buffer(CheckpointObjectId("/zero_size.bin"), buffer_size=0)
+            manager.acquire_buffer(CheckpointObjectId("/zero_size.bin"), buffer_size=0)
 
         with pytest.raises(ValueError, match="Buffer size must be a positive integer"):
-            manager.create_buffer(CheckpointObjectId("/negative_size.bin"), buffer_size=-100)
+            manager.acquire_buffer(CheckpointObjectId("/negative_size.bin"), buffer_size=-100)
 
-    def test_create_buffer_propagates_exception_from_buffer_object(self, mock_buffer_manager):
+    def test_acquire_buffer_propagates_exception_from_buffer_object(self, mock_buffer_manager):
         """
-        Unit Test: Verifies that create_buffer correctly handles and re-raises an
+        Unit Test: Verifies that acquire_buffer correctly handles and re-raises an
         exception from the underlying BufferObject C++ extension during creation.
         This test ONLY runs in a mocked environment.
         """
@@ -154,16 +205,16 @@ class TestCreateBuffer:
         # Configure the mocked BufferObject class to simulate a failure on instantiation.
         mocks["BufferObject"].side_effect = RuntimeError("C++ layer failed: disk is full")
 
-        with pytest.raises(RuntimeError, match=f"Failed to create and wrap buffer for '{object_id}'"):
-            manager.create_buffer(object_id, buffer_size=buffer_size)
+        with pytest.raises(RuntimeError, match=f"Failed to create buffer for '{object_id}'"):
+            manager.acquire_buffer(object_id, buffer_size=buffer_size)
 
         # Ensure the failing class was called, but the subsequent wrapper was not.
-        mocks["BufferObject"].assert_called_once_with(object_id, buffer_size + METADATA_SIZE, False)
+        mocks["BufferObject"].assert_called_once_with(object_id, buffer_size + METADATA_SIZE, True)
         mocks["BufferIO"].assert_not_called()
 
-    def test_create_buffer_propagates_exception_from_buffer_io_creation(self, mock_buffer_manager, mocker):
+    def test_acquire_buffer_propagates_exception_from_buffer_io_creation(self, mock_buffer_manager, mocker):
         """
-        Tests that create_buffer correctly handles an exception from the BufferIO wrapper.
+        Tests that acquire_buffer correctly handles an exception from the BufferIO wrapper.
         This test ONLY runs in a mocked environment.
         """
         manager, mocks, temp_dir_path = mock_buffer_manager
@@ -178,16 +229,16 @@ class TestCreateBuffer:
         mocks["BufferIO"].side_effect = Exception(error_message)
 
         # We expect the manager to catch the internal exception and re-raise it as a RuntimeError.
-        with pytest.raises(RuntimeError, match=f"Failed to create and wrap buffer for '{object_id}'"):
-            manager.create_buffer(object_id, buffer_size=buffer_size)
+        with pytest.raises(RuntimeError, match=f"Failed to create buffer for '{object_id}'"):
+            manager.acquire_buffer(object_id, buffer_size=buffer_size)
 
         # Verify that the C++ object was created (the first step).
-        mocks["BufferObject"].assert_called_once_with(object_id, buffer_size + METADATA_SIZE, False)
+        mocks["BufferObject"].assert_called_once_with(object_id, buffer_size + METADATA_SIZE, True)
 
         # Verify that the code ATTEMPTED to create the BufferIO wrapper (the second, failing step).
         mocks["BufferIO"].assert_called_once_with(mock_instance)
 
-    def test_create_buffer_size_includes_metadata_overhead(self, real_buffer_manager):
+    def test_acquire_buffer_size_includes_metadata_overhead(self, real_buffer_manager):
         """
         Unit Test: Verifies that the size passed to the underlying BufferObject
         is the user-requested size PLUS the METADATA_SIZE overhead.
@@ -199,15 +250,15 @@ class TestCreateBuffer:
         expected_internal_size = user_requested_size + METADATA_SIZE
 
         # When
-        with manager.create_buffer(object_id, buffer_size=user_requested_size) as buffer:
+        with manager.acquire_buffer(object_id, buffer_size=user_requested_size) as buffer:
             # Then
             assert os.path.exists(str(object_id))
             assert os.path.getsize(str(object_id)) == expected_internal_size
             assert buffer.buffer_obj.get_capacity() == expected_internal_size
 
-    def test_create_buffer_fails_on_directory_path(self, manager_setup):
+    def test_acquire_buffer_fails_on_directory_path(self, manager_setup):
         """
-        Tests that create_buffer fails if the object_id points to an existing directory.
+        Tests that acquire_buffer fails if the object_id points to an existing directory.
         """
         manager, is_mock, mocks, temp_dir_path = manager_setup
 
@@ -219,12 +270,12 @@ class TestCreateBuffer:
         if is_mock:
             mocks["BufferObject"].side_effect = RuntimeError("OS error: path is a directory")
 
-        # we expect the manager to catch the underlying error and re-raise it as a RuntimeError.
-        with pytest.raises(RuntimeError, match=f"Failed to create and wrap buffer for '{object_id}'"):
-            manager.create_buffer(object_id, buffer_size=buffer_size, overwrite=False)
+        # we expect the manager to catch the underlying error and re-raise it as a FileExistsError (since it exists).
+        with pytest.raises(FileExistsError, match=f"File {object_id} already exists"):
+            manager.acquire_buffer(object_id, buffer_size=buffer_size, overwrite=False)
 
         if is_mock:
-            mocks["BufferObject"].assert_called_once_with(object_id, buffer_size + METADATA_SIZE, False)
+            mocks["BufferObject"].assert_not_called()
 
 
 class TestGetBuffer:
@@ -361,7 +412,7 @@ class TestCloseBuffer:
         object_id = CheckpointObjectId(str(temp_dir_path / "real_buffer.bin"))
 
         # Create a real buffer
-        buffer_to_close = manager.create_buffer(object_id, METADATA_SIZE + 1)
+        buffer_to_close = manager.acquire_buffer(object_id, METADATA_SIZE + 1)
         assert buffer_to_close.closed is False
 
         # Close it via the manager
@@ -378,7 +429,7 @@ class TestCloseBuffer:
         object_id = CheckpointObjectId(str(temp_dir_path / "real_buffer_to_pre_close.bin"))
 
         # Create and immediately close a real buffer
-        buffer_to_close = manager.create_buffer(object_id, METADATA_SIZE + 1)
+        buffer_to_close = manager.acquire_buffer(object_id, METADATA_SIZE + 1)
         manager.close_buffer(buffer_to_close)
         assert buffer_to_close.closed is True, "Buffer should be closed after the first close"
 
@@ -535,7 +586,7 @@ class TestManagerIntegration:
 
         # --- Phase 1: Create, Write, and Close ---
         # Create a new writable buffer via the manager.
-        buffer_io = manager.create_buffer(object_id, buffer_size=initial_size)
+        buffer_io = manager.acquire_buffer(object_id, buffer_size=initial_size)
         assert buffer_io is not None
         assert buffer_io.is_readonly is False
 
@@ -566,7 +617,7 @@ class TestManagerIntegration:
 
     def test_manager_overwrite_succeeds_on_untracked_disk_file(self, temp_dir_path):
         """
-        Tests that create_buffer with overwrite=True correctly replaces a file
+        Tests that acquire_buffer with overwrite=True correctly replaces a file
         that exists on disk.
         """
         manager = CheckpointObjectManager()
@@ -579,7 +630,7 @@ class TestManagerIntegration:
         new_size = METADATA_SIZE + 512
         new_content = b"This is the new content after overwriting."
 
-        with manager.create_buffer(object_id, buffer_size=new_size, overwrite=True) as buffer_io:
+        with manager.acquire_buffer(object_id, buffer_size=new_size, overwrite=True) as buffer_io:
             buffer_io.write(new_content)
 
         # Verify the file size on disk has been updated to reflect the new content.
@@ -601,10 +652,10 @@ class TestManagerIntegration:
         container_path.mkdir()
 
         # Use the manager to create some files inside the container.
-        with manager.create_buffer(CheckpointObjectId(str(container_path / "file1.bin")), METADATA_SIZE + 128) as f:
+        with manager.acquire_buffer(CheckpointObjectId(str(container_path / "file1.bin")), METADATA_SIZE + 128) as f:
             f.write(b"data1")
 
-        with manager.create_buffer(CheckpointObjectId(str(container_path / "file2.bin")), METADATA_SIZE + 128) as f:
+        with manager.acquire_buffer(CheckpointObjectId(str(container_path / "file2.bin")), METADATA_SIZE + 128) as f:
             f.write(b"data2")
 
         # Verify that the files exist before deletion.
@@ -617,9 +668,9 @@ class TestManagerIntegration:
         # The directory and all its contents should be gone.
         assert not container_path.exists()
 
-    def test_create_buffer_fails_if_already_exists_on_disk(self, temp_dir_path):
+    def test_acquire_buffer_fails_if_already_exists_on_disk(self, temp_dir_path):
         """
-        Tests an edge case: create_buffer with overwrite=False should fail
+        Tests an edge case: acquire_buffer with overwrite=False should fail
         if a file already exists at the target path.
         """
         manager = CheckpointObjectManager()
@@ -629,10 +680,9 @@ class TestManagerIntegration:
         with open(str(object_id), "wb") as f:
             f.write(b"pre-existing data")
 
-        # Attempting to create should fail because the underlying C++
-        # create_file_and_mmap call with O_EXCL will fail.
-        with pytest.raises(RuntimeError, match=f"Failed to create and wrap buffer for '{object_id}'"):
-            manager.create_buffer(object_id, buffer_size=METADATA_SIZE + 1024, overwrite=False)
+        # Attempting to create should fail because of the explicit check in acquire_buffer.
+        with pytest.raises(FileExistsError, match=f"File {object_id} already exists and overwrite=False"):
+            manager.acquire_buffer(object_id, buffer_size=METADATA_SIZE + 1024, overwrite=False)
 
     def test_close_buffer_truncation_behavior(self, temp_dir_path):
         manager = CheckpointObjectManager()
@@ -642,14 +692,115 @@ class TestManagerIntegration:
         content = b"short content"
 
         # Case 1: Truncate (default)
-        buf1 = manager.create_buffer(object_id_truncate, user_requested_size)
+        buf1 = manager.acquire_buffer(object_id_truncate, user_requested_size)
         buf1.write(content)
         manager.close_buffer(buf1, truncate=True)
         expected_size = METADATA_SIZE + len(content)
         assert os.path.getsize(str(object_id_truncate)) == expected_size
 
         # Case 2: No Truncate
-        buf2 = manager.create_buffer(object_id_no_truncate, user_requested_size)
+        buf2 = manager.acquire_buffer(object_id_no_truncate, user_requested_size)
         buf2.write(content)
         manager.close_buffer(buf2, truncate=False)
         assert os.path.getsize(str(object_id_no_truncate)) == user_requested_size + METADATA_SIZE
+
+
+class TestCheckpointObjectManagerInstance:
+    def test_set_pool_config(self):
+        """Tests that set_pool_config updates the configuration."""
+        manager = CheckpointObjectManager()
+        config = {"pool_dir_path": "/tmp", "num_buffers": 1}
+        manager.set_pool_config(config)
+        assert manager.pool_config == config
+
+    def test_lazy_initialization(self, mocker):
+        """Tests that BufferPool is lazily initialized on acquire_buffer."""
+        # Ensure pool_config has pool_dir_path for registry check
+        manager = CheckpointObjectManager(pool_config={"pool_dir_path": "/tmp/lazy", "a": 1})
+        mock_buffer_pool_cls = mocker.patch(
+            "ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager.BufferPool"
+        )
+
+        # Access internal property to verify it's None initially
+        assert manager._worker_process_buffer_pool is None
+
+        # Clear registry to ensure no interference
+        CheckpointObjectManager._worker_pools.clear()
+
+        # Call acquire_buffer should trigger init
+        # We need to mock os.makedirs and exists to pass the early checks in acquire_buffer
+        mocker.patch("os.makedirs")
+        mocker.patch("os.path.exists", return_value=False)
+
+        # It will try to acquire, so mock the pool instance
+        mock_pool_instance = mock_buffer_pool_cls.return_value
+        mock_pool_instance.acquire.return_value = mocker.Mock(spec=BufferIO)
+
+        manager.acquire_buffer(CheckpointObjectId("/tmp/lazy/foo"), 100)
+
+        mock_buffer_pool_cls.assert_called_once_with(pool_dir_path="/tmp/lazy", a=1)
+        assert manager._worker_process_buffer_pool == mock_pool_instance
+
+    def test_pickling_resets_pool(self):
+        """Tests that pickling/unpickling resets the pool and lock."""
+        import pickle
+
+        manager = CheckpointObjectManager(pool_config={"a": 1})
+        # Simulate initialized pool
+        manager._worker_process_buffer_pool = "fake_pool"
+
+        pickled = pickle.dumps(manager)
+        unpickled = pickle.loads(pickled)
+
+        assert unpickled.pool_config == {"a": 1}
+        assert unpickled._worker_process_buffer_pool is None
+        assert isinstance(unpickled._worker_process_pool_lock, type(threading.Lock()))
+        assert unpickled._worker_process_pool_lock is not manager._worker_process_pool_lock
+
+    def test_worker_side_pool_reuse(self, mocker):
+        """Tests that multiple managers in the same process reuse the same BufferPool."""
+        # Clear registry first
+        CheckpointObjectManager._worker_pools.clear()
+
+        config = {"pool_dir_path": "/tmp/reuse_test", "num_buffers": 1}
+        manager1 = CheckpointObjectManager(pool_config=config)
+        manager2 = CheckpointObjectManager(pool_config=config)
+
+        # Mock BufferPool to avoid actual creation
+        mock_pool_cls = mocker.patch("ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager.BufferPool")
+        mocker.patch("os.makedirs")
+        mocker.patch("os.path.exists", return_value=False)
+
+        # 1. First manager acquires -> creates pool
+        mock_pool_instance = mock_pool_cls.return_value
+        mock_pool_instance.acquire.return_value = mocker.Mock(spec=BufferIO)
+
+        manager1.acquire_buffer(CheckpointObjectId("/tmp/reuse_test/1"), 100)
+
+        assert manager1._worker_process_buffer_pool == mock_pool_instance
+        assert CheckpointObjectManager._worker_pools["/tmp/reuse_test"] == mock_pool_instance
+        mock_pool_cls.assert_called_once()
+
+        # 2. Second manager acquires -> should reuse pool
+        manager2.acquire_buffer(CheckpointObjectId("/tmp/reuse_test/2"), 100)
+
+        assert manager2._worker_process_buffer_pool == mock_pool_instance
+        # Should NOT have called constructor again
+        mock_pool_cls.assert_called_once()
+
+    def test_teardown_clears_worker_registry(self, mocker):
+        """Tests that teardown_pool removes the pool from the registry."""
+        CheckpointObjectManager._worker_pools.clear()
+
+        config = {"pool_dir_path": "/tmp/teardown_test", "num_buffers": 1}
+        manager = CheckpointObjectManager(pool_config=config)
+
+        # Manually populate registry
+        mock_pool = mocker.Mock(spec=BufferPool)
+        CheckpointObjectManager._worker_pools["/tmp/teardown_test"] = mock_pool
+        # manager._worker_process_buffer_pool is None (simulating unpickled state)
+
+        manager.teardown_pool()
+
+        assert "/tmp/teardown_test" not in CheckpointObjectManager._worker_pools
+        mock_pool.teardown.assert_called_once()

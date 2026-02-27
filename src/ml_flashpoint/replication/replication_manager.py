@@ -14,7 +14,6 @@
 
 import abc
 import concurrent.futures
-import logging
 import socket
 import threading
 import time
@@ -269,13 +268,6 @@ class ReplicationManager:
         destination_addresses = self._repl_strategy.get_destination_addresses(dist.get_rank())
         if not destination_addresses:
             _LOGGER.warning("No destinations found for '%s'. Replication skipped.", obj_id)
-            # If no destinations, we can close the buffer immediately
-            # TODO: Change all the f-string to placeholder in python logging.
-            _LOGGER.info("No replication needed for '%s', closing buffer.", obj_id)
-            try:
-                self._checkpoint_object_manager.close_buffer(buffer_io)
-            except Exception:
-                _LOGGER.exception("Failed to close buffer '%s'", obj_id)
             return []
         futures = []
         start_repl_time = time.perf_counter()
@@ -373,11 +365,6 @@ class ReplicationManager:
             Path(buffer_io.buffer_obj.get_id()).name,
             time.perf_counter() - repl_start_time,
         )
-        # Close buffer when all the replication tasks for the buffer object are done.
-        with log_execution_time(_LOGGER, "_final_replication_callback__close_buffer", level=logging.DEBUG):
-            self._checkpoint_object_manager.close_buffer(buffer_io)
-        if buffer_io.buffer_obj:
-            _LOGGER.info("Buffer '%s' closed.", buffer_io.buffer_obj.get_id())
         if errors:
             _LOGGER.error("%d replications failed: '%s'", len(errors), errors)
         else:

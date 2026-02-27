@@ -36,10 +36,6 @@ from ml_flashpoint.core.checkpoint_saver import (
 _EXPECTED_RESET_ERROR_MSG = re.escape("MemoryStorageWriter has not been reset. Call reset() before using this method.")
 
 
-class DummySaver:
-    pass
-
-
 def _return_zero():
     return 0
 

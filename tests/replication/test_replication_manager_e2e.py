@@ -119,9 +119,8 @@ def test_async_replicate_end_to_end(tmp_path, services, mocker):
     result = futures[0].result()
     assert result.success
 
-    # Verify that the buffer is closed after replication
-    time.sleep(0.1)
-    assert buffer_io.closed
+    # close the buffer
+    buffer_io.close()
 
     # Verify the replicated data on the receiver side
     replicated_bo = buffer_object_ext.BufferObject(obj_id)

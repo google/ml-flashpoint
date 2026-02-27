@@ -654,10 +654,9 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
                 # Example: we may recover from step 6, while step 7/8 may be there but unfinished or not selected
                 # for some reason, so when we come here to write checkpoints for them, we want to overwrite whatever
                 # exists instead of failing.
-                with self._chkpt_obj_manager.create_buffer(
+                with self._chkpt_obj_manager.acquire_buffer(
                     full_object_id,
                     self._initial_buffer_size_bytes,
-                    overwrite=True,
                 ) as buffer_io_writer:
                     # Set the format signature
                     if use_optimized_write:

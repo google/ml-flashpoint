@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 import torch
@@ -795,12 +795,24 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
         def setup_mocks(self, mocker):
             self.mock_async_calls_queue_cls = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.AsyncCallsQueue")
 
-        def test_successful_initialization(self):
+        def test_successful_initialization(self, mocker):
             """Tests that the class initializes correctly with a valid CheckpointIO."""
             # Given
-            mock_checkpoint_io = MagicMock(spec=MLFlashpointCheckpointIO)
-            mock_mlf_queue = MagicMock()
-            mock_alt_queue = MagicMock()
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            # Mock the thread count needed for buffer pool init
+            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_mlf_queue = mocker.MagicMock()
+            mock_alt_queue = mocker.MagicMock()
+
             self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
 
             # When
@@ -811,28 +823,44 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             assert instance.checkpoint_io == mock_checkpoint_io
             assert instance._mlf_async_calls_queue == mock_mlf_queue
             assert instance._alt_async_calls_queue == mock_alt_queue
+            # Verify pool config was set
+            mock_checkpoint_io.chkpt_obj_manager.set_pool_config.assert_called_once()
 
-        def test_incompatible_checkpoint_io_type_raises_error(self):
+        def test_incompatible_checkpoint_io_type_raises_error(self, mocker):
             """Tests that a ValueError is raised for an incompatible CheckpointIO type."""
             # Given
-            mock_checkpoint_io = MagicMock(spec=MegatronCheckpointIO)
+            mock_checkpoint_io = mocker.MagicMock(spec=MegatronCheckpointIO)
 
             # When/Then
             with pytest.raises(ValueError):
                 MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
 
-    @patch("ml_flashpoint.adapter.nemo.checkpoint_io.AsyncCallsQueue")
     class TestSaveCheckpoint:
         """Test the save_checkpoint method."""
 
-        def test_save_ml_flashpoint_checkpoint(self, mock_async_calls_queue_cls):
+        @pytest.fixture(autouse=True)
+        def setup_mocks(self, mocker):
+            self.mock_async_calls_queue_cls = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.AsyncCallsQueue")
+
+        def test_save_ml_flashpoint_checkpoint(self, mocker):
             """Tests that an MLF checkpoint is scheduled to the correct queue."""
             # Given
-            mock_checkpoint_io = MagicMock(spec=MLFlashpointCheckpointIO)
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            mock_checkpoint_io.trainer.global_rank = 0
+            mock_checkpoint_io.save_strategy.thread_count = 1
             mock_checkpoint_io.flashpoint_base_dir = "/mlf/checkpoints"
             mock_mlf_queue = MagicMock()
             mock_alt_queue = MagicMock()
-            mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
+            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
             instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
             mock_async_request = MagicMock(spec=MegatronAsyncRequest)
             mock_checkpoint_io.save_checkpoint.return_value = mock_async_request
@@ -844,19 +872,33 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
 
             # Then
             mock_checkpoint_io.save_checkpoint.assert_called_once_with(checkpoint, path, None)
-            mock_mlf_queue.schedule_async_request.assert_called_once_with(mock_async_request)
+            # Assert schedule_async_request was called for the save request (and potentially init)
+            assert mock_mlf_queue.schedule_async_request.call_count >= 1
+            # Verify the LAST call was for the save request
+            assert mock_mlf_queue.schedule_async_request.call_args_list[-1][0][0] == mock_async_request
             mock_alt_queue.schedule_async_request.assert_not_called()
 
-        def test_save_alternative_checkpoint(self, mock_async_calls_queue_cls):
+        def test_save_alternative_checkpoint(self, mocker):
             """Tests that a non-MLF checkpoint is scheduled to the alternative queue."""
             # Given
-            mock_checkpoint_io = MagicMock(spec=MLFlashpointCheckpointIO)
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            mock_checkpoint_io.trainer.global_rank = 0
+            mock_checkpoint_io.save_strategy.thread_count = 1
             mock_checkpoint_io.flashpoint_base_dir = "/mlf/checkpoints"
-            mock_mlf_queue = MagicMock()
-            mock_alt_queue = MagicMock()
-            mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
+            mock_mlf_queue = mocker.MagicMock()
+            mock_alt_queue = mocker.MagicMock()
+            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
             instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
-            mock_async_request = MagicMock(spec=MegatronAsyncRequest)
+            mock_async_request = mocker.MagicMock(spec=MegatronAsyncRequest)
             mock_checkpoint_io.save_checkpoint.return_value = mock_async_request
             path = "/other/checkpoints/step-100"
             checkpoint = {"some": "data"}
@@ -869,18 +911,29 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             mock_alt_queue.schedule_async_request.assert_called_once_with(mock_async_request)
             mock_mlf_queue.schedule_async_request.assert_not_called()
 
-        def test_save_with_external_finalize_fn(self, mock_async_calls_queue_cls):
+        def test_save_with_external_finalize_fn(self, mocker):
             """Tests that an external finalize function is added to the async request."""
             # Given
-            mock_checkpoint_io = MagicMock(spec=MLFlashpointCheckpointIO)
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            mock_checkpoint_io.trainer.global_rank = 0
+            mock_checkpoint_io.save_strategy.thread_count = 1
             mock_checkpoint_io.flashpoint_base_dir = "/mlf/checkpoints"
-            mock_async_calls_queue_cls.side_effect = [MagicMock(), MagicMock()]
+            self.mock_async_calls_queue_cls.side_effect = [mocker.MagicMock(), mocker.MagicMock()]
             instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
-            mock_async_request = MagicMock(spec=MegatronAsyncRequest)
+            mock_async_request = mocker.MagicMock(spec=MegatronAsyncRequest)
             mock_checkpoint_io.save_checkpoint.return_value = mock_async_request
             path = "/mlf/checkpoints/step-100"
             checkpoint = {"some": "data"}
-            finalize_fn = MagicMock()
+            finalize_fn = mocker.MagicMock()
             storage_options = {"finalize_fn": finalize_fn}
 
             # When
@@ -889,17 +942,31 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             # Then
             mock_async_request.add_finalize_fn.assert_called_once_with(finalize_fn)
 
-    @patch("ml_flashpoint.adapter.nemo.checkpoint_io.AsyncCallsQueue")
     class TestMaybeFinalizeSaveCheckpoint:
         """Test the maybe_finalize_save_checkpoint method."""
 
-        def test_no_unfinalized_calls(self, mock_async_calls_queue_cls):
+        @pytest.fixture(autouse=True)
+        def setup_mocks(self, mocker):
+            self.mock_async_calls_queue_cls = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.AsyncCallsQueue")
+
+        def test_no_unfinalized_calls(self, mocker):
             """Tests that the method returns False when there are no calls to finalize."""
             # Given
-            mock_checkpoint_io = MagicMock(spec=MLFlashpointCheckpointIO)
-            mock_mlf_queue = MagicMock()
-            mock_alt_queue = MagicMock()
-            mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            mock_checkpoint_io.trainer.global_rank = 0
+            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_mlf_queue = mocker.MagicMock()
+            mock_alt_queue = mocker.MagicMock()
+            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
             instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
             mock_mlf_queue.get_num_unfinalized_calls.return_value = 0
             mock_alt_queue.get_num_unfinalized_calls.return_value = 0
@@ -912,13 +979,24 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             mock_mlf_queue.maybe_finalize_async_calls.assert_not_called()
             mock_alt_queue.maybe_finalize_async_calls.assert_not_called()
 
-        def test_finalize_mlf_calls_only(self, mock_async_calls_queue_cls):
+        def test_finalize_mlf_calls_only(self, mocker):
             """Tests that only MLF calls are finalized when only the MLF queue has calls."""
             # Given
-            mock_checkpoint_io = MagicMock(spec=MLFlashpointCheckpointIO)
-            mock_mlf_queue = MagicMock()
-            mock_alt_queue = MagicMock()
-            mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            mock_checkpoint_io.trainer.global_rank = 0
+            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_mlf_queue = mocker.MagicMock()
+            mock_alt_queue = mocker.MagicMock()
+            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
             instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
             mock_mlf_queue.get_num_unfinalized_calls.return_value = 1
             mock_alt_queue.get_num_unfinalized_calls.return_value = 0
@@ -933,13 +1011,24 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             mock_mlf_queue.maybe_finalize_async_calls.assert_called_once_with(False)
             mock_alt_queue.maybe_finalize_async_calls.assert_called_once_with(False)
 
-        def test_finalize_alt_calls_only(self, mock_async_calls_queue_cls):
+        def test_finalize_alt_calls_only(self, mocker):
             """Tests that only alternative calls are finalized when only the alternative queue has calls."""
             # Given
-            mock_checkpoint_io = MagicMock(spec=MLFlashpointCheckpointIO)
-            mock_mlf_queue = MagicMock()
-            mock_alt_queue = MagicMock()
-            mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            mock_checkpoint_io.trainer.global_rank = 0
+            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_mlf_queue = mocker.MagicMock()
+            mock_alt_queue = mocker.MagicMock()
+            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
             instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
             mock_mlf_queue.get_num_unfinalized_calls.return_value = 0
             mock_alt_queue.get_num_unfinalized_calls.return_value = 1
@@ -954,13 +1043,24 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             mock_mlf_queue.maybe_finalize_async_calls.assert_called_once_with(False)
             mock_alt_queue.maybe_finalize_async_calls.assert_called_once_with(False)
 
-        def test_finalize_both_queues(self, mock_async_calls_queue_cls):
+        def test_finalize_both_queues(self, mocker):
             """Tests that calls from both queues are finalized when both have calls."""
             # Given
-            mock_checkpoint_io = MagicMock(spec=MLFlashpointCheckpointIO)
-            mock_mlf_queue = MagicMock()
-            mock_alt_queue = MagicMock()
-            mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            mock_checkpoint_io.trainer.global_rank = 0
+            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_mlf_queue = mocker.MagicMock()
+            mock_alt_queue = mocker.MagicMock()
+            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
             instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
             mock_mlf_queue.get_num_unfinalized_calls.return_value = 1
             mock_alt_queue.get_num_unfinalized_calls.return_value = 1
@@ -975,18 +1075,32 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             mock_mlf_queue.maybe_finalize_async_calls.assert_called_once_with(True)
             mock_alt_queue.maybe_finalize_async_calls.assert_called_once_with(True)
 
-    @patch("ml_flashpoint.adapter.nemo.checkpoint_io.AsyncCallsQueue")
-    @patch("ml_flashpoint.adapter.nemo.checkpoint_io._LOGGER")
     class TestTeardown:
         """Test the teardown method."""
 
-        def test_teardown_with_no_pending_saves(self, mock_logger, mock_async_calls_queue_cls):
+        @pytest.fixture(autouse=True)
+        def setup_mocks(self, mocker):
+            self.mock_async_calls_queue_cls = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.AsyncCallsQueue")
+            self.mock_logger = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io._LOGGER")
+
+        def test_teardown_with_no_pending_saves(self, mocker):
             """Tests that no warning is logged when there are no pending saves."""
             # Given
-            mock_checkpoint_io = MagicMock(spec=MLFlashpointCheckpointIO)
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            mock_checkpoint_io.trainer.global_rank = 0
+            mock_checkpoint_io.save_strategy.thread_count = 1
             mock_mlf_queue = MagicMock()
             mock_alt_queue = MagicMock()
-            mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
+            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
             instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
             mock_mlf_queue.get_num_unfinalized_calls.return_value = 0
             mock_alt_queue.get_num_unfinalized_calls.return_value = 0
@@ -995,15 +1109,26 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             instance.teardown()
 
             # Then
-            mock_logger.warning.assert_not_called()
+            self.mock_logger.warning.assert_not_called()
 
-        def test_teardown_with_pending_mlf_saves(self, mock_logger, mock_async_calls_queue_cls):
+        def test_teardown_with_pending_mlf_saves(self, mocker):
             """Tests that a warning is logged when there are pending MLF saves."""
             # Given
-            mock_checkpoint_io = MagicMock(spec=MLFlashpointCheckpointIO)
-            mock_mlf_queue = MagicMock()
-            mock_alt_queue = MagicMock()
-            mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            mock_checkpoint_io.trainer.global_rank = 0
+            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_mlf_queue = mocker.MagicMock()
+            mock_alt_queue = mocker.MagicMock()
+            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
             instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
             mock_mlf_queue.get_num_unfinalized_calls.return_value = 1
             mock_alt_queue.get_num_unfinalized_calls.return_value = 0
@@ -1012,15 +1137,26 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             instance.teardown()
 
             # Then
-            mock_logger.warning.assert_called_once()
+            self.mock_logger.warning.assert_called_once()
 
-        def test_teardown_with_pending_alt_saves(self, mock_logger, mock_async_calls_queue_cls):
+        def test_teardown_with_pending_alt_saves(self, mocker):
             """Tests that a warning is logged when there are pending alternative saves."""
             # Given
-            mock_checkpoint_io = MagicMock(spec=MLFlashpointCheckpointIO)
-            mock_mlf_queue = MagicMock()
-            mock_alt_queue = MagicMock()
-            mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            mock_checkpoint_io.trainer.global_rank = 0
+            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_mlf_queue = mocker.MagicMock()
+            mock_alt_queue = mocker.MagicMock()
+            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
             instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
             mock_mlf_queue.get_num_unfinalized_calls.return_value = 0
             mock_alt_queue.get_num_unfinalized_calls.return_value = 1
@@ -1029,20 +1165,72 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             instance.teardown()
 
             # Then
-            mock_logger.warning.assert_called_once()
+            self.mock_logger.warning.assert_called_once()
 
-    @patch("ml_flashpoint.adapter.nemo.checkpoint_io.AsyncCallsQueue")
+        def test_buffer_pool_teardown_scheduled(self, mocker):
+            """Tests that BufferPool teardown is scheduled during teardown."""
+            # Given
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            mock_checkpoint_io.trainer.global_rank = 0
+            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_mlf_queue = mocker.MagicMock()
+            mock_alt_queue = mocker.MagicMock()
+            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
+            instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
+            # simulate queue not closed
+            mock_mlf_queue.__bool__.return_value = True
+            mock_mlf_queue.get_num_unfinalized_calls.return_value = 0
+            mock_alt_queue.get_num_unfinalized_calls.return_value = 0
+
+            # When
+            instance.teardown()
+
+            # Then
+            # Verify teardown was scheduled
+            # We can't easily check for the exact AsyncRequest object because it's created inside teardown
+            # But we can check if schedule_async_request was called with a request having the right function
+            calls = mock_mlf_queue.schedule_async_request.call_args_list
+            assert len(calls) > 0
+            teardown_call = calls[0]
+            scheduled_request = teardown_call[0][0]
+            assert scheduled_request.async_fn == mock_checkpoint_io.chkpt_obj_manager.teardown_pool
+            assert scheduled_request.async_fn_args == ()
+
     class TestIntegration:
         """Integration tests for MLFlashpointAsyncFinalizableCheckpointIO."""
 
-        def test_full_lifecycle_mlf_checkpoint(self, mock_async_calls_queue_cls):
+        @pytest.fixture(autouse=True)
+        def setup_mocks(self, mocker):
+            self.mock_async_calls_queue_cls = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.AsyncCallsQueue")
+
+        def test_full_lifecycle_mlf_checkpoint(self, mocker):
             """Tests the full lifecycle of saving and finalizing an MLF checkpoint."""
             # Given
-            mock_checkpoint_io = MagicMock(spec=MLFlashpointCheckpointIO)
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            mock_checkpoint_io.trainer.global_rank = 0
+            mock_checkpoint_io.save_strategy.thread_count = 1
             mock_checkpoint_io.flashpoint_base_dir = "/mlf/checkpoints"
             mock_mlf_queue = MagicMock()
             mock_alt_queue = MagicMock()
-            mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
+            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
             instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
             mock_async_request = MagicMock(spec=MegatronAsyncRequest)
             mock_checkpoint_io.save_checkpoint.return_value = mock_async_request
@@ -1055,19 +1243,33 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             instance.maybe_finalize_save_checkpoint()
 
             # Then
-            mock_mlf_queue.schedule_async_request.assert_called_once_with(mock_async_request)
+            # Assert schedule_async_request was called for the save request
+            assert mock_mlf_queue.schedule_async_request.call_count >= 1
+            # Verify the LAST call was for the save request
+            assert mock_mlf_queue.schedule_async_request.call_args_list[-1][0][0] == mock_async_request
             mock_mlf_queue.maybe_finalize_async_calls.assert_called_once()
 
-        def test_full_lifecycle_alt_checkpoint(self, mock_async_calls_queue_cls):
+        def test_full_lifecycle_alt_checkpoint(self, mocker):
             """Tests the full lifecycle of saving and finalizing an alternative checkpoint."""
             # Given
-            mock_checkpoint_io = MagicMock(spec=MLFlashpointCheckpointIO)
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            mock_checkpoint_io.trainer.global_rank = 0
+            mock_checkpoint_io.save_strategy.thread_count = 1
             mock_checkpoint_io.flashpoint_base_dir = "/mlf/checkpoints"
-            mock_mlf_queue = MagicMock()
-            mock_alt_queue = MagicMock()
-            mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
+            mock_mlf_queue = mocker.MagicMock()
+            mock_alt_queue = mocker.MagicMock()
+            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
             instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
-            mock_async_request = MagicMock(spec=MegatronAsyncRequest)
+            mock_async_request = mocker.MagicMock(spec=MegatronAsyncRequest)
             mock_checkpoint_io.save_checkpoint.return_value = mock_async_request
             path = "/other/checkpoints/step-100"
             checkpoint = {"some": "data"}
@@ -1081,18 +1283,29 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             mock_alt_queue.schedule_async_request.assert_called_once_with(mock_async_request)
             mock_alt_queue.maybe_finalize_async_calls.assert_called_once()
 
-        def test_interleaved_checkpoints_are_finalized_independently(self, mock_async_calls_queue_cls):
+        def test_interleaved_checkpoints_are_finalized_independently(self, mocker):
             """Tests that interleaved MLF and alternative checkpoints are finalized independently."""
             # Given
-            mock_checkpoint_io = MagicMock(spec=MLFlashpointCheckpointIO)
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            mock_checkpoint_io.trainer.global_rank = 0
+            mock_checkpoint_io.save_strategy.thread_count = 1
             mock_checkpoint_io.flashpoint_base_dir = "/mlf/checkpoints"
-            mock_mlf_queue = MagicMock()
-            mock_alt_queue = MagicMock()
-            mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
+            mock_mlf_queue = mocker.MagicMock()
+            mock_alt_queue = mocker.MagicMock()
+            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
             instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
 
-            mlf_request = MagicMock(spec=MegatronAsyncRequest)
-            alt_request = MagicMock(spec=MegatronAsyncRequest)
+            mlf_request = mocker.MagicMock(spec=MegatronAsyncRequest)
+            alt_request = mocker.MagicMock(spec=MegatronAsyncRequest)
 
             def save_side_effect(checkpoint, path, storage_options=None):
                 if "mlf" in path:
@@ -1114,7 +1327,9 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             instance.maybe_finalize_save_checkpoint()
 
             # Then
-            mock_mlf_queue.schedule_async_request.assert_called_once_with(mlf_request)
+            # Assert schedule_async_request was called for mlf request
+            calls = mock_mlf_queue.schedule_async_request.call_args_list
+            assert any(call.args[0] == mlf_request for call in calls)
             mock_alt_queue.schedule_async_request.assert_called_once_with(alt_request)
             mock_mlf_queue.maybe_finalize_async_calls.assert_called_once()
             mock_alt_queue.maybe_finalize_async_calls.assert_called_once()

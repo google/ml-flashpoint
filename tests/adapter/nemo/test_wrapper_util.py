@@ -43,6 +43,13 @@ from ml_flashpoint.core.checkpoint_saver import (
 from ml_flashpoint.replication.replication_manager import ReplicationManager
 
 
+class MockMLFlashpointCheckpointIO(MLFlashpointCheckpointIO):
+    trainer = None
+    save_strategy = None
+    fallback_checkpoint_io = None
+    flashpoint_base_dir = "/tmp/mock_base_dir"
+
+
 class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
     """Tests for the wrap_trainer_and_auto_resume_with_mlflashpoint function."""
 
@@ -566,6 +573,12 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         inner_megatron_io = mocker.MagicMock(spec=MegatronCheckpointIO)
         mlf_io = mocker.MagicMock(spec=MLFlashpointCheckpointIO)
         mlf_io.fallback_checkpoint_io = inner_megatron_io
+        mlf_io.flashpoint_base_dir = "/tmp/mock_base_container"
+        mlf_io.trainer = mocker.MagicMock()
+        mlf_io.trainer.global_rank = 0
+        mlf_io.save_strategy = mocker.MagicMock()
+        mlf_io.save_strategy._storage_writer._thread_count = 1
+        mlf_io.chkpt_obj_manager = mock_ckpt_obj_manager
         original_async_wrapped_mlf_io = MLFlashpointAsyncFinalizableCheckpointIO(mlf_io)
 
         trainer.strategy.checkpoint_io = original_async_wrapped_mlf_io
@@ -699,6 +712,12 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
 
         # Create an already-wrapped MLFlashpointCheckpointIO
         mlf_io = mocker.MagicMock(spec=MLFlashpointCheckpointIO)
+        mlf_io.flashpoint_base_dir = "/tmp/mock_base_container"
+        mlf_io.trainer = mocker.MagicMock()
+        mlf_io.trainer.global_rank = 0
+        mlf_io.save_strategy = mocker.MagicMock()
+        mlf_io.save_strategy._storage_writer._thread_count = 1
+        mlf_io.chkpt_obj_manager = mock_ckpt_obj_manager
         original_async_wrapped_mlf_io = MLFlashpointAsyncFinalizableCheckpointIO(mlf_io)
         trainer.strategy.checkpoint_io = original_async_wrapped_mlf_io
 

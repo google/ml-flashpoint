@@ -43,10 +43,12 @@ from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import (
     CheckpointObjectManager,
 )
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId
+from ml_flashpoint.core.checkpoint_saver import DEFAULT_INITIAL_BUFFER_SIZE_BYTES
 from ml_flashpoint.core.mlf_logging import get_logger
 from ml_flashpoint.core.utils import log_execution_time
 
 _LOGGER = get_logger(__name__)
+DEFAULT_BUFFER_POOL_SLACK_FACTOR = 3
 
 
 def _is_ml_flashpoint_checkpoint(flashpoint_base_dir: Union[str, CheckpointContainerId], path: _PATH) -> bool:
@@ -305,6 +307,18 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
         self._mlf_async_calls_queue = AsyncCallsQueue(persistent=True)
         self._alt_async_calls_queue = AsyncCallsQueue()
 
+        # We want to have enough buffers to cover all threads + some slack.
+        # 3x thread count seems reasonable to avoid waiting for buffers.
+        num_buffers = DEFAULT_BUFFER_POOL_SLACK_FACTOR * self.mlf_checkpoint_io.save_strategy.thread_count
+
+        pool_config = {
+            "pool_dir_path": os.path.join(str(self.mlf_checkpoint_io.flashpoint_base_dir), "buffer_pool"),
+            "rank": self.mlf_checkpoint_io.trainer.global_rank,
+            "num_buffers": num_buffers,
+            "buffer_size": DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
+        }
+        self.mlf_checkpoint_io.chkpt_obj_manager.set_pool_config(pool_config)
+
     @property
     def mlf_checkpoint_io(self) -> MLFlashpointCheckpointIO:
         """Helper to return the underlying checkpoint_io cast as MLFlashpointCheckpointIO to satisfy type checkers.
@@ -344,6 +358,7 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
         if _is_ml_flashpoint_checkpoint(self.mlf_checkpoint_io.flashpoint_base_dir, path):
             queue_type = "ml_flashpoint"
             corresponding_async_calls_queue = self._mlf_async_calls_queue
+
         else:
             queue_type = "alternative"
             corresponding_async_calls_queue = self._alt_async_calls_queue
@@ -399,6 +414,21 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
         ):
             # Can't do finalization now because some ranks might be lost
             _LOGGER.warning("Some async checkpoint saves might be not finalized properly.")
+
+        # Teardown BufferPool in the worker
+        # We schedule a task to teardown.
+        if hasattr(self, "_mlf_async_calls_queue") and self._mlf_async_calls_queue:
+            try:
+                self._mlf_async_calls_queue.schedule_async_request(
+                    MegatronAsyncRequest(
+                        async_fn=self.mlf_checkpoint_io.chkpt_obj_manager.teardown_pool,
+                        async_fn_args=(),
+                        finalize_fns=[],
+                    )
+                )
+            except Exception:
+                # Queue might be closed already
+                pass
 
         if hasattr(self._mlf_async_calls_queue, "close"):
             self._mlf_async_calls_queue.close()

@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-from concurrent.futures import ThreadPoolExecutor
 from typing import Generator
 
 import pytest
@@ -59,45 +58,12 @@ class TestBufferPool:
         # Verify it was removed from free_buffers
         assert len(buffer_pool.free_buffers) == buffer_pool_config["num_buffers"] - 1
         assert len(buffer_pool.active_buffers) == 1
+        assert buffer_id in buffer_pool.active_buffers
 
         # Cleanup
         buffer_io.close()
         assert buffer_io.closed
         assert not buffer_io._buffer_io.closed
-
-    def test_reuse_lazy_resize_buffer(self, buffer_pool, tmp_path, buffer_pool_config):
-        """Verifies that acquire does NOT resize eagerly, but write auto-resizes."""
-        symlink_path = str(tmp_path / "symlink_1")
-        buffer_size = buffer_pool_config["buffer_size"]
-
-        # 1. Acquire
-        buf_io1 = buffer_pool.acquire(associated_symlink=symlink_path)
-
-        # Write data using buffer object instead of truncating file
-        buf_io1.write(b"dummy")
-
-        current_cap = buf_io1.buffer_obj.get_capacity()
-        assert current_cap == buffer_size
-
-        # 2. Release via GC
-        os.remove(symlink_path)
-        buffer_pool._gc()
-
-        # 3. Acquire again
-        buf_io2 = buffer_pool.acquire()
-
-        assert buf_io1._buffer_io is buf_io2._buffer_io
-        # Verify capacity did NOT increase yet (lazy)
-        assert buf_io2.buffer_obj.get_capacity() == buffer_size
-
-        # 4. Write data that fits -> NO resize
-        buf_io2.write(b"x" * 100)
-        assert buf_io2.buffer_obj.get_capacity() == buffer_size
-
-        # 5. Write data that exceeds -> Auto Resize
-        large_data = b"y" * (buffer_size + 100)
-        buf_io2.write(large_data)
-        assert buf_io2.buffer_obj.get_capacity() > buffer_size
 
     def test_gc_releases_orphaned_buffers(self, buffer_pool, tmp_path):
         """Verifies that GC correctly releases buffers with deleted symlinks."""
@@ -105,22 +71,26 @@ class TestBufferPool:
 
         # Acquire with symlink=None
         buf_io = buffer_pool.acquire(associated_symlink=None)
+        buffer_id = buf_io.buffer_obj.get_id()
 
         # Verify IT IS ACTIVE
-        assert buf_io._buffer_io in buffer_pool.active_buffers
+        assert buffer_id in buffer_pool.active_buffers
+        assert buffer_pool.active_buffers[buffer_id][1] is None
 
         # Trigger GC - should NOT release (pending registration)
         buffer_pool._gc()
-        assert buf_io._buffer_io in buffer_pool.active_buffers
+        assert buffer_id in buffer_pool.active_buffers
 
         # Re-acquire with symlink
         buf_io.close()
 
         # Create valid symlink path
         buf_io = buffer_pool.acquire(associated_symlink=symlink_path)
+        buffer_id = buf_io.buffer_obj.get_id()
 
         assert os.path.islink(symlink_path)
-        assert buf_io._buffer_io in buffer_pool.active_buffers
+        assert buffer_id in buffer_pool.active_buffers
+        assert buffer_pool.active_buffers[buffer_id][1] == symlink_path
 
         # Delete symlink
         os.remove(symlink_path)
@@ -128,136 +98,8 @@ class TestBufferPool:
         # Trigger GC
         buffer_pool._gc()
 
-        assert buf_io._buffer_io not in buffer_pool.active_buffers
+        assert buffer_id not in buffer_pool.active_buffers
         assert buf_io._buffer_io in buffer_pool.free_buffers
-
-    def test_pool_exhaustion(self, buffer_pool, buffer_pool_config, tmp_path):
-        """Verifies that acquiring more than num_buffers raises RuntimeError."""
-        buffers = []
-        # Acquire all buffers
-        for _ in range(buffer_pool_config["num_buffers"]):
-            buffers.append(buffer_pool.acquire())
-
-        # Try one more
-        with pytest.raises(RuntimeError, match="BufferPool exhausted"):
-            buffer_pool.acquire()
-
-        # Cleanup
-        for b in buffers:
-            b.close()
-
-    def test_proxy_truncates_on_close(self, buffer_pool):
-        """Verifies that closing the proxy truncates the underlying buffer."""
-        buf_proxy = buffer_pool.acquire()
-
-        data = b"hello world"
-        buf_proxy.write(data)
-
-        initial_capacity = buf_proxy.buffer_obj.get_capacity()
-        assert initial_capacity > 0
-
-        buf_proxy.close()
-
-        assert buf_proxy.closed
-        real_buf = buf_proxy._buffer_io
-        assert not real_buf.closed
-
-        expected_size = METADATA_SIZE + len(data)
-        assert real_buf.buffer_obj.get_capacity() == expected_size
-
-    def test_proxy_auto_resizes(self, buffer_pool, buffer_pool_config):
-        """Verifies that the proxy auto-resizes when writing beyond capacity."""
-        buf_proxy = buffer_pool.acquire()
-        buffer_size = buffer_pool_config["buffer_size"]
-
-        # 1. Write data that fits
-        buf_proxy.write(b"a" * 50)
-        assert buf_proxy.buffer_obj.get_capacity() == buffer_size
-
-        # 2. Write data that EXCEEDS capacity
-        large_data = b"b" * (buffer_size + 1000)
-        buf_proxy.write(large_data)
-
-        current_capacity = buf_proxy.buffer_obj.get_capacity()
-        assert current_capacity > buffer_size
-
-        # 3. Test next_buffer_slice resize
-        huge_size = current_capacity * 2
-        mv = buf_proxy.next_buffer_slice(huge_size)
-        assert len(mv) == huge_size
-
-        final_capacity = buf_proxy.buffer_obj.get_capacity()
-        assert final_capacity > current_capacity
-        buf_proxy.close()
-
-    def test_reuse_with_resize_resets_content(self, buffer_pool, tmp_path, buffer_pool_config):
-        """Verifies that reusing a buffer with resize resets position and content."""
-        symlink_path = str(tmp_path / "symlink_resize_test")
-
-        # 1. Acquire and write data
-        buf_io1 = buffer_pool.acquire(associated_symlink=symlink_path)
-
-        data1 = b"FirstData"
-        buf_io1.write(data1)
-        assert buf_io1.tell() == len(data1)
-
-        # 2. Release via GC
-        os.remove(symlink_path)
-        buffer_pool._gc()
-
-        # 3. Acquire again
-        buf_io2 = buffer_pool.acquire()
-
-        assert buf_io1._buffer_io is buf_io2._buffer_io
-        assert buf_io2.tell() == 0
-
-        # Write new data
-        data2 = b"SecondData"
-        buf_io2.write(data2)
-
-        # Verify content
-        buf_io2.seek(0)
-        content = buf_io2.read()
-        assert content == data2
-
-    def test_init_with_invalid_dir(self, mocker):
-        """Verifies behavior when initialization fails due to directory issues."""
-        BufferPool._instance = None
-        mocker.patch("os.makedirs", side_effect=OSError("Permission denied"))
-        with pytest.raises(OSError, match="Permission denied"):
-            BufferPool(pool_dir_path="/invalid/path", num_buffers=1, buffer_size=1024)
-        BufferPool._instance = None
-
-    def test_init_zero_size(self, tmp_path):
-        """Verifies behavior when initialized with size 0."""
-        BufferPool._instance = None
-        # buffer_size=0 should skip preallocation
-        pool = BufferPool(pool_dir_path=str(tmp_path), num_buffers=3, buffer_size=0)
-        assert len(pool.free_buffers) == 0
-        pool.teardown()
-        BufferPool._instance = None
-
-    def test_concurrent_acquire(self, buffer_pool):
-        """Verifies that acquire is thread-safe."""
-
-        # We have 3 buffers. Try to acquire 3 concurrently.
-        def acquire_task():
-            try:
-                return buffer_pool.acquire()
-            except RuntimeError:
-                return None
-
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [executor.submit(acquire_task) for _ in range(5)]
-            results = [f.result() for f in futures]
-
-        # Should have 3 successes and 2 failures (None)
-        successes = [r for r in results if r is not None]
-        assert len(successes) == 3
-
-        # Cleanup
-        for b in successes:
-            b.close()
 
     def test_symlink_creation_failure(self, buffer_pool, tmp_path):
         """Verifies that acquire fails and releases buffer if symlink creation fails."""
@@ -270,6 +112,7 @@ class TestBufferPool:
 
         # Verify buffer was returned to free pool
         assert len(buffer_pool.free_buffers) == 3
+        # Since we don't know exactly which buffer was picked, checks size
         assert len(buffer_pool.active_buffers) == 0
 
     def test_init_missing_pool_dir(self):

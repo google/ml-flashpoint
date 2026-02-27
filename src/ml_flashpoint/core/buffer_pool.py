@@ -162,8 +162,8 @@ class BufferPool:
         self.num_buffers = num_buffers
         self.buffer_size = buffer_size
         self.free_buffers: List[BufferIO] = []
-        # active_buffers maps BufferIO -> associated_symlink_path (str)
-        self.active_buffers: Dict[BufferIO, str] = {}
+        # active_buffers maps buffer_path (str) -> (BufferIO, associated_symlink_path (str))
+        self.active_buffers: Dict[str, tuple[BufferIO, str]] = {}
         self._lock = threading.Lock()
 
         if self.pool_dir and self.buffer_size > 0:
@@ -210,8 +210,9 @@ class BufferPool:
                     # If reuse fails (e.g. symlink creation), we must put the buffer back!
                     _LOGGER.exception("Failed to reuse buffer for '%s'. Releasing buffer.", associated_symlink)
                     # _reuse_buffer might have added it to active_buffers, so ensure it's removed.
-                    if free_buffer in self.active_buffers:
-                        del self.active_buffers[free_buffer]
+                    buffer_path = free_buffer.buffer_obj.get_id()
+                    if buffer_path in self.active_buffers:
+                        del self.active_buffers[buffer_path]
                     self.free_buffers.append(free_buffer)
                     raise
 
@@ -222,15 +223,15 @@ class BufferPool:
         """Releases buffers whose associated symlinks no longer exist."""
         # Check all active buffers
         to_release = []
-        for buf_io, symlink in self.active_buffers.items():
+        for buffer_path, (buf_io, symlink) in self.active_buffers.items():
             if symlink and not os.path.exists(symlink):
-                to_release.append(buf_io)
+                to_release.append(buffer_path)
 
         if to_release:
             _LOGGER.info("Garbage collecting %d buffers whose symlinks are gone.", len(to_release))
-            for buf_io in to_release:
-                _LOGGER.info("Garbage collecting buffer %s", buf_io.buffer_obj.get_id())
-                del self.active_buffers[buf_io]
+            for buffer_path in to_release:
+                _LOGGER.info("Garbage collecting buffer %s", buffer_path)
+                buf_io, _ = self.active_buffers.pop(buffer_path)
                 self.free_buffers.append(buf_io)
 
     def teardown(self) -> None:
@@ -255,7 +256,7 @@ class BufferPool:
                     _LOGGER.warning("BufferIOProxy: Failed to close buffer during teardown.", exc_info=True)
             self.free_buffers.clear()
 
-            for buf in self.active_buffers:
+            for buffer_path, (buf, _) in self.active_buffers.items():
                 try:
                     buf.close(truncate=True)
                 except Exception:
@@ -273,13 +274,14 @@ class BufferPool:
             buffer_io.seek(0)
             buffer_io._metadata.len_written_data = 0
 
-            self.active_buffers[buffer_io] = symlink
+            buffer_path = buffer_io.buffer_obj.get_id()
+            self.active_buffers[buffer_path] = (buffer_io, symlink)
 
             if symlink:
                 try:
                     # Create symlink pointing to the physical buffer path
-                    os.symlink(buffer_io.buffer_obj.get_id(), symlink)
-                    _LOGGER.debug("Created symlink '%s' -> '%s'", symlink, buffer_io.buffer_obj.get_id())
+                    os.symlink(buffer_path, symlink)
+                    _LOGGER.debug("Created symlink '%s' -> '%s'", symlink, buffer_path)
                 except OSError:
                     # If symlink creation fails, propagate the error.
                     # The caller (acquire) is responsible for cleanup.

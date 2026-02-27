@@ -20,7 +20,6 @@ from nemo.lightning.io.pl import MegatronCheckpointIO
 from nemo.lightning.pytorch import strategies as nl_strategies
 from nemo.lightning.pytorch import trainer as nl_trainer
 from nemo.utils.callbacks.dist_ckpt_io import AsyncFinalizableCheckpointIO
-from torch import multiprocessing as torch_mp
 
 from ml_flashpoint.adapter.megatron.load_strategies import MLFlashpointMegatronLoadStrategy
 from ml_flashpoint.adapter.megatron.save_strategies import MLFlashpointMegatronAsyncSaveStrategy
@@ -216,7 +215,6 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
                 initial_buffer_size_bytes=initial_write_buffer_size_bytes,
                 use_optimized_save=use_optimized_save,
             ),
-            mp_manager=ctx.Manager(),
             thread_count=write_thread_count,
         )
     )

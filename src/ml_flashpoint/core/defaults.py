@@ -20,11 +20,11 @@ GLOBAL_RANK_PATTERN = re.compile(r"src(\d+)")
 COMMON_STATE_FNAME = "common.pt"
 
 
-class CheckpointFormat(bytes, Enum):
+class CheckpointFormat(str, Enum):
     # Standard PyTorch save format
-    TORCH_SAVE = b"TORCH___"
+    TORCH_SAVE = "TORCH___"
     # Our custom optimized format
-    MLF_FORMAT = b"MLF_TENS"
+    MLF_FORMAT = "MLF_TENS"
 
 
 def default_metadata_object_name() -> str:

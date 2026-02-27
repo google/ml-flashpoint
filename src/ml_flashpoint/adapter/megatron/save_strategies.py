@@ -126,7 +126,6 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         # 1b. Re-initialize the StorageWriter to use a new instance per save to avoid hangs from shared state.
         self._storage_writer = MemoryStorageWriter(
             checkpoint_saver=self._checkpoint_saver,
-            mp_manager=self._storage_writer._main_process_torchmp_manager,
             thread_count=self._storage_writer._thread_count,
         )
         # 1c. Reset the StorageWriter for this checkpoint version.

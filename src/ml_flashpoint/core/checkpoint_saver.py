@@ -19,9 +19,7 @@ import io
 import logging
 import os
 import pickle
-import queue
-import threading
-from typing import Callable, Optional, Protocol, Union
+from typing import Any, Callable, Optional, Protocol, Union
 
 import torch
 from torch.distributed.checkpoint import metadata as torchdistmeta
@@ -32,6 +30,7 @@ from typing_extensions import override
 
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.checkpoint_object_manager.object_manager import object_manager_ext
+from ml_flashpoint.core.async_writer import async_writer_ext
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.defaults import DIRTY_MARKER_SUFFIX, CheckpointFormat, default_metadata_object_name
 from ml_flashpoint.core.mlf_logging import get_logger
@@ -210,8 +209,8 @@ class MLFlashpointCheckpointSaver(abc.ABC):
         self,
         checkpoint_id: CheckpointContainerId,
         write_buckets: list[ObjectWriteBucket],
-        thread_count: int,
         replicate_after_write: bool,
+        thread_count: int,
     ) -> list[WriteResult]:
         """Performs the core write logic for the given write items and checkpoint_id.
 
@@ -230,6 +229,30 @@ class MLFlashpointCheckpointSaver(abc.ABC):
 
         Returns:
             The list of WriteResults from the write operations.
+        """
+        pass
+
+    @abc.abstractmethod
+    def write_data_async(
+        self,
+        checkpoint_id: CheckpointContainerId,
+        write_buckets: list[ObjectWriteBucket],
+        replicate_after_write: bool,
+        thread_count: int,
+    ) -> concurrent.futures.Future:
+        """Asynchronously writes the data to storage based on the provided buckets.
+
+        This method leverages C++ implementation to perform the actual data copying
+        without holding the Python GIL, allowing for true parallelism.
+
+        Args:
+            checkpoint_id: Unique hierarchical ID representing this checkpoint container.
+            write_buckets: A list of `ObjectWriteBucket` objects, each containing resolved data ready for writing.
+            replicate_after_write: Whether to trigger async replication of each object after it is written.
+            thread_count: The number of threads to use for writing data.
+
+        Returns:
+            A concurrent.futures.Future resolving to a list of `WriteResult` objects.
         """
         pass
 
@@ -437,8 +460,21 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         checkpoint_id: CheckpointContainerId,
         write_buckets: list[ObjectWriteBucket],
         replicate_after_write: bool,
-        thread_count: int = 1,
+        thread_count: int,
     ) -> list[WriteResult]:
+        # Sync wrapper around async write for backward compatibility.
+        future = self.write_data_async(checkpoint_id, write_buckets, replicate_after_write)
+        return future.result()
+
+    @override
+    @log_execution_time(logger=_LOGGER, name="write_data_async", level=logging.INFO)
+    def write_data_async(
+        self,
+        checkpoint_id: CheckpointContainerId,
+        write_buckets: list[ObjectWriteBucket],
+        replicate_after_write: bool,
+        thread_count: int,
+    ) -> concurrent.futures.Future:
         thread_count = max(thread_count, 1)
         num_cpus = os.cpu_count() or 1
         num_ranks = max(get_accelerator_count(), 1)
@@ -449,74 +485,87 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         # This also avoids potential runtime errors in tensor.copy_() with concurrent writers
         torch.set_num_threads(torch_thread_count)
         _LOGGER.debug(
-            "%s starting multi-threaded write_data. thread_count: %d, original_num_threads: %d, "
-            "num_cpus: %d, num_ranks: %d, torch_thread_count: %d",
+            "%s starting async write_data via C++ extension. Bucket count: %d",
             self.__class__.__name__,
-            thread_count,
-            original_num_threads,
-            num_cpus,
-            num_ranks,
-            torch_thread_count,
+            len(write_buckets),
         )
-        try:
-            # Queue of ObjectWriteBuckets
-            object_items_queue: queue.Queue = queue.Queue()
-            for bucket in write_buckets:
-                object_items_queue.put(bucket)
 
-            # NOTE: There is support for multiple threads, to simplify modifying that setting, but we typically
-            # only use 1 thread.
+        # 1. Map MetadataIndex to unique IDs to pass to C++ safely.
+        index_map: dict[int, Any] = {}
+        next_id = 0
 
-            results_from_threads: queue.Queue = queue.Queue()  # Queue for tuple[List[WriteResult], Exception]
-            threads = []
+        def _get_id(index: Any) -> int:
+            nonlocal next_id
+            id_val = next_id
+            index_map[id_val] = index
+            next_id += 1
+            return id_val
 
-            # Kick off additional threads to main thread, if any.
-            _LOGGER.debug("Spawning %d extra writer threads (in addition to the main thread).", thread_count - 1)
-            for i in range(1, thread_count):
-                thread = threading.Thread(
-                    target=self._write_to_buffer_from_queue_worker,
-                    args=(object_items_queue, results_from_threads, replicate_after_write, self._use_optimized_save),
-                    name=f"{self.__class__.__name__}-Thread-{i}",
+        # 2. Convert to C++ buckets.
+        cpp_buckets = []
+        for bucket in write_buckets:
+            tensor_items = []
+            for item, tensor in bucket.tensor_data:
+                tensor_header = TensorHeader(dtype=tensor.dtype, shape=tensor.shape)
+                header_bytes = tensor_header.to_bytes()
+                tensor_items.append(
+                    async_writer_ext.CppTensorWriteItem(
+                        _get_id(item.index),
+                        header_bytes,
+                        tensor,
+                    )
                 )
-                threads.append(thread)
-                thread.start()
 
-            # Main thread execution.
-            self._write_to_buffer_from_queue_worker(
-                object_items_queue, results_from_threads, replicate_after_write, self._use_optimized_save
+            bytes_items = []
+            for item, data in bucket.bytesio_data:
+                data.seek(0)
+                bytes_items.append(async_writer_ext.CppBytesWriteItem(_get_id(item.index), data.read()))
+
+            cpp_buckets.append(
+                async_writer_ext.CppObjectWriteBucket(
+                    str(bucket.object_id), bucket.object_name, tensor_items, bytes_items
+                )
             )
 
-            for thread in threads:
-                thread.join()
+        # 3. Call C++ extension.
+        format_signature = (
+            CheckpointFormat.MLF_FORMAT if self._use_optimized_save else CheckpointFormat.TORCH_SAVE
+        )
 
-            all_results: list[WriteResult] = []
-            exceptions_raised: list[Exception] = []
-            # Collect all results, replication metadata, and exceptions
-            while not results_from_threads.empty():
-                try:
-                    results, exception = results_from_threads.get_nowait()
-                    if exception:
-                        exceptions_raised.append(exception)
-                    elif results:
-                        all_results.extend(results)
-                except queue.Empty:
-                    break
+        cpp_future = async_writer_ext.write_buckets_async(
+            cpp_buckets, self._initial_buffer_size_bytes, format_signature
+        )
 
-            if exceptions_raised:
-                _LOGGER.error(
-                    "'%s' encountered %d error(s) during multi-threaded write (will propagate the first one):\n%s.",
-                    self.__class__.__name__,
-                    len(exceptions_raised),
-                    exceptions_raised,
-                )
-                # Propagate the first exception encountered.
-                # TODO: propagate some combined exception, then update log msg
-                # (for now they are all logged above at least)
-                raise exceptions_raised[0]
+        # 4. Wrap the C++ future to map results back to WriteResult.
+        python_future = concurrent.futures.Future()
 
-            return all_results
-        finally:
-            torch.set_num_threads(original_num_threads)
+        def _on_future_complete(f: concurrent.futures.Future):
+            try:
+                cpp_results: list[async_writer_ext.CppWriteResult] = f.result()
+                write_results = []
+                for res in cpp_results:
+                    item_storage_data = _StorageInfo(
+                        relative_path=res.relative_path, offset=res.offset, length=res.length
+                    )
+                    write_results.append(
+                        WriteResult(
+                            index=index_map[res.index_id],
+                            size_in_bytes=res.size_in_bytes,
+                            storage_data=item_storage_data,
+                        )
+                    )
+
+                if replicate_after_write:
+                    for bucket in write_buckets:
+                        self.async_replicate_object(bucket.object_id)
+
+                python_future.set_result(write_results)
+            except Exception as e:
+                _LOGGER.exception("Error in C++ writer")
+                python_future.set_exception(e)
+
+        cpp_future.add_done_callback(_on_future_complete)
+        return python_future
 
     @log_execution_time(logger=_LOGGER, name="async_replicate_object")
     def async_replicate_object(self, object_id: CheckpointObjectId) -> list[concurrent.futures.Future]:
@@ -618,95 +667,6 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         checkpoint_id_str = str(checkpoint_id).rstrip("/")
         return f"{checkpoint_id_str}__{self._local_rank_getter()}__{DIRTY_MARKER_SUFFIX}"
 
-    @log_execution_time(logger=_LOGGER, name="_write_to_buffer_from_queue_worker")
-    def _write_to_buffer_from_queue_worker(
-        self,
-        object_write_bucket_queue: queue.Queue,
-        results_from_threads: queue.Queue,
-        replicate_after_write: bool,
-        use_optimized_write: bool,
-    ):
-        """Worker function for writing data from a queue to buffer objects.
-
-        Args:
-            object_write_bucket_queue: A queue containing `ObjectWriteBucket` instances to process.
-            results_from_threads: A queue to put `(List[WriteResult], Exception)` tuples into.
-            replicate_after_write: Whether to trigger async replication of each object after it is written.
-            use_optimized_write: Whether to use optimized write.
-        """
-        while not object_write_bucket_queue.empty():
-            try:
-                write_bucket_to_process: ObjectWriteBucket = object_write_bucket_queue.get_nowait()  # Non-blocking get
-            except queue.Empty:
-                break
-
-            full_object_id, object_name, byteio_tuples, tensor_tuples = (
-                write_bucket_to_process.object_id,
-                write_bucket_to_process.object_name,
-                write_bucket_to_process.bytesio_data,
-                write_bucket_to_process.tensor_data,
-            )
-
-            try:
-                thread_bucket_results: list[WriteResult] = []
-
-                # Set overwrite to True, in case we are recovering from a previous checkpoint.
-                # Example: we may recover from step 6, while step 7/8 may be there but unfinished or not selected
-                # for some reason, so when we come here to write checkpoints for them, we want to overwrite whatever
-                # exists instead of failing.
-                with self._chkpt_obj_manager.create_buffer(
-                    full_object_id,
-                    self._initial_buffer_size_bytes,
-                    overwrite=True,
-                ) as buffer_io_writer:
-                    # Set the format signature
-                    if use_optimized_write:
-                        buffer_io_writer.set_format_signature(CheckpointFormat.MLF_FORMAT)
-                    else:
-                        buffer_io_writer.set_format_signature(CheckpointFormat.TORCH_SAVE)
-
-                    # First write tensors.
-                    for tensor_item, tensor in tensor_tuples:
-                        write_start_offset = buffer_io_writer.tell()
-                        if use_optimized_write:
-                            self._save_tensor_optimized(tensor, buffer_io_writer)
-                        else:
-                            torch.save(tensor, buffer_io_writer)
-
-                        num_bytes_written = buffer_io_writer.tell() - write_start_offset
-                        item_storage_data = _StorageInfo(
-                            relative_path=object_name, offset=write_start_offset, length=num_bytes_written
-                        )
-                        write_result = WriteResult(
-                            index=tensor_item.index, size_in_bytes=num_bytes_written, storage_data=item_storage_data
-                        )
-                        thread_bucket_results.append(write_result)
-
-                    # Then write ByteIO objects.
-                    for byteio_item, data in byteio_tuples:
-                        data.seek(0)  # to be safe? maybe unnecessary
-                        write_start_offset = buffer_io_writer.tell()
-
-                        buffer_io_writer.write(data.read())
-
-                        num_bytes_written = buffer_io_writer.tell() - write_start_offset
-                        item_storage_data = _StorageInfo(
-                            relative_path=object_name, offset=write_start_offset, length=num_bytes_written
-                        )
-                        write_result = WriteResult(
-                            index=byteio_item.index, size_in_bytes=num_bytes_written, storage_data=item_storage_data
-                        )
-                        thread_bucket_results.append(write_result)
-
-                results_from_threads.put((thread_bucket_results, None))
-                if replicate_after_write:
-                    self.async_replicate_object(full_object_id)
-            except Exception as e:
-                _LOGGER.exception("Error in writer thread for object '%s'", full_object_id)
-                results_from_threads.put((None, e))
-            finally:
-                object_write_bucket_queue.task_done()
-
     @log_execution_time(logger=_LOGGER, name="_remove_older_checkpoints")
     def _remove_older_checkpoints(
         self, older_than: CheckpointContainerId
@@ -743,41 +703,3 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
                     siblings_to_delete.add(full_path)
 
         return object_manager_ext.delete_directories_async(list(siblings_to_delete))
-
-    def _save_tensor_optimized(self, tensor: torch.Tensor, buffer_io_writer):
-        """Saves a tensor to the buffer using a zero-copy approach where possible.
-
-        NOTE: This method saves the tensor's data in a C-contiguous format,
-        regardless of its original memory layout (stride).
-        The stride information is not saved.
-
-        Format:
-        [4 bytes HEADER_LEN] [HEADER_BYTES (JSON)] [RAW_BYTES]
-
-        Args:
-            tensor: The tensor to save.
-            buffer_io_writer: The BufferIO instance to write to.
-        """
-        # Metadata
-        tensor_header = TensorHeader(dtype=tensor.dtype, shape=tensor.shape)
-
-        # Write Header (Len + JSON)
-        header_data = tensor_header.to_bytes()
-        buffer_io_writer.write(header_data)
-
-        # Write Data (Zero Copy)
-        num_bytes = tensor.numel() * tensor.element_size()
-
-        # Get a writable slice of the underlying C++ buffer
-        if num_bytes > 0:
-            try:
-                dest_mv = buffer_io_writer.next_buffer_slice(num_bytes)
-            except AttributeError:
-                _LOGGER.exception("BufferIO does not support next_buffer_slice, try to disable use_optimized_save.")
-                raise
-
-            # Create a tensor wrapper around the buffer slice
-            dest_tensor = torch.frombuffer(dest_mv, dtype=tensor.dtype, count=tensor.numel()).reshape(tensor.shape)
-
-            # Perform the actual copy.
-            dest_tensor.copy_(tensor)

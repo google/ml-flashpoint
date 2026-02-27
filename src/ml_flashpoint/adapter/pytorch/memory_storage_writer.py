@@ -16,11 +16,11 @@ import concurrent.futures
 import dataclasses
 import logging
 import os
+import threading
 import time
 from typing import Optional, Union
 
 import torch
-from torch import multiprocessing as torch_mp
 from torch.distributed.checkpoint import Metadata, SavePlan, SavePlanner, StorageWriter, staging
 from torch.distributed.checkpoint.filesystem import _StorageInfo
 from torch.distributed.checkpoint.metadata import STATE_DICT_TYPE, MetadataIndex, StorageMeta
@@ -68,15 +68,11 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
     Only one of these paths should be used, not both, along with the other APIs.
 
     Implementation notes:
-     1. This class supports multiprocess sharing - specifically, it uses
-     `torch.multiprocessing.Manager.dict()` for its internal write result state, so it can be used in spawned
-     sub-processes, as Megatron and PyTorch DCP (optionally) do.
-
-     2. Unlike Megatron's FileSystemWriterAsync, this StorageWriter can be reused across checkpoints (and hence tracks
+     1. This StorageWriter can be reused across checkpoints (and hence tracks
      write state per checkpoint ID in case checkpointing overlaps across steps). This is mainly to facilitate using
      PyTorch DCP's pinned memory option for staging data.
 
-     3. This class maintains a "current_checkpoint_id" attribute, that is used for abstract methods that expect
+     2. This class maintains a "current_checkpoint_id" attribute, that is used for abstract methods that expect
      this instance to know what checkpoint ID it is operating on. It is set via reset(), which is required to be called
      during checkpoint initialization for this purpose.
      However, where possible, it is recommended to provide the checkpoint_id explicitly. Since this instance is reused
@@ -87,7 +83,6 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
     def __init__(
         self,
         checkpoint_saver: MLFlashpointCheckpointSaver,
-        mp_manager: torch_mp.Manager,
         thread_count: int = 1,
     ):
         """Initializes the MemoryStorageWriter.
@@ -95,11 +90,6 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
         Args:
             checkpoint_saver: An instance of `MLFlashpointCheckpointSaver` used for
                 handling the actual checkpoint saving logic.
-            mp_manager: A `torch.multiprocessing.Manager` instance for managing
-                shared state across processes, particularly for write results and events.
-                It is highly recommended to create this manager using a 'spawn'
-                multiprocessing context to avoid inheriting the parent's CUDA context,
-                which prevents CUDA OOM errors during failure recoveries
             thread_count: Optional. The number of threads to use for writing checkpoint data.
                 Defaults to 1. If a value less than 1 is provided, it will be reset to 1,
                 and a warning will be logged.
@@ -112,11 +102,8 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
             _LOGGER.warning("thread_count must be >= 1, but was %d. Setting to 1.", thread_count)
             thread_count = 1
         self._thread_count = thread_count
-        # _main_process_torchmp_manager should only be used in the main process, not in the spawned processes.
-        # This is because mp_manager is not picklable.
-        self._main_process_torchmp_manager = mp_manager
-        self._write_events_per_checkpoint_id: dict[CheckpointContainerId, torch_mp.Event] = mp_manager.dict()
-        self._write_results_per_checkpoint_id: dict[CheckpointContainerId, list[WriteResult]] = mp_manager.dict()
+        self._write_events_per_checkpoint_id: dict[CheckpointContainerId, threading.Event] = {}
+        self._write_results_per_checkpoint_id: dict[CheckpointContainerId, list[WriteResult]] = {}
 
     def __getstate__(self):
         """Custom pickling to exclude unpicklable mp_manager."""
@@ -194,13 +181,12 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
     ) -> list[ObjectWriteBucket]:
         # Create a new, unset Event for this specific checkpoint save
         if checkpoint_id not in self._write_events_per_checkpoint_id:
-            self._write_events_per_checkpoint_id[checkpoint_id] = self._main_process_torchmp_manager.Event()
+            self._write_events_per_checkpoint_id[checkpoint_id] = threading.Event()
 
         write_buckets = self.checkpoint_saver.prepare_write_data(
             checkpoint_id, plan.items, planner, plan.storage_data.prefix, bucket_count=self._thread_count
         )
         return write_buckets
-        # self._write_buckets_per_checkpoint_id[checkpoint_id] = write_buckets
 
     @staticmethod
     @log_execution_time(logger=_LOGGER, name="stage_write_data_buckets", level=logging.INFO)
@@ -234,35 +220,45 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
         replicate_after_write: bool,
     ) -> TorchFuture[list[WriteResult]]:
         start_time = time.perf_counter()
-        write_results = self._checkpoint_saver.write_data(
+
+        # This now returns a concurrent.futures.Future
+        python_future = self._checkpoint_saver.write_data_async(
             checkpoint_id,
             write_buckets=staged_write_buckets,
-            thread_count=self._thread_count,
             replicate_after_write=replicate_after_write,
         )
-        end_time = time.perf_counter()
-        duration = end_time - start_time
-        total_bytes_written = sum(res.size_in_bytes for res in write_results)
 
-        if duration > 0:
-            throughput = (total_bytes_written / 1e9) / duration if duration > 0 else 0
-            _LOGGER.info(
-                "Written %d bytes in %.4f s (%.2f GB/s) from %d buckets",
-                total_bytes_written,
-                duration,
-                throughput,
-                len(staged_write_buckets),
-            )
+        torch_future = TorchFuture()
 
-        self._write_results_per_checkpoint_id[checkpoint_id] = write_results
+        def _on_complete(f: concurrent.futures.Future):
+            try:
+                write_results = f.result()
+                duration = time.perf_counter() - start_time
+                total_bytes_written = sum(res.size_in_bytes for res in write_results)
 
-        # Signal that the write for this checkpoint_id is complete.
-        _LOGGER.debug("Setting write event for checkpoint_id '%s'...", checkpoint_id)
-        self._write_events_per_checkpoint_id[checkpoint_id].set()
+                if duration > 0:
+                    throughput = (total_bytes_written / 1e9) / duration if duration > 0 else 0
+                    _LOGGER.info(
+                        "Written %d bytes in %.4f s (%.2f GB/s) from %d buckets",
+                        total_bytes_written,
+                        duration,
+                        throughput,
+                        len(staged_write_buckets),
+                    )
 
-        write_results_future = TorchFuture()
-        write_results_future.set_result(write_results)
-        return write_results_future
+                self._write_results_per_checkpoint_id[checkpoint_id] = write_results
+
+                # Signal that the write for this checkpoint_id is complete.
+                _LOGGER.debug("Setting write event for checkpoint_id '%s'...", checkpoint_id)
+                self._write_events_per_checkpoint_id[checkpoint_id].set()
+
+                torch_future.set_result(write_results)
+            except Exception as e:
+                _LOGGER.exception("Error in write_staged_data_buckets")
+                torch_future.set_exception(e)
+
+        python_future.add_done_callback(_on_complete)
+        return torch_future
 
     @override
     @log_execution_time(logger=_LOGGER, name="write_data", level=logging.INFO)
@@ -328,11 +324,18 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
                 complete successfully or in a timely manner.
         """
         _LOGGER.debug("Waiting for event for checkpoint_id '%s' for up to %d sec...", checkpoint_id, wait_timeout_sec)
+
+        if checkpoint_id not in self._write_events_per_checkpoint_id:
+            raise KeyError(
+                f"Checkpoint ID {checkpoint_id} not found in tracking. Available IDs are: {list(self._write_events_per_checkpoint_id.keys())}"
+            )
+
         event_set = self._write_events_per_checkpoint_id[checkpoint_id].wait(timeout=wait_timeout_sec)
         if not event_set:
             msg = (
                 "Event was never set for checkpoint_id '%s', meaning we cannot confirm that the write "
-                "has completed, and its results are available." % checkpoint_id
+                "has completed, and its results are available. This could indicate a hang in the "
+                "C++ async_writer." % checkpoint_id
             )
             _LOGGER.error(msg)
             raise RuntimeError(msg)

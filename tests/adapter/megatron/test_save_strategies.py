@@ -48,10 +48,8 @@ def checkpoint_saver() -> MLFlashpointCheckpointSaver:
 def storage_writer(mocker, checkpoint_saver) -> MemoryStorageWriter:
     # Using a real MemoryStorageWriter instance instead of a mock.
     # We can still spy on its methods if needed.
-    # The mp_manager is mocked as it's not relevant to these tests.
     return MemoryStorageWriter(
         checkpoint_saver=checkpoint_saver,
-        mp_manager=mocker.MagicMock(),
     )
 
 

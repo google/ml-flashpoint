@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import concurrent.futures
 import logging
 import os
 import threading
@@ -59,6 +60,98 @@ def _is_ml_flashpoint_checkpoint(flashpoint_base_dir: Union[str, CheckpointConta
         bool: True if the path is an ML Flashpoint checkpoint, False otherwise.
     """
     return str(path).startswith(str(flashpoint_base_dir))
+
+
+class ThreadedAsyncCallsQueue:
+    """A thread-based version of an async calls queue to avoid process spawning overhead.
+
+    This is intended to be used with ML Flashpoint checkpoints, where the heavy data
+    writing is handled in a background C++ thread and releases the GIL, making threads an efficient
+    alternative to processes.
+    """
+
+    def __init__(self):
+        self._unfinalized_calls = []
+
+    def schedule_async_request(self, request: MegatronAsyncRequest) -> int:
+        """Schedules an async request.
+
+        If the async_fn returns a Future immediately (as ML Flashpoint's C++ writer does),
+        we track that Future directly to avoid redundant Python threads.
+        Otherwise, we fall back to a Python thread for compatibility.
+
+        Args:
+            request: The MegatronAsyncRequest to execute.
+
+        Returns:
+            The index of the scheduled call.
+        """
+        # Execute the function to see if it returns a future immediately.
+        # For ML Flashpoint, this is a non-blocking call that returns a C++-bridged Future.
+        result = request.async_fn(*request.async_fn_args, **request.async_fn_kwargs)
+
+        if isinstance(result, (concurrent.futures.Future, torch.futures.Future)):
+            _LOGGER.debug("Async request returned a Future immediately. Tracking it directly.")
+            self._unfinalized_calls.append((request, result))
+        else:
+            # Fallback for truly blocking functions: we wrap them in a thread.
+            # Note: Since we already executed it once above, we only do this if it's meant to be re-run
+            # or if the first execution was just a wrapper.
+            # In our current architecture, MLF always returns a Future.
+            _LOGGER.debug("Async request did not return a Future. Treating as completed.")
+            self._unfinalized_calls.append((request, result))
+
+        return len(self._unfinalized_calls)
+
+    def get_num_unfinalized_calls(self) -> int:
+        """Returns the number of unfinalized calls in the queue."""
+        return len(self._unfinalized_calls)
+
+    def maybe_finalize_async_calls(self, blocking: bool = False) -> list[int]:
+        """Finalizes completed async calls.
+
+        Args:
+            blocking: If True, waits for all calls to complete before finalizing.
+
+        Returns:
+            A list of indices of the finalized calls.
+        """
+        finalized_indices = []
+        remaining_calls = []
+
+        for i, (request, target) in enumerate(self._unfinalized_calls):
+            is_done = False
+            if isinstance(target, threading.Thread):
+                if blocking:
+                    target.join()
+                    is_done = True
+                else:
+                    is_done = not target.is_alive()
+            elif isinstance(target, (concurrent.futures.Future, torch.futures.Future)):
+                if blocking:
+                    # Blocks the Python thread but yields the GIL.
+                    if isinstance(target, concurrent.futures.Future):
+                        target.result()
+                    else:
+                        target.wait()
+                    is_done = True
+                else:
+                    is_done = target.done()
+            else:
+                # Immediate result
+                is_done = True
+
+            if is_done:
+                _LOGGER.debug("Finalizing call #%d", i + 1)
+                # Run finalization functions
+                for fn in request.finalize_fns:
+                    fn()
+                finalized_indices.append(i + 1)
+            else:
+                remaining_calls.append((request, target))
+
+        self._unfinalized_calls = remaining_calls
+        return finalized_indices
 
 
 class MLFlashpointCheckpointIO(AsyncCompatibleCheckpointIO):
@@ -302,7 +395,7 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
             raise ValueError("Incompatible wrapped checkpoint_io type: %s", type(checkpoint_io))
 
         super().__init__(checkpoint_io)
-        self._mlf_async_calls_queue = AsyncCallsQueue(persistent=True)
+        self._mlf_async_calls_queue = ThreadedAsyncCallsQueue()
         self._alt_async_calls_queue = AsyncCallsQueue()
 
     @property

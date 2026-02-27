@@ -105,7 +105,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
         pool_dir = os.path.join(temp_dir_path, ".buffer_pool")
         # Reset singleton?
         BufferPool._instance = None
-        BufferPool(pool_dir)
+        BufferPool(pool_dir, buffer_size=1024 * 1024)
         manager = CheckpointObjectManager()
         yield manager
         # Teardown

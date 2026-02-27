@@ -195,13 +195,6 @@ class CheckpointObjectManager:
         except RuntimeError:
             _LOGGER.debug("BufferPool exhausted. Falling back to standalone buffer creation.")
 
-            _LOGGER.debug("Acquired buffer for '%s'", object_id)
-
-            return buffer_io
-
-        except RuntimeError:
-            _LOGGER.debug("BufferPool unavailable or exhausted. Falling back to standalone buffer creation.")
-
         # 2. Fallback: Create a standalone BufferObject
         try:
             _LOGGER.debug("Instantiating standalone C++ BufferObject for '%s'.", object_id)

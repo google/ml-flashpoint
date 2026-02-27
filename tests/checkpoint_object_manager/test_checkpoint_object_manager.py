@@ -144,6 +144,41 @@ class TestAcquireBuffer:
             assert isinstance(returned_buffer, BufferIO)
         returned_buffer.close()
 
+    def test_acquire_buffer_falls_back_on_pool_exhaustion(self, manager_setup, mocker):
+        """
+        Tests that acquire_buffer falls back to standalone creation if the pool is exhausted.
+        """
+        manager, is_mock, mocks, temp_dir_path = manager_setup
+        object_id = CheckpointObjectId(str(temp_dir_path / "fallback.bin"))
+        buffer_size = 1024
+
+        # Verify fallback logic ONLY in mock mode where we can control pool behavior cleanly
+        if is_mock:
+            # Setup: Pool exists but raises RuntimeError on acquire
+            mock_pool = mocker.MagicMock(spec=BufferPool)
+            mock_pool.acquire.side_effect = RuntimeError("Pool exhausted")
+            manager._worker_process_buffer_pool = mock_pool
+
+            # Setup: Standalone creation succeeds
+            mock_instance = mocker.MagicMock()
+            mocks["BufferObject"].return_value = mock_instance
+            mock_io_instance = mocker.MagicMock()
+            mocks["BufferIO"].return_value = mock_io_instance
+
+            # Execute
+            buffer_io = manager.acquire_buffer(object_id, buffer_size=buffer_size)
+
+            # verify
+            mock_pool.acquire.assert_called_once_with(associated_symlink=str(object_id))
+            # Should have fallen back to creating new BufferObject
+            mocks["BufferObject"].assert_called_once_with(object_id, buffer_size + METADATA_SIZE, True)
+            assert buffer_io is mock_io_instance
+        else:
+            # In real mode, we can't easily force "exhaustion" without filling the pool,
+            # which is complex. We rely on the mock test for the logic flow,
+            # or we could construct a pool with 0 buffers? (invalid config).
+            pass
+
     def test_acquire_buffer_fails_with_non_positive_size(self, manager_setup):
         """
         Tests that acquire_buffer fails if buffer_size is zero or negative.

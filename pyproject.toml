@@ -213,6 +213,11 @@ skip = "*-manylinux_i686 *-musllinux_*"
 [tool.cibuildwheel.linux]
 # Pass the flag to skip tests during the build inside the container
 environment = { SKBUILD_CMAKE_ARGS="-DBUILD_TESTING=OFF" }
-# We need to install the build requirements inside the cibuildwheel container
-before-build = "pip install pybind11 scikit-build-core cmake ninja setuptools-scm"
+# We need to install the build requirements inside the cibuildwheel container.
+# We also print the architecture and environment for debugging.
+before-build = """
+  uname -m && \
+  pip install pybind11 scikit-build-core cmake ninja setuptools-scm && \
+  cmake --version
+"""
 

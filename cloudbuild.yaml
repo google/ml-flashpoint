@@ -13,11 +13,9 @@
 # limitations under the License.
 
 steps:
-  # 1. Build the distribution (sdist and wheel).
-  # This uses scikit-build-core as defined in pyproject.toml to compile C++ extensions.
-  # We set BUILD_TESTING=OFF to ignore tests during the artifact build.
+  # 1. Build the source distribution (sdist).
   - name: 'python:3.10'
-    id: 'build'
+    id: 'build-sdist'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -27,16 +25,41 @@ steps:
           exit 1
         fi
         pip install build
-        
-        echo "Building C++ extensions with editable install..."
-        # Note: pip install -e . will also respect the build-system requirements
-        SKBUILD_CMAKE_ARGS="-DBUILD_TESTING=OFF" pip install -e .
-        
-        echo "Building sdist and wheel..."
-        SKBUILD_CMAKE_ARGS="-DBUILD_TESTING=OFF" python -m build
+        python -m build --sdist
 
-  # 2. Upload to internal Artifact Registry (AR) for OSS Exit Gate.
-  # OSS Exit Gate fetches artifacts from this repository.
+  # 2. Build the manylinux wheels using cibuildwheel.
+  # This builds for both x86_64 and ARM64. 
+  # ARM64 is emulated using QEMU on the x86_64 host.
+  - name: 'python:3.10'
+    id: 'build-wheels'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # 1. Faster Docker CLI setup: Download static binary for the host architecture
+        echo "Fetching Docker binary statically (faster than apt-get)..."
+        curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-24.0.7.tgz" | \
+          tar xzC /usr/local/bin --strip-components=1 docker/docker
+
+        # 2. Register QEMU for ARM emulation
+        echo "Registering QEMU for ARM emulation..."
+        docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+
+        # 3. Setup cibuildwheel
+        pip install cibuildwheel
+
+        echo "Building C++ extensions with editable install (local test - cibuildwheel will do this itself)..."
+        SKBUILD_CMAKE_ARGS="-DBUILD_TESTING=OFF" pip install -e .
+
+        echo "Running cibuildwheel for configured architectures..."
+        # cibuildwheel will use the configuration from pyproject.toml
+        cibuildwheel --output-dir dist
+    volumes:
+      - name: 'docker-socket'
+        path: '/var/run/docker.sock'
+    waitFor: ['build-sdist']
+
+  # 3. Upload to internal Artifact Registry (AR) for OSS Exit Gate.
   - name: 'python:3.10'
     id: 'upload-to-ar'
     entrypoint: 'bash'
@@ -45,9 +68,9 @@ steps:
       - |
         pip install -U twine keyring keyrings.google-artifactregistry-auth
         twine upload --repository-url https://us-python.pkg.dev/oss-exit-gate-prod/${_PROJECT_NAME}--pypi dist/*
-    waitFor: ['build']
+    waitFor: ['build-wheels']
 
-  # 3. Create and upload the manifest to GCS to trigger the Exit Gate publication.
+  # 4. Create and upload the manifest to GCS to trigger the Exit Gate publication.
   # The presence of this file in the specific GCS bucket triggers the verification and publishing process.
   - name: 'gcr.io/cloud-builders/gcloud'
     id: 'trigger-exit-gate'

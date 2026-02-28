@@ -132,6 +132,10 @@ build-backend = "scikit_build_core.build"
 # Tells scikit-build-core to use setuptools-scm to retrieve the version from git.
 metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
 
+# Enable Stable ABI (abi3) for Python 3.10 and later.
+# This produces a single wheel per architecture that works on all future Python versions.
+wheel.py-api = "cp310"
+
 # Specifies the minimum version of CMake that must be present on the system.
 cmake.version = ">=3.18"
 
@@ -193,3 +197,27 @@ fail_under = 90
 [tool.gcovr]
 fail-under-line = "80"
 #fail-under-branch = "85"
+
+# ===================================================================
+# Tool-specific Configuration for cibuildwheel
+# ===================================================================
+[tool.cibuildwheel]
+# Build only once per architecture (using Python 3.10).
+# Because abi3 is enabled, this wheel will work for 3.10, 3.11, 3.12, 3.13, etc.
+build = "cp310-*"
+# Target both Intel (x86_64) and ARM (aarch64) architectures.
+archs = ["x86_64", "aarch64"]
+# Skip 32-bit builds and musllinux (less common, so skipping for simplicity)
+skip = "*-manylinux_i686 *-musllinux_*"
+
+[tool.cibuildwheel.linux]
+# Pass the flag to skip tests during the build inside the container
+environment = { SKBUILD_CMAKE_ARGS="-DBUILD_TESTING=OFF" }
+# We need to install the build requirements inside the cibuildwheel container.
+# We also print the architecture and environment for debugging.
+before-build = """
+  uname -m && \
+  pip install pybind11 scikit-build-core cmake ninja setuptools-scm && \
+  cmake --version
+"""
+

@@ -205,7 +205,9 @@ fail-under-line = "80"
 # Build only once per architecture (using Python 3.10).
 # Because abi3 is enabled, this wheel will work for 3.10, 3.11, 3.12, 3.13, etc.
 build = "cp310-*"
-# Skip 32-bit builds and musllinux
+# Target both Intel (x86_64) and ARM (aarch64) architectures.
+archs = ["x86_64", "aarch64"]
+# Skip 32-bit builds and musllinux (less common, so skipping for simplicity)
 skip = "*-manylinux_i686 *-musllinux_*"
 
 [tool.cibuildwheel.linux]

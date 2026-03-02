@@ -119,6 +119,37 @@ TEST_F(ConnectionPoolTest, SetUnusablePreventsReuse) {
   EXPECT_EQ(accepted_fds_.size(), 2);
 }
 
+TEST_F(ConnectionPoolTest, VerifyLIFOBehavior) {
+  // Use a pool of size 2 to verify stack behavior.
+  ConnectionPool pool("127.0.0.1", port_, 2);
+  EXPECT_TRUE(pool.Initialize());
+
+  // Acquire both connections.
+  auto connA = pool.GetConnection();
+  auto connB = pool.GetConnection();
+  ASSERT_TRUE(connA.has_value());
+  ASSERT_TRUE(connB.has_value());
+
+  int fdA = connA->fd();
+  int fdB = connB->fd();
+
+  // Return them in a specific order: first A, then B.
+  // In a Stack (LIFO), the last one returned (B) should be the first one 
+  // retrieved next.
+  connA.reset(); // Release A
+  connB.reset(); // Release B
+
+  auto connNext1 = pool.GetConnection();
+  ASSERT_TRUE(connNext1.has_value());
+  // Should be B because it was the most recently returned.
+  EXPECT_EQ(connNext1->fd(), fdB);
+
+  auto connNext2 = pool.GetConnection();
+  ASSERT_TRUE(connNext2.has_value());
+  // Should be A.
+  EXPECT_EQ(connNext2->fd(), fdA);
+}
+
 TEST_F(ConnectionPoolTest, Initialize) {
   ConnectionPool pool("127.0.0.1", port_, 5);
   EXPECT_TRUE(pool.Initialize());

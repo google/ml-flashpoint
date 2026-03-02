@@ -635,59 +635,86 @@ void TransferService::ExecutePutTask(PutTask* task) {
   auto& metric_container = task->GetMetricContainer();
   metric_container.start_execution_time = absl::Now();
   LOG(INFO) << "Executing PutTask for task_id=" << task->GetTaskId();
-  auto conn_opt = GetConnectionFromPool(task->GetDestAddr());
-  if (!conn_opt) {
-    ReportResult(task->GetTaskId(), false, "Failed to get connection");
-    return;
-  }
-  ScopedConnection conn = std::move(conn_opt.value());
-  metric_container.connection_acquired_time = absl::Now();
 
-  ObjInfoHeader header;
-  std::memset(&header, 0, sizeof(ObjInfoHeader));
-  snprintf(header.dest_obj_id, sizeof(header.dest_obj_id), "%s",
-           task->GetDestObjId().c_str());
-  header.type = MessageType::kPutObj;
-  header.obj_size = task->GetDataSize();
+  // We use a retry loop to handle cases where a connection from the pool
+  // appears healthy but fails during the initial handshake (e.g., due to
+  // a race condition where the remote peer closes the socket just as we
+  // retrieve it).
+  constexpr int kMaxRetries = 2;
+  for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
+    auto conn_opt = GetConnectionFromPool(task->GetDestAddr());
+    if (!conn_opt) {
+      ReportResult(task->GetTaskId(), false, "Failed to get connection");
+      return;
+    }
+    ScopedConnection conn = std::move(conn_opt.value());
+    metric_container.connection_acquired_time = absl::Now();
 
-  int sockfd = conn.fd();
+    ObjInfoHeader header;
+    std::memset(&header, 0, sizeof(ObjInfoHeader));
+    snprintf(header.dest_obj_id, sizeof(header.dest_obj_id), "%s",
+             task->GetDestObjId().c_str());
+    header.type = MessageType::kPutObj;
+    header.obj_size = task->GetDataSize();
 
-  if (!SendAll(sockfd, &header, kHeaderSize).ok()) {
-    LOG(ERROR) << "perform_send_obj: Failed sending header/filename for "
-               << task->GetDestAddr();
-    ReportResult(task->GetTaskId(), false, "Failed to send header");
-    return;
-  }
-  metric_container.header_sent_time = absl::Now();
+    int sockfd = conn.fd();
 
-  if (!SendAll(sockfd, task->GetDataPtr(), task->GetDataSize()).ok()) {
-    LOG(ERROR) << "perform_send_obj: Failed sending data for "
-               << task->GetDestAddr();
-    ReportResult(task->GetTaskId(), false, "Failed to send data");
-    return;
-  }
-  metric_container.data_sent_time = absl::Now();
+    // Step 1: Send the Object Metadata Header.
+    if (!SendAll(sockfd, &header, kHeaderSize).ok()) {
+      LOG(WARNING) << "ExecutePutTask: Failed sending header on attempt "
+                   << attempt;
+      // Socket error occurred. Mark connection as unusable so it is closed 
+      // instead of returned to the pool, preventing "pool poisoning."
+      conn.SetUnusable();
+      if (attempt < kMaxRetries - 1) continue; // Try with a fresh connection.
+      ReportResult(task->GetTaskId(), false, "Failed to send header");
+      return;
+    }
+    metric_container.header_sent_time = absl::Now();
 
-  ObjInfoHeader ack_header;
-  if (!RecvHeader(sockfd, ack_header).ok()) {
-    ReportResult(task->GetTaskId(), false, "Failed to receive ACK");
-    return;
-  }
-  switch (ack_header.type) {
-    case MessageType::kAck:
-      LOG(INFO) << "Buffer data sent and ACK received successfully !!!";
-      metric_container.finish_time = absl::Now();
-      ReportResult(task->GetTaskId(), true,
-                   "Buffer data sent and ACK received");
-      break;
-    case MessageType::kError:
-      ReportResult(task->GetTaskId(), false, "Received error from destination");
-      break;
-    case MessageType::kPutObj:
-    case MessageType::kGetObj:
-    case MessageType::kRespondToGetObj:
-      ReportResult(task->GetTaskId(), false, "Received unexpected ACK");
-      break;
+    // Step 2: Send the actual object data.
+    if (!SendAll(sockfd, task->GetDataPtr(), task->GetDataSize()).ok()) {
+      LOG(WARNING) << "ExecutePutTask: Failed sending data on attempt "
+                   << attempt;
+      conn.SetUnusable();
+      if (attempt < kMaxRetries - 1) continue;
+      ReportResult(task->GetTaskId(), false, "Failed to send data");
+      return;
+    }
+    metric_container.data_sent_time = absl::Now();
+
+    // Step 3: Wait for Acknowledgement from the destination.
+    ObjInfoHeader ack_header;
+    if (!RecvHeader(sockfd, ack_header).ok()) {
+      LOG(WARNING) << "ExecutePutTask: Failed to receive ACK on attempt "
+                   << attempt;
+      conn.SetUnusable();
+      if (attempt < kMaxRetries - 1) continue;
+      ReportResult(task->GetTaskId(), false, "Failed to receive ACK");
+      return;
+    }
+
+    // Exhaustive handling of message types to ensure no unexpected states.
+    switch (ack_header.type) {
+      case MessageType::kAck:
+        LOG(INFO) << "Buffer data sent and ACK received successfully !!!";
+        metric_container.finish_time = absl::Now();
+        ReportResult(task->GetTaskId(), true,
+                     "Buffer data sent and ACK received");
+        return;
+      case MessageType::kError:
+        // Remote peer explicitly reported a failure. Retrying is unlikely
+        // to help if the error is logic-related (e.g., disk full).
+        ReportResult(task->GetTaskId(), false,
+                     "Received error from destination");
+        return;
+      case MessageType::kPutObj:
+      case MessageType::kGetObj:
+      case MessageType::kRespondToGetObj:
+        // Receiving a request type instead of an ACK is a protocol violation.
+        ReportResult(task->GetTaskId(), false, "Received unexpected message type");
+        return;
+    }
   }
 }
 
@@ -786,55 +813,74 @@ void TransferService::ExecuteGetTask(GetTask* task) {
   metric_container.start_execution_time = absl::Now();
   LOG(INFO) << "Executing GetTask for source address " << task->GetSourceAddr()
             << ", source obj id: " << task->GetSourceObjId();
-  auto conn_opt = GetConnectionFromPool(task->GetSourceAddr());
-  if (!conn_opt) {
-    ReportResult(task->GetTaskId(), false, "Failed to get connection");
-    return;
-  }
-  ScopedConnection conn = std::move(conn_opt.value());
-  metric_container.connection_acquired_time = absl::Now();
-  ObjInfoHeader header;
-  header.type = MessageType::kGetObj;
-  snprintf(header.task_id, sizeof(header.task_id), "%s",
-           task->GetTaskId().c_str());
-  snprintf(header.source_obj_id, sizeof(header.source_obj_id), "%s",
-           task->GetSourceObjId().c_str());
-  snprintf(header.dest_obj_id, sizeof(header.dest_obj_id), "%s",
-           task->GetDestObjId().c_str());
-  snprintf(header.source_address, sizeof(header.source_address), "%s",
-           task->GetSourceAddr().c_str());
-  snprintf(header.dest_address, sizeof(header.dest_address), "%s",
-           task->GetDestAddr().c_str());
-  header.obj_size = 0;  // Not used for request
 
-  if (!SendAll(conn.fd(), &header, kHeaderSize).ok()) {
-    LOG(ERROR) << "Failed to send GET_OBJ header";
-    ReportResult(task->GetTaskId(), false, "Failed to send GET_OBJ header");
-    return;
-  }
-  metric_container.header_sent_time = absl::Now();
+  // Retry loop to handle transient connection drops during the Get request.
+  constexpr int kMaxRetries = 2;
+  for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
+    auto conn_opt = GetConnectionFromPool(task->GetSourceAddr());
+    if (!conn_opt) {
+      ReportResult(task->GetTaskId(), false, "Failed to get connection");
+      return;
+    }
+    ScopedConnection conn = std::move(conn_opt.value());
+    metric_container.connection_acquired_time = absl::Now();
 
-  // Wait for the immediate response (ACK or ERROR)
-  ObjInfoHeader resp_header;
-  if (!RecvHeader(conn.fd(), resp_header).ok()) {
-    ReportResult(task->GetTaskId(), false,
-                 "Failed to receive response for GET request");
-    return;
-  }
+    ObjInfoHeader header;
+    header.type = MessageType::kGetObj;
+    snprintf(header.task_id, sizeof(header.task_id), "%s",
+             task->GetTaskId().c_str());
+    snprintf(header.source_obj_id, sizeof(header.source_obj_id), "%s",
+             task->GetSourceObjId().c_str());
+    snprintf(header.dest_obj_id, sizeof(header.dest_obj_id), "%s",
+             task->GetDestObjId().c_str());
+    snprintf(header.source_address, sizeof(header.source_address), "%s",
+             task->GetSourceAddr().c_str());
+    snprintf(header.dest_address, sizeof(header.dest_address), "%s",
+             task->GetDestAddr().c_str());
+    header.obj_size = 0;  // Not used for request
 
-  switch (resp_header.type) {
-    case MessageType::kAck:
-      LOG(INFO) << "Received ACK for GET request. Waiting for data transfer.";
-      break;
-    case MessageType::kError:
-      ReportResult(task->GetTaskId(), false, "Received error message");
-      break;
-    case MessageType::kPutObj:
-    case MessageType::kGetObj:
-    case MessageType::kRespondToGetObj:
+    // Send the GET request header.
+    if (!SendAll(conn.fd(), &header, kHeaderSize).ok()) {
+      LOG(WARNING) << "ExecuteGetTask: Failed to send GET_OBJ header on attempt "
+                   << attempt;
+      conn.SetUnusable();
+      if (attempt < kMaxRetries - 1) continue;
+      ReportResult(task->GetTaskId(), false, "Failed to send GET_OBJ header");
+      return;
+    }
+    metric_container.header_sent_time = absl::Now();
+
+    // Wait for the remote peer to confirm they have the object and are
+    // starting the transfer.
+    ObjInfoHeader resp_header;
+    if (!RecvHeader(conn.fd(), resp_header).ok()) {
+      LOG(WARNING) << "ExecuteGetTask: Failed to receive response on attempt "
+                   << attempt;
+      conn.SetUnusable();
+      if (attempt < kMaxRetries - 1) continue;
       ReportResult(task->GetTaskId(), false,
-                   "Received unexpected response for GET request");
-      break;
+                   "Failed to receive response for GET request");
+      return;
+    }
+
+    switch (resp_header.type) {
+      case MessageType::kAck:
+        // Request accepted. The remote peer will now initiate a separate
+        // connection back to us to send the data.
+        LOG(INFO) << "Received ACK for GET request. Waiting for data transfer.";
+        return;
+      case MessageType::kError:
+        // Remote peer could not find the object or encountered an error.
+        ReportResult(task->GetTaskId(), false, "Received error message");
+        return;
+      case MessageType::kPutObj:
+      case MessageType::kGetObj:
+      case MessageType::kRespondToGetObj:
+        // Unexpected message type in this context.
+        ReportResult(task->GetTaskId(), false,
+                     "Received unexpected response type for GET request");
+        return;
+    }
   }
 }
 
@@ -847,75 +893,94 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
             << ", source_addr=" << task->GetSourceAddr()
             << ", dest_addr=" << task->GetDestAddr();
 
-  auto conn_opt = GetConnectionFromPool(task->GetDestAddr());
-  if (!conn_opt) {
-    LOG(ERROR) << "Failed to get connection!";
-    ReportResult(task->GetTaskId(), false, "Failed to get connection");
-    return;
+  // Retry loop to handle connection failures when trying to push the 
+  // requested data back to the original requester.
+  constexpr int kMaxRetries = 2;
+  for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
+    auto conn_opt = GetConnectionFromPool(task->GetDestAddr());
+    if (!conn_opt) {
+      LOG(ERROR) << "Failed to get connection!";
+      ReportResult(task->GetTaskId(), false, "Failed to get connection");
+      return;
+    }
+    ScopedConnection conn = std::move(conn_opt.value());
+    metric_container.connection_acquired_time = absl::Now();
+
+    // Prepare the local data buffer.
+    BufferObject buffer_obj(task->GetSourceObjId());
+    void* buffer_data_ptr = buffer_obj.get_data_ptr();
+    size_t size = buffer_obj.get_capacity();
+
+    if (buffer_data_ptr == nullptr) {
+      LOG(ERROR)
+          << "RespondToGetTask failed: Could not open buffer object for '"
+          << task->GetSourceObjId() << "'";
+      ReportResult(task->GetTaskId(), false, "Failed to create buffer object");
+      return;
+    }
+
+    ObjInfoHeader header;
+    std::memset(&header, 0, sizeof(header));
+    snprintf(header.task_id, sizeof(header.task_id), "%s",
+             task->GetTaskId().c_str());
+    snprintf(header.source_obj_id, sizeof(header.source_obj_id), "%s",
+             task->GetSourceObjId().c_str());
+    snprintf(header.dest_obj_id, sizeof(header.dest_obj_id), "%s",
+             task->GetDestObjId().c_str());
+
+    header.type = MessageType::kRespondToGetObj;
+    header.obj_size = size;
+    int sockfd = conn.fd();
+
+    // Send the response header.
+    if (!SendAll(sockfd, &header, kHeaderSize).ok()) {
+      LOG(WARNING) << "ExecuteRespondToGetTask: Failed to send header on attempt "
+                   << attempt;
+      conn.SetUnusable();
+      if (attempt < kMaxRetries - 1) continue;
+      ReportResult(task->GetTaskId(), false, "Failed to send header");
+      return;
+    }
+    metric_container.header_sent_time = absl::Now();
+
+    // Stream the data back to the requester.
+    if (!SendAll(sockfd, buffer_data_ptr, size).ok()) {
+      LOG(WARNING) << "ExecuteRespondToGetTask: Failed to send data on attempt "
+                   << attempt;
+      conn.SetUnusable();
+      if (attempt < kMaxRetries - 1) continue;
+      ReportResult(task->GetTaskId(), false, "Failed to send data");
+      return;
+    }
+    metric_container.data_sent_time = absl::Now();
+
+    // Wait for the final ACK to confirm the data was successfully received.
+    ObjInfoHeader ack_header;
+    if (!RecvHeader(sockfd, ack_header).ok()) {
+      LOG(WARNING) << "ExecuteRespondToGetTask: Failed to receive ACK on attempt "
+                   << attempt;
+      conn.SetUnusable();
+      if (attempt < kMaxRetries - 1) continue;
+      ReportResult(task->GetTaskId(), false, "Failed to receive ACK");
+      return;
+    }
+
+    switch (ack_header.type) {
+      case MessageType::kAck:
+        metric_container.finish_time = absl::Now();
+        ReportResult(task->GetTaskId(), true,
+                     "RespondToGetTask completed successfully");
+        return;
+      case MessageType::kError:
+        ReportResult(task->GetTaskId(), false, "Received error from destination");
+        return;
+      case MessageType::kPutObj:
+      case MessageType::kGetObj:
+      case MessageType::kRespondToGetObj:
+        ReportResult(task->GetTaskId(), false, "Received unexpected message type");
+        return;
+    }
   }
-  ScopedConnection conn = std::move(conn_opt.value());
-  metric_container.connection_acquired_time = absl::Now();
-
-  // Open file as buffer object
-  BufferObject buffer_obj(task->GetSourceObjId());
-  void* buffer_data_ptr = buffer_obj.get_data_ptr();
-  size_t size = buffer_obj.get_capacity();
-
-  if (buffer_data_ptr == nullptr) {
-    LOG(ERROR) << "RespondToGetTask failed: Could not open buffer object for '"
-               << task->GetSourceObjId() << "'";
-    ReportResult(task->GetTaskId(), false, "Failed to create buffer object");
-    return;
-  }
-
-  ObjInfoHeader header;
-
-  std::memset(header.task_id, 0, sizeof(header.task_id));
-  snprintf(header.task_id, sizeof(header.task_id), "%s",
-           task->GetTaskId().c_str());
-  header.task_id[sizeof(header.task_id) - 1] = '\0';
-
-  std::memset(header.source_obj_id, 0, sizeof(header.source_obj_id));
-  snprintf(header.source_obj_id, sizeof(header.source_obj_id), "%s",
-           task->GetSourceObjId().c_str());
-
-  std::memset(header.dest_obj_id, 0, sizeof(header.dest_obj_id));
-  snprintf(header.dest_obj_id, sizeof(header.dest_obj_id), "%s",
-           task->GetDestObjId().c_str());
-
-  header.type = MessageType::kRespondToGetObj;
-  header.obj_size = size;
-  int sockfd = conn.fd();
-
-  if (!SendAll(sockfd, &header, kHeaderSize).ok()) {
-    LOG(ERROR) << "Failed to send kRespondToGetObj header";
-    ReportResult(task->GetTaskId(), false, "Failed to send header");
-    return;
-  }
-  metric_container.header_sent_time = absl::Now();
-
-  if (!SendAll(sockfd, buffer_data_ptr, size).ok()) {
-    LOG(ERROR) << "Failed to send buffer data";
-    ReportResult(task->GetTaskId(), false, "Failed to send data");
-    return;
-  }
-  metric_container.data_sent_time = absl::Now();
-
-  ObjInfoHeader ack_header;
-  if (!RecvHeader(sockfd, ack_header).ok()) {
-    LOG(ERROR) << "Failed to receive ACK";
-    ReportResult(task->GetTaskId(), false, "Failed to receive ACK");
-    return;
-  }
-
-  if (ack_header.type != MessageType::kAck) {
-    LOG(ERROR) << "Failed to receive ACK for RespondToGetObj";
-    ReportResult(task->GetTaskId(), false, "Received unexpected ACK");
-    return;
-  }
-  metric_container.finish_time = absl::Now();
-  ReportResult(task->GetTaskId(), true,
-               "RespondToGetTask completed successfully");
 }
 
 std::optional<ScopedConnection> TransferService::GetConnectionFromPool(

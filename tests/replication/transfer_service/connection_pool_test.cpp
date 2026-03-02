@@ -47,7 +47,8 @@ class ConnectionPoolTest : public ::testing::Test {
         if (fd == -1) {
           break;
         }
-        close(fd);
+        std::lock_guard<std::mutex> lock(accepted_fds_mutex_);
+        accepted_fds_.push_back(fd);
       }
     });
   }
@@ -56,12 +57,67 @@ class ConnectionPoolTest : public ::testing::Test {
     shutdown(listen_fd_, SHUT_RDWR);
     close(listen_fd_);
     accept_thread_.join();
+    std::lock_guard<std::mutex> lock(accepted_fds_mutex_);
+    for (int fd : accepted_fds_) {
+      close(fd);
+    }
+    accepted_fds_.clear();
   }
 
   int port_ = 0;
   int listen_fd_ = -1;
   std::thread accept_thread_;
+  std::vector<int> accepted_fds_;
+  std::mutex accepted_fds_mutex_;
 };
+
+TEST_F(ConnectionPoolTest, DiscardDeadConnection) {
+  ConnectionPool pool("127.0.0.1", port_, 1);
+  EXPECT_TRUE(pool.Initialize());
+
+  // Wait for the connection to be accepted by the server.
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  // Close the connection on the server side to make it stale in the pool.
+  {
+    std::lock_guard<std::mutex> lock(accepted_fds_mutex_);
+    ASSERT_EQ(accepted_fds_.size(), 1);
+    close(accepted_fds_[0]);
+    accepted_fds_.clear();
+  }
+
+  // GetConnection should detect it's dead, discard it, and create a new one.
+  auto conn = pool.GetConnection();
+  EXPECT_TRUE(conn.has_value());
+  EXPECT_TRUE(conn->IsValid());
+
+  // Verify that a new connection was indeed established.
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  std::lock_guard<std::mutex> lock(accepted_fds_mutex_);
+  EXPECT_EQ(accepted_fds_.size(), 1);
+}
+
+TEST_F(ConnectionPoolTest, SetUnusablePreventsReuse) {
+  ConnectionPool pool("127.0.0.1", port_, 1);
+  EXPECT_TRUE(pool.Initialize());
+
+  {
+    auto conn = pool.GetConnection();
+    EXPECT_TRUE(conn.has_value());
+    int old_fd = conn->fd();
+    conn->SetUnusable();
+    // Destructor will close old_fd and not return it to pool.
+  }
+
+  // Next GetConnection must result in a new connection being created.
+  auto conn2 = pool.GetConnection();
+  EXPECT_TRUE(conn2.has_value());
+  
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  std::lock_guard<std::mutex> lock(accepted_fds_mutex_);
+  // We should have 2 fds in accepted_fds_: the first one (now closed) and the new one.
+  EXPECT_EQ(accepted_fds_.size(), 2);
+}
 
 TEST_F(ConnectionPoolTest, Initialize) {
   ConnectionPool pool("127.0.0.1", port_, 5);

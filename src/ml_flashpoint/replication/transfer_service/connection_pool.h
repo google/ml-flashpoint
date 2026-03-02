@@ -57,11 +57,17 @@ class ScopedConnection {
 
   int fd() const { return sockfd_; }
   bool IsValid() const { return sockfd_ >= 0; }
+  
+  // Marks the connection as unusable (e.g., after a socket error).
+  // This prevents it from being returned to the pool for reuse.
+  void SetUnusable() { reuse_ = false; }
+
   void Release();
 
  private:
   int sockfd_;
   ConnectionPool* pool_;
+  bool reuse_ = true;
 };
 
 // Manages a thread-safe pool of TCP connections to a single peer.
@@ -107,6 +113,9 @@ class ConnectionPool {
 
   // Releases a connection back to the pool or closes it.
   void ReleaseConnection(int sockfd, bool reuse = true);
+
+  // Checks if a connection is still alive by performing a non-blocking peek.
+  bool IsConnectionAlive(int sockfd);
 
   // Creates a new connection to the peer.
   // Returns the socket file descriptor on a successful connection, or -1 on

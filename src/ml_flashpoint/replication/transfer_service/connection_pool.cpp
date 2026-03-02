@@ -174,11 +174,11 @@ bool ConnectionPool::IsConnectionAlive(int sockfd) {
     // and a real network error.
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       // EAGAIN/EWOULDBLOCK means the connection is still alive and healthy,
-      // but there is currently no data waiting to be read. This is the 
+      // but there is currently no data waiting to be read. This is the
       // expected state for an idle connection in the pool.
       return true;
     }
-    // Any other error (like ECONNRESET or EPIPE) indicates that the 
+    // Any other error (like ECONNRESET or EPIPE) indicates that the
     // connection has been broken or timed out.
     return false;
   }
@@ -190,20 +190,19 @@ bool ConnectionPool::IsConnectionAlive(int sockfd) {
 std::optional<ScopedConnection> ConnectionPool::GetConnection(int timeout_ms) {
   CHECK_GT(timeout_ms, 0) << "timeout_ms must be positive";
 
-  // Calculate the absolute deadline to ensure we respect the user-provided 
+  // Calculate the absolute deadline to ensure we respect the user-provided
   // timeout even if we have to loop through several dead connections.
   auto start_time = std::chrono::steady_clock::now();
   auto end_time = start_time + std::chrono::milliseconds(timeout_ms);
 
   while (true) {
     std::unique_lock<std::mutex> lock(mtx_);
-    
+
     // Re-calculate the remaining wait time for each iteration of the loop.
     auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
         end_time - std::chrono::steady_clock::now());
 
-    if (remaining.count() <= 0 ||
-        !cv_.wait_for(lock, remaining, [this] {
+    if (remaining.count() <= 0 || !cv_.wait_for(lock, remaining, [this] {
           return !available_connections_.empty() || stopping_;
         })) {
       LOG(WARNING) << "ConnectionPool::GetConnection: timeout reached while "
@@ -221,19 +220,19 @@ std::optional<ScopedConnection> ConnectionPool::GetConnection(int timeout_ms) {
     available_connections_.pop();
 
     // Verify the connection's health before handing it to the caller.
-    // This protects against "stale" connections that were closed by the 
+    // This protects against "stale" connections that were closed by the
     // peer or a firewall while sitting idle in the pool.
     if (IsConnectionAlive(fd)) {
       return ScopedConnection(fd, this);
     }
 
-    // The connection is dead. We close it and attempt to retrieve another 
+    // The connection is dead. We close it and attempt to retrieve another
     // one from the queue.
     LOG(INFO) << "ConnectionPool::GetConnection: discarded dead connection; "
                  "retrying with next available connection";
     close(fd);
 
-    // To maintain the desired pool size, we immediately attempt to open a 
+    // To maintain the desired pool size, we immediately attempt to open a
     // replacement connection. This ensures the pool doesn't slowly drain
     // if many connections go stale at once.
     int new_fd = CreateConnection();
@@ -253,7 +252,7 @@ void ConnectionPool::ReleaseConnection(int sockfd, bool reuse) {
     LOG(WARNING) << "ConnectionPool::ReleaseConnection: invalid sockfd";
     return;
   }
-  
+
   std::unique_lock<std::mutex> lock(mtx_);
   if (stopping_) {
     LOG(WARNING)
@@ -277,10 +276,11 @@ void ConnectionPool::ReleaseConnection(int sockfd, bool reuse) {
         << "ConnectionPool::ReleaseConnection: connection marked as unusable, "
            "closing and replenishing pool";
     close(sockfd);
-    
-    // Since we are discarding a connection that was previously part of the 
+
+    // Since we are discarding a connection that was previously part of the
     // pool's "active" set, we create a new one to maintain the fixed pool size.
-    // This prevents the pool from permanently shrinking when network errors occur.
+    // This prevents the pool from permanently shrinking when network errors
+    // occur.
     int new_fd = CreateConnection();
     if (new_fd >= 0) {
       available_connections_.push(new_fd);

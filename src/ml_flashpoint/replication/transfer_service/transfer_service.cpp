@@ -663,10 +663,10 @@ void TransferService::ExecutePutTask(PutTask* task) {
     if (!SendAll(sockfd, &header, kHeaderSize).ok()) {
       LOG(WARNING) << "ExecutePutTask: Failed sending header on attempt "
                    << attempt;
-      // Socket error occurred. Mark connection as unusable so it is closed 
+      // Socket error occurred. Mark connection as unusable so it is closed
       // instead of returned to the pool, preventing "pool poisoning."
       conn.SetUnusable();
-      if (attempt < kMaxRetries - 1) continue; // Try with a fresh connection.
+      if (attempt < kMaxRetries - 1) continue;  // Try with a fresh connection.
       ReportResult(task->GetTaskId(), false, "Failed to send header");
       return;
     }
@@ -712,7 +712,8 @@ void TransferService::ExecutePutTask(PutTask* task) {
       case MessageType::kGetObj:
       case MessageType::kRespondToGetObj:
         // Receiving a request type instead of an ACK is a protocol violation.
-        ReportResult(task->GetTaskId(), false, "Received unexpected message type");
+        ReportResult(task->GetTaskId(), false,
+                     "Received unexpected message type");
         return;
     }
   }
@@ -841,8 +842,9 @@ void TransferService::ExecuteGetTask(GetTask* task) {
 
     // Send the GET request header.
     if (!SendAll(conn.fd(), &header, kHeaderSize).ok()) {
-      LOG(WARNING) << "ExecuteGetTask: Failed to send GET_OBJ header on attempt "
-                   << attempt;
+      LOG(WARNING)
+          << "ExecuteGetTask: Failed to send GET_OBJ header on attempt "
+          << attempt;
       conn.SetUnusable();
       if (attempt < kMaxRetries - 1) continue;
       ReportResult(task->GetTaskId(), false, "Failed to send GET_OBJ header");
@@ -893,7 +895,7 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
             << ", source_addr=" << task->GetSourceAddr()
             << ", dest_addr=" << task->GetDestAddr();
 
-  // Retry loop to handle connection failures when trying to push the 
+  // Retry loop to handle connection failures when trying to push the
   // requested data back to the original requester.
   constexpr int kMaxRetries = 2;
   for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
@@ -934,8 +936,9 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
 
     // Send the response header.
     if (!SendAll(sockfd, &header, kHeaderSize).ok()) {
-      LOG(WARNING) << "ExecuteRespondToGetTask: Failed to send header on attempt "
-                   << attempt;
+      LOG(WARNING)
+          << "ExecuteRespondToGetTask: Failed to send header on attempt "
+          << attempt;
       conn.SetUnusable();
       if (attempt < kMaxRetries - 1) continue;
       ReportResult(task->GetTaskId(), false, "Failed to send header");
@@ -957,8 +960,9 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
     // Wait for the final ACK to confirm the data was successfully received.
     ObjInfoHeader ack_header;
     if (!RecvHeader(sockfd, ack_header).ok()) {
-      LOG(WARNING) << "ExecuteRespondToGetTask: Failed to receive ACK on attempt "
-                   << attempt;
+      LOG(WARNING)
+          << "ExecuteRespondToGetTask: Failed to receive ACK on attempt "
+          << attempt;
       conn.SetUnusable();
       if (attempt < kMaxRetries - 1) continue;
       ReportResult(task->GetTaskId(), false, "Failed to receive ACK");
@@ -972,12 +976,14 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
                      "RespondToGetTask completed successfully");
         return;
       case MessageType::kError:
-        ReportResult(task->GetTaskId(), false, "Received error from destination");
+        ReportResult(task->GetTaskId(), false,
+                     "Received error from destination");
         return;
       case MessageType::kPutObj:
       case MessageType::kGetObj:
       case MessageType::kRespondToGetObj:
-        ReportResult(task->GetTaskId(), false, "Received unexpected message type");
+        ReportResult(task->GetTaskId(), false,
+                     "Received unexpected message type");
         return;
     }
   }

@@ -57,7 +57,7 @@ class ScopedConnection {
 
   int fd() const { return sockfd_; }
   bool IsValid() const { return sockfd_ >= 0; }
-  
+
   // Marks the connection as unusable (e.g., after a socket error).
   // This prevents it from being returned to the pool for reuse.
   void SetUnusable() { reuse_ = false; }

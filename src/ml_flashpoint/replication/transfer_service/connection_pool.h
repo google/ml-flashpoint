@@ -35,7 +35,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <queue>
+#include <stack>
 #include <string>
 
 namespace ml_flashpoint::replication::transfer_service {
@@ -125,7 +125,7 @@ class ConnectionPool {
   std::string peer_host_;
   int peer_port_;
   size_t max_size_;
-  std::queue<int> available_connections_;  // Guarded by mtx_.
+  std::stack<int> available_connections_;  // Guarded by mtx_.
   std::mutex mtx_;  // Protects available_connections_ and stopping_.
   std::condition_variable
       cv_;  // Signaled when a connection is released or the pool is stopping.

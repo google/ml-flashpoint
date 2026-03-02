@@ -81,7 +81,7 @@ ConnectionPool::~ConnectionPool() {
   cv_.notify_all();
   std::unique_lock<std::mutex> lock(mtx_);
   while (!available_connections_.empty()) {
-    close(available_connections_.front());
+    close(available_connections_.top());
     available_connections_.pop();
   }
 }
@@ -96,7 +96,7 @@ bool ConnectionPool::Initialize() {
     int fd = CreateConnection();
     if (fd < 0) {
       while (!available_connections_.empty()) {
-        close(available_connections_.front());
+        close(available_connections_.top());
         available_connections_.pop();
       }
       return false;
@@ -215,8 +215,12 @@ std::optional<ScopedConnection> ConnectionPool::GetConnection(int timeout_ms) {
       return std::nullopt;
     }
 
-    // Pop the oldest connection from the FIFO queue.
-    int fd = available_connections_.front();
+    // Pop the most recently used connection from the LIFO stack.
+    // LIFO (Last-In, First-Out) is preferred for connection pools as it
+    // increases the likelihood of reusing "hot" connections that still have
+    // active TCP state (e.g., large congestion windows) and are still cached
+    // in the kernel/CPU.
+    int fd = available_connections_.top();
     available_connections_.pop();
 
     // Verify the connection's health before handing it to the caller.
@@ -227,7 +231,7 @@ std::optional<ScopedConnection> ConnectionPool::GetConnection(int timeout_ms) {
     }
 
     // The connection is dead. We close it and attempt to retrieve another
-    // one from the queue.
+    // one from the stack.
     LOG(INFO) << "ConnectionPool::GetConnection: discarded dead connection; "
                  "retrying with next available connection";
     close(fd);
@@ -246,7 +250,7 @@ std::optional<ScopedConnection> ConnectionPool::GetConnection(int timeout_ms) {
 // Returns a connection to the pool, allowing it to be reused.
 //
 // If `reuse` is true and the pool is not full, the connection is added back to
-// the queue of available connections. Otherwise, the connection is closed.
+// the stack of available connections. Otherwise, the connection is closed.
 void ConnectionPool::ReleaseConnection(int sockfd, bool reuse) {
   if (sockfd < 0) {
     LOG(WARNING) << "ConnectionPool::ReleaseConnection: invalid sockfd";
@@ -264,6 +268,8 @@ void ConnectionPool::ReleaseConnection(int sockfd, bool reuse) {
   if (reuse) {
     if (available_connections_.size() < max_size_) {
       LOG(INFO) << "ConnectionPool::ReleaseConnection: reuse connection";
+      // We push to the stack to ensure this connection is the first to be
+      // reused by the next caller (LIFO).
       available_connections_.push(sockfd);
       cv_.notify_one();
     } else {

@@ -46,9 +46,9 @@ def generate_plan(
     planner: torchdistsaver.SavePlanner,
     world_dist_wrapper: _DistWrapper,
     cached_ckpt_structure: tuple[SavePlan, SavePlan, bool] | None = None,
-    loaded_all_plans: list[SavePlan] | None = None,
 ) -> tuple[
-    tuple[SavePlan, list[ObjectWriteBucket], torchdistsaver.Metadata | None],
+    list[ObjectWriteBucket],
+    torchdistsaver.Metadata | None,
     SavePlan,
     SavePlan,
     bool,
@@ -69,12 +69,12 @@ def generate_plan(
         world_dist_wrapper: The distributed wrapper for world (all ranks) communication.
             Typically created as `_DistWrapper(process_group, not no_dist, coordinator_rank)`.
         cached_ckpt_structure: Tuple of (cached_central_plan, cached_local_plan, validated_cache_reuse).
-        loaded_all_plans: List of all local plans from the previous checkpoint (for validation).
 
     Returns:
         A tuple containing:
-            - (final_local_plan, write_buckets, global_metadata)
-            - final_local_plan (for caching)
+            - write_buckets
+            - global_metadata
+            - central_plan (for caching)
             - local_plan (for caching)
             - validated_cache_reuse (bool)
     """
@@ -130,7 +130,8 @@ def generate_plan(
     write_buckets = storage_writer.prepare_write_data_buckets(checkpoint_id, final_local_plan, planner)
 
     return (
-        (final_local_plan, write_buckets, global_metadata),
+        write_buckets,
+        global_metadata,
         central_plan,
         local_plan,
         cached_central_plan == central_plan,

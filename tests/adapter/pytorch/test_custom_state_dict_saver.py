@@ -101,7 +101,8 @@ class TestGeneratePlan:
 
         # When
         (
-            (actual_plan, actual_write_buckets, actual_metadata),
+            actual_write_buckets,
+            actual_metadata,
             _,
             _,
             actual_reused,
@@ -120,9 +121,6 @@ class TestGeneratePlan:
         mock_storage_writer.prepare_write_data_buckets.assert_called_once_with(
             checkpoint_id, local_plan, mock_save_planner
         )
-        assert actual_plan == local_plan
-        assert actual_write_buckets == expected_write_buckets
-        assert actual_plan == local_plan
         assert actual_write_buckets == expected_write_buckets
         assert actual_metadata == expected_global_metadata
         assert actual_reused is False
@@ -141,7 +139,8 @@ class TestGeneratePlan:
 
         # When
         (
-            (actual_plan, _, actual_metadata),
+            _,
+            actual_metadata,
             _,
             _,
             actual_reused,
@@ -159,9 +158,9 @@ class TestGeneratePlan:
         # But we can't easily assert on dist_wrapper methods as they are not mocks here unless we mock them
         # However, we can check if they are NOT called by checking side effects if we had mocked them
         # For now, checking return values is good enough proxy
-        assert actual_plan == cached_plan
         assert actual_metadata is None
         assert actual_reused is True
+        mock_save_planner.create_local_plan.assert_not_called()
 
     def test_generate_plan_validates_cache_success(self, mocker, mock_storage_writer, mock_save_planner, dist_wrapper):
         """Tests that generate_plan validates cache successfully."""
@@ -180,6 +179,7 @@ class TestGeneratePlan:
 
         # When
         (
+            _,
             _,
             _,
             _,
@@ -222,7 +222,8 @@ class TestGeneratePlan:
 
         # When
         (
-            (returned_local_plan, _, _),
+            _,
+            _,
             _,
             _,
             _,
@@ -235,7 +236,6 @@ class TestGeneratePlan:
         # We can't directly assert the call arguments for local_step and global_step as they are inner functions.
         # However, we can assert that reduce_scatter was called with 'plan' as the tag.
         assert mock_reduce_scatter.call_args[0][0] == "plan"
-        assert returned_local_plan == expected_returned_plan
 
     def test_generate_plan_broadcasts_global_metadata(
         self, mock_storage_writer, mock_save_planner, dist_wrapper, mocker
@@ -259,7 +259,8 @@ class TestGeneratePlan:
 
         # When
         (
-            (_, _, returned_metadata),
+            _,
+            returned_metadata,
             _,
             _,
             _,
@@ -291,7 +292,8 @@ class TestGeneratePlan:
 
         # When
         (
-            (_, returned_write_buckets, _),
+            returned_write_buckets,
+            _,
             _,
             _,
             _,
@@ -324,7 +326,7 @@ class TestGeneratePlan:
 
         # Then
         assert isinstance(result, tuple)
-        assert len(result) == 4
+        assert len(result) == 5
 
 
 class TestWriteData:

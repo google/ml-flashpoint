@@ -100,11 +100,11 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         self._checkpoint_saver: MLFlashpointCheckpointSaver = storage_writer.checkpoint_saver
 
         # Cache for state dict saving
-        self.cached_central_plan: SavePlan | None = None
-        self.cached_local_plan: SavePlan | None = None
-        self.cached_global_metadata: Metadata | None = None
-        self.validated_cache_reuse: bool = False
-        self.use_cached_ckpt_structure: bool = use_cached_ckpt_structure
+        self._cached_central_plan: SavePlan | None = None
+        self._cached_local_plan: SavePlan | None = None
+        self._cached_global_metadata: Metadata | None = None
+        self._validated_cache_reuse: bool = False
+        self._use_cached_ckpt_structure: bool = use_cached_ckpt_structure
 
     @override
     def can_handle_sharded_objects(self) -> bool:
@@ -173,40 +173,33 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         # If so, reuse `cached_central_plan` and `cached_global_metadata`
         # From the 3rd iteration, `save_state_dict_async_plan` will not generate `global_metadata`
         # (return None) so `self.cached_global_metadata` is reused
-        args_cached_plans = None
-        loaded_all_plans = None
-        if self.use_cached_ckpt_structure:
-            if self.cached_global_metadata:
-                loaded_all_plans = getattr(self.cached_global_metadata, "all_local_plans", None)
-
-            args_cached_plans = (
-                self.cached_central_plan,
-                self.cached_local_plan,
-                self.validated_cache_reuse,
+        cached_structure_args = None
+        if self._use_cached_ckpt_structure:
+            cached_structure_args = (
+                self._cached_central_plan,
+                self._cached_local_plan,
+                self._validated_cache_reuse,
             )
 
         (
-            (plan, write_buckets, global_metadata),
-            self.cached_central_plan,
-            self.cached_local_plan,
-            self.validated_cache_reuse,
+            write_buckets,
+            global_metadata,
+            self._cached_central_plan,
+            self._cached_local_plan,
+            self._validated_cache_reuse,
         ) = statedictsaver.generate_plan(
             checkpoint_id=checkpoint_id,
             state_dict=pyt_state_dict,
             storage_writer=self._storage_writer,
             planner=planner,
             world_dist_wrapper=world_dist_wrapper,
-            cached_ckpt_structure=args_cached_plans,
-            loaded_all_plans=loaded_all_plans,
+            cached_ckpt_structure=cached_structure_args,
         )
 
-        if self.validated_cache_reuse:
-            if global_metadata is None and self.cached_global_metadata:
-                global_metadata = self.cached_global_metadata
-
-        # If we have a valid global_metadata (either new or reused), cache it for next time
-        if global_metadata is not None:
-            self.cached_global_metadata = global_metadata
+        if global_metadata is None:
+            global_metadata = self._cached_global_metadata
+        else:
+            self._cached_global_metadata = global_metadata
 
         # 5. Stage to CPU.
         staged_write_buckets = self._storage_writer.stage_write_data_buckets(

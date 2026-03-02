@@ -169,7 +169,8 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
                 _,
             ) = async_save_setup
             mock_statedictsaver.generate_plan.return_value = (
-                (mocker.MagicMock(), dummy_write_buckets, mocker.MagicMock()),
+                dummy_write_buckets,
+                mocker.MagicMock(),
                 mocker.MagicMock(),
                 mocker.MagicMock(),
                 False,
@@ -212,7 +213,8 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
                 _,
             ) = async_save_setup
             mock_statedictsaver.generate_plan.return_value = (
-                (mocker.MagicMock(), dummy_write_buckets, mocker.MagicMock()),
+                dummy_write_buckets,
+                mocker.MagicMock(),
                 mocker.MagicMock(),
                 mocker.MagicMock(),
                 False,
@@ -258,7 +260,8 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             ) = async_save_setup
             mock_planner = MockMCoreSavePlanner.return_value
             mock_statedictsaver.generate_plan.return_value = (
-                (mocker.MagicMock(), mocker.MagicMock(), mocker.MagicMock()),
+                mocker.MagicMock(),
+                mocker.MagicMock(),
                 mocker.MagicMock(),
                 mocker.MagicMock(),
                 False,
@@ -271,7 +274,6 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
                 "planner",
                 "world_dist_wrapper",
                 "cached_ckpt_structure",
-                "loaded_all_plans",
             }
 
             # When
@@ -293,7 +295,6 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             assert "world_dist_wrapper" in kwargs
             assert kwargs["world_dist_wrapper"].use_dist is False
             assert "cached_ckpt_structure" in kwargs
-            assert "loaded_all_plans" in kwargs
             assert "cached_global_metadata" not in kwargs
 
         def test_generate_plan_failure(self, mocker, async_save_setup):
@@ -318,7 +319,8 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             mock_statedictsaver = mocker.patch("ml_flashpoint.adapter.megatron.save_strategies.statedictsaver")
             strategy, checkpoint_id, sharded_state_dict, _ = async_save_setup
             mock_statedictsaver.generate_plan.return_value = (
-                (dummy_save_plan, dummy_write_buckets, dummy_metadata),
+                dummy_write_buckets,
+                dummy_metadata,
                 mocker.MagicMock(),
                 mocker.MagicMock(),
                 False,
@@ -358,7 +360,8 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             mock_statedictsaver = mocker.patch("ml_flashpoint.adapter.megatron.save_strategies.statedictsaver")
             strategy, checkpoint_id, sharded_state_dict, _ = async_save_setup
             mock_statedictsaver.generate_plan.return_value = (
-                (mocker.MagicMock(), mocker.MagicMock(), mocker.MagicMock()),
+                mocker.MagicMock(),
+                mocker.MagicMock(),
                 mocker.MagicMock(),
                 mocker.MagicMock(),
                 False,
@@ -389,7 +392,8 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             mock_statedictsaver = mocker.patch("ml_flashpoint.adapter.megatron.save_strategies.statedictsaver")
             strategy, checkpoint_id, sharded_state_dict, _ = async_save_setup
             mock_statedictsaver.generate_plan.return_value = (
-                (dummy_save_plan, dummy_write_buckets, dummy_metadata),
+                dummy_write_buckets,
+                dummy_metadata,
                 mocker.MagicMock(),
                 mocker.MagicMock(),
                 False,
@@ -453,7 +457,8 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             mock_statedictsaver = mocker.patch("ml_flashpoint.adapter.megatron.save_strategies.statedictsaver")
             strategy, checkpoint_id, sharded_state_dict, _ = async_save_setup
             mock_statedictsaver.generate_plan.return_value = (
-                (dummy_save_plan, mocker.MagicMock(), dummy_metadata),
+                mocker.MagicMock(),
+                dummy_metadata,
                 mocker.MagicMock(),
                 mocker.MagicMock(),
                 False,
@@ -495,7 +500,8 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             # Mock dependencies to ensure success path
             mock_statedictsaver = mocker.patch("ml_flashpoint.adapter.megatron.save_strategies.statedictsaver")
             mock_statedictsaver.generate_plan.return_value = (
-                (mocker.MagicMock(), mocker.MagicMock(), mocker.MagicMock()),
+                mocker.MagicMock(),
+                mocker.MagicMock(),
                 mocker.MagicMock(),
                 mocker.MagicMock(),
                 False,
@@ -518,7 +524,8 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             # --- Call 1: No cache ---
             # Given
             mock_statedictsaver.generate_plan.return_value = (
-                (mocker.MagicMock(), [], mocker.MagicMock()),
+                [],
+                mocker.MagicMock(),
                 cached_plan,  # cached_central_plan returned
                 mocker.MagicMock(),
                 False,
@@ -528,29 +535,31 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             strategy.async_save(sharded_state_dict, checkpoint_id.data)
 
             # Then
-            assert strategy.cached_central_plan == cached_plan
-            assert strategy.validated_cache_reuse is False
+            assert strategy._cached_central_plan == cached_plan
+            assert strategy._validated_cache_reuse is False
 
             # --- Call 2: Cache validation success ---
             # Given
             mock_statedictsaver.generate_plan.return_value = (
-                (mocker.MagicMock(), [], cached_metadata),
+                [],
+                cached_metadata,
                 cached_plan,
                 mocker.MagicMock(),
-                True,  # validated_cache_reuse
+                True,
             )
 
             # When
             strategy.async_save(sharded_state_dict, checkpoint_id.data)
 
             # Then
-            assert strategy.validated_cache_reuse is True
-            assert strategy.cached_global_metadata == cached_metadata
+            assert strategy._validated_cache_reuse is True
+            assert strategy._cached_global_metadata == cached_metadata
 
             # --- Call 3: Reuse cache ---
             # Given
             mock_statedictsaver.generate_plan.return_value = (
-                (mocker.MagicMock(), [], None),  # Returns None for metadata
+                [],
+                None,  # Returns None for metadata
                 cached_plan,
                 mocker.MagicMock(),
                 True,
@@ -564,7 +573,7 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             _, kwargs = mock_statedictsaver.generate_plan.call_args
             assert "cached_global_metadata" not in kwargs
             # And cached_global_metadata in strategy should still be the same
-            assert strategy.cached_global_metadata == cached_metadata
+            assert strategy._cached_global_metadata == cached_metadata
 
         def test_async_save_caching_disabled_by_default(self, mocker, async_save_setup, storage_writer):
             """Tests that caching is disabled by default."""
@@ -576,12 +585,12 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
 
             # Call: Returns a plan that could be cached
             mock_statedictsaver.generate_plan.return_value = (
-                (mocker.MagicMock(), [], mocker.MagicMock()),
+                [],
+                None,
                 cached_plan,
                 mocker.MagicMock(),
                 False,
             )
-
             # When
             strategy.async_save(sharded_state_dict, checkpoint_id.data)
 
@@ -596,4 +605,4 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
 
             _, kwargs = mock_statedictsaver.generate_plan.call_args
             assert kwargs["cached_ckpt_structure"] is None
-            assert strategy.use_cached_ckpt_structure is False
+            assert strategy._use_cached_ckpt_structure is False

@@ -251,7 +251,17 @@ def apply_parallel_wrappers(
     load_strategy: "LoadShardedStrategy",
     use_fully_parallel_wrapper: bool = False,
 ) -> tuple["SaveShardedStrategy", "LoadShardedStrategy"]:
-    """Wraps checkpoint strategies for parallel execution."""
+    """Wraps checkpoint strategies with optional fully parallel wrappers.
+
+    Args:
+        save_strategy: The checkpoint save strategy to wrap.
+        load_strategy: The checkpoint load strategy to wrap.
+        use_fully_parallel_wrapper: If True, wraps the strategies with
+            `FullyParallelSaveWrapper` and `FullyParallelLoadWrapper`.
+
+    Returns:
+        A tuple containing the (potentially wrapped) save and load strategies.
+    """
     if use_fully_parallel_wrapper:
         save_strategy = FullyParallelSaveWrapper(save_strategy)
         load_strategy = FullyParallelLoadWrapper(load_strategy)

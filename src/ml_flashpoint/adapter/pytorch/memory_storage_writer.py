@@ -88,7 +88,7 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
         self,
         checkpoint_saver: MLFlashpointCheckpointSaver,
         mp_manager: torch_mp.Manager,
-        thread_count: int = 1,
+        files_per_rank: int = 1,
     ):
         """Initializes the MemoryStorageWriter.
 
@@ -100,7 +100,7 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
                 It is highly recommended to create this manager using a 'spawn'
                 multiprocessing context to avoid inheriting the parent's CUDA context,
                 which prevents CUDA OOM errors during failure recoveries
-            thread_count: Optional. The number of threads to use for writing checkpoint data.
+            files_per_rank: Optional. The number of files each rank writes to for checkpoint data.
                 Defaults to 1. If a value less than 1 is provided, it will be reset to 1,
                 and a warning will be logged.
         """
@@ -108,10 +108,10 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
         self._current_checkpoint_id: CheckpointContainerId | None = None
         self._current_save_id: str | None = None
         self._checkpoint_saver: MLFlashpointCheckpointSaver = checkpoint_saver
-        if thread_count < 1:
-            _LOGGER.warning("thread_count must be >= 1, but was %d. Setting to 1.", thread_count)
-            thread_count = 1
-        self._thread_count = thread_count
+        if files_per_rank < 1:
+            _LOGGER.warning("files_per_rank must be >= 1, but was %d. Setting to 1.", files_per_rank)
+            files_per_rank = 1
+        self._files_per_rank = files_per_rank
         # _main_process_torchmp_manager should only be used in the main process, not in the spawned processes.
         # This is because mp_manager is not picklable.
         self._main_process_torchmp_manager = mp_manager
@@ -197,7 +197,7 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
             self._write_events_per_checkpoint_id[checkpoint_id] = self._main_process_torchmp_manager.Event()
 
         write_buckets = self.checkpoint_saver.prepare_write_data(
-            checkpoint_id, plan.items, planner, plan.storage_data.prefix, bucket_count=self._thread_count
+            checkpoint_id, plan.items, planner, plan.storage_data.prefix, bucket_count=self._files_per_rank
         )
         return write_buckets
         # self._write_buckets_per_checkpoint_id[checkpoint_id] = write_buckets
@@ -237,7 +237,7 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
         write_results = self._checkpoint_saver.write_data(
             checkpoint_id,
             write_buckets=staged_write_buckets,
-            thread_count=self._thread_count,
+            files_per_rank=self._files_per_rank,
             replicate_after_write=replicate_after_write,
         )
         end_time = time.perf_counter()

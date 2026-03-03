@@ -42,7 +42,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
     async_save: bool,
     default_auto_resume: nl.AutoResume = None,
     always_save_context: bool = False,
-    write_thread_count: int = 1,
+    write_files_per_rank: int = 1,
     initial_write_buffer_size_bytes: int = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
     use_optimized_save: bool = True,
 ) -> MLFlashpointAutoResume:
@@ -59,7 +59,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
         async_save: Whether to enable asynchronous saving for checkpoints.
         default_auto_resume: The default AutoResume configuration to inherit from.
         always_save_context: Whether to always save the context. Defaults to `False`.
-        write_thread_count: Optional. The number of threads to use for writing checkpoint data. Defaults to 1.
+        write_files_per_rank: Optional. The number of files each rank writes to for checkpoint data. Defaults to 1.
         initial_write_buffer_size_bytes: Optional. The initial size of the buffer for writing checkpoint data
             in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`.
     Returns:
@@ -87,7 +87,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
         async_save=async_save,
         checkpoint_loader=ckpt_loader,
         always_save_context=always_save_context,
-        write_thread_count=write_thread_count,
+        write_files_per_rank=write_files_per_rank,
         initial_write_buffer_size_bytes=initial_write_buffer_size_bytes,
         use_optimized_save=use_optimized_save,
     )
@@ -108,7 +108,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
     async_save: bool,
     checkpoint_loader: DefaultMLFlashpointCheckpointLoader,
     always_save_context: bool = False,
-    write_thread_count: int = 1,
+    write_files_per_rank: int = 1,
     initial_write_buffer_size_bytes: int = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
     use_optimized_save: bool = True,
 ):
@@ -135,7 +135,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
         async_save: Whether to enable asynchronous saving.
         checkpoint_loader: The checkpoint loader to use.
         always_save_context: Whether to always save the context. Defaults to `False`.
-        write_thread_count: Optional. The number of threads to use for writing checkpoint data. Defaults to 1.
+        write_files_per_rank: Optional. The number of files each rank writes to for checkpoint data. Defaults to 1.
         initial_write_buffer_size_bytes: Optional. The initial size of the buffer for writing checkpoint data
             in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`.
 
@@ -152,8 +152,8 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
         raise ValueError("The 'ckpt_obj_manager' argument cannot be None.")
     if replication_manager is None:
         raise ValueError("The 'replication_manager' argument cannot be None.")
-    if write_thread_count < 1:
-        raise ValueError(f"write_thread_count must be >= 1, got {write_thread_count}.")
+    if write_files_per_rank < 1:
+        raise ValueError(f"write_files_per_rank must be >= 1, got {write_files_per_rank}.")
     if initial_write_buffer_size_bytes <= 0:
         raise ValueError(f"initial_write_buffer_size_bytes must be > 0, got {initial_write_buffer_size_bytes}.")
 
@@ -217,7 +217,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
                 use_optimized_save=use_optimized_save,
             ),
             mp_manager=ctx.Manager(),
-            thread_count=write_thread_count,
+            files_per_rank=write_files_per_rank,
         )
     )
     load_strategy = MLFlashpointMegatronLoadStrategy(

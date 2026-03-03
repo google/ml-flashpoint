@@ -100,7 +100,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
             async_save=async_save,
             checkpoint_loader=actual_auto_resume.checkpoint_loader,
             always_save_context=False,
-            write_thread_count=1,
+            write_files_per_rank=1,
             initial_write_buffer_size_bytes=DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
             use_optimized_save=True,
         )
@@ -216,16 +216,16 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         assert kwargs["initial_buffer_size_bytes"] == expected_buffer_size
 
     @pytest.mark.parametrize(
-        "thread_count_kwarg, expected_thread_count",
+        "files_per_rank_kwarg, expected_files_per_rank",
         [
             ({}, 1),
-            ({"write_thread_count": 4}, 4),
+            ({"write_files_per_rank": 4}, 4),
         ],
     )
-    def test_write_thread_count_forwarding(
-        self, mocker, mock_ckpt_obj_manager, mock_replication_manager, thread_count_kwarg, expected_thread_count
+    def test_write_files_per_rank_forwarding(
+        self, mocker, mock_ckpt_obj_manager, mock_replication_manager, files_per_rank_kwarg, expected_files_per_rank
     ):
-        """Tests that the write_thread_count is forwarded correctly."""
+        """Tests that the write_files_per_rank is forwarded correctly."""
         # Given
         trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
         trainer.callbacks = [mocker.MagicMock(spec=MLFlashpointCheckpointCallback)]
@@ -248,14 +248,14 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
             flashpoint_base_container,
             async_save,
             default_auto_resume,
-            **thread_count_kwarg,
+            **files_per_rank_kwarg,
         )
 
         # Then
         # Verify that MemoryStorageWriter was initialized with the correct thread count
         spy_memory_storage_writer_init.assert_called_once()
         _, kwargs = spy_memory_storage_writer_init.call_args  # Capture kwargs
-        assert kwargs["thread_count"] == expected_thread_count
+        assert kwargs["files_per_rank"] == expected_files_per_rank
 
     @pytest.mark.parametrize("always_save_context", [True, False])
     def test_loader_initialization_arguments(self, mocker, always_save_context):
@@ -354,18 +354,18 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
                     checkpoint_loader=mocker.MagicMock(spec=DefaultMLFlashpointCheckpointLoader),
                 )
 
-        def test_validation_invalid_write_thread_count(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
+        def test_validation_invalid_write_files_per_rank(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
             """Tests validation check for invalid write thread count."""
             trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
             base_container = "/test_base_container"
-            with pytest.raises(ValueError, match="write_thread_count must be >= 1"):
+            with pytest.raises(ValueError, match="write_files_per_rank must be >= 1"):
                 wrap_trainer_checkpoint_io_with_mlflashpoint(
                     trainer,
                     base_container,
                     mock_ckpt_obj_manager,
                     replication_manager=mock_replication_manager,
                     async_save=True,
-                    write_thread_count=0,
+                    write_files_per_rank=0,
                     checkpoint_loader=mocker.MagicMock(spec=DefaultMLFlashpointCheckpointLoader),
                 )
 
@@ -756,16 +756,16 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         assert kwargs["initial_buffer_size_bytes"] == expected_buffer_size
 
     @pytest.mark.parametrize(
-        "thread_count_kwarg, expected_thread_count",
+        "files_per_rank_kwarg, expected_files_per_rank",
         [
             ({}, 1),
-            ({"write_thread_count": 4}, 4),
+            ({"write_files_per_rank": 4}, 4),
         ],
     )
-    def test_write_thread_count_forwarding(
-        self, mocker, mock_ckpt_obj_manager, mock_replication_manager, thread_count_kwarg, expected_thread_count
+    def test_write_files_per_rank_forwarding(
+        self, mocker, mock_ckpt_obj_manager, mock_replication_manager, files_per_rank_kwarg, expected_files_per_rank
     ):
-        """Tests that the write_thread_count is forwarded correctly."""
+        """Tests that the write_files_per_rank is forwarded correctly."""
         # Given
         trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
         trainer.callbacks = [mocker.MagicMock(spec=MLFlashpointCheckpointCallback)]
@@ -785,14 +785,14 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
             mock_replication_manager,
             async_save=True,
             checkpoint_loader=mocker.MagicMock(spec=DefaultMLFlashpointCheckpointLoader),
-            **thread_count_kwarg,
+            **files_per_rank_kwarg,
         )
 
         # Then
         # Verify that MemoryStorageWriter was initialized with the correct thread count
         spy_memory_storage_writer_init.assert_called_once()
         _, kwargs = spy_memory_storage_writer_init.call_args
-        assert kwargs["thread_count"] == expected_thread_count
+        assert kwargs["files_per_rank"] == expected_files_per_rank
 
     def test_spawn_context_used_for_mp_manager(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
         """Tests that torch_mp.get_context('spawn').Manager() is correctly instantiated and passed."""

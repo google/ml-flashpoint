@@ -90,7 +90,7 @@ auto_resume = wrap_trainer_and_auto_resume_with_mlflashpoint(
     async_save=not args.sync_save,
     default_auto_resume=auto_resume, # Optional
     # always_save_context=False, # Optional, defaults to False
-    # write_thread_count=1, # Optional, defaults to 1
+    # write_files_per_rank=1, # Optional, defaults to 1
     # initial_write_buffer_size_bytes=DESIRED_NUM_BYTES, # Optional, defaults to 16 GB
 )
 ```

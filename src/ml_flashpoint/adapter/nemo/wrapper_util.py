@@ -247,10 +247,10 @@ from megatron.core.dist_checkpointing.strategies import (
 )
 
 def apply_parallel_wrappers(
-    save_strategy: Any,
-    load_strategy: Any,
-    use_fully_parallel_wrapper: bool = False
-) -> tuple[Any, Any]:
+    save_strategy: "SaveShardedStrategy",
+    load_strategy: "LoadShardedStrategy",
+    use_fully_parallel_wrapper: bool = False,
+) -> tuple["SaveShardedStrategy", "LoadShardedStrategy"]:
     """Wraps checkpoint strategies for parallel execution."""
     if use_fully_parallel_wrapper:
         save_strategy = FullyParallelSaveWrapper(save_strategy)

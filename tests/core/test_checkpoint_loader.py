@@ -1609,10 +1609,7 @@ class TestGetCandidateCheckpoints:
             return orig_relative_to(self, other)
 
         mocker.patch("pathlib.Path.relative_to", side_effect=side_effect_relative_to, autospec=True)
-        # When
-        loader.get_candidate_checkpoints(base_container)
 
-        # Then
         # Mock all_gather to return the data
         def all_gather_side_effect(out_list, in_obj):
             out_list[0] = in_obj
@@ -1624,7 +1621,7 @@ class TestGetCandidateCheckpoints:
         loader.get_candidate_checkpoints(base_container)
 
         # Then
-        self.mock_all_gather.assert_called()
+        self.mock_all_gather.assert_called_once()
         self.mock_broadcast.assert_not_called()
         args, _ = self.mock_all_gather.call_args
         # args[1] is the input object (list of paths)

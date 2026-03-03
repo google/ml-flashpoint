@@ -355,7 +355,7 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
                 )
 
         def test_validation_invalid_write_files_per_rank(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
-            """Tests validation check for invalid write thread count."""
+            """Tests validation check for invalid write_files_per_rank."""
             trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
             base_container = "/test_base_container"
             with pytest.raises(ValueError, match="write_files_per_rank must be >= 1"):

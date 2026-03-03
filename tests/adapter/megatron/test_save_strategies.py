@@ -199,7 +199,8 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
 
         @pytest.mark.parametrize("expected_files_per_rank", [1, 2, 3, 5])
         def test_async_save_reinitializes_storage_writer_with_files_per_rank(
-            self, mocker, async_save_setup, storage_writer, checkpoint_saver, dummy_write_buckets, expected_files_per_rank
+            self, mocker, async_save_setup, storage_writer, checkpoint_saver, dummy_write_buckets,
+            expected_files_per_rank,
         ):
             """Tests that the StorageWriter is re-initialized with the correct files_per_rank."""
             # Given

@@ -454,7 +454,9 @@ class TestMemoryStorageWriter:
             """Tests that prepare_write_data_buckets calls the saver with the specified files_per_rank."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager, files_per_rank=files_per_rank)
+            writer = MemoryStorageWriter(
+                checkpoint_saver=mock_saver, mp_manager=mp_manager, files_per_rank=files_per_rank
+            )
             checkpoint_id = CheckpointContainerId("/test_checkpoint_with_files_per_rank")
             plan = SavePlan(items=[], storage_data=_StorageDataContext(prefix="__0_"))
             planner = mocker.MagicMock()
@@ -579,7 +581,9 @@ class TestMemoryStorageWriter:
             files_per_rank."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager, files_per_rank=files_per_rank)
+            writer = MemoryStorageWriter(
+                checkpoint_saver=mock_saver, mp_manager=mp_manager, files_per_rank=files_per_rank
+            )
             checkpoint_id = CheckpointContainerId("/test_checkpoint_explicit_files_per_rank")
             writer.reset(checkpoint_id.data)
             staged_write_buckets = _create_rich_object_write_buckets(checkpoint_id)

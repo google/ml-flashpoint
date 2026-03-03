@@ -1534,7 +1534,9 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 assert torch.equal(loaded_tensor, tensor_data)
 
         @pytest.mark.parametrize("files_per_rank", [0, -1, -5])
-        def test_write_data_files_per_rank_less_than_1(self, saver, temp_dir_path, chkpt_object_manager, files_per_rank):
+        def test_write_data_files_per_rank_less_than_1(
+            self, saver, temp_dir_path, chkpt_object_manager, files_per_rank
+        ):
             # Given
             checkpoint_id = CheckpointContainerId(f"{temp_dir_path}/checkpoint_write_data_tensor_th{files_per_rank}")
             os.makedirs(checkpoint_id.data, exist_ok=True)

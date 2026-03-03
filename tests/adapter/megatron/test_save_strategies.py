@@ -190,18 +190,19 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             mock_memory_storage_writer_cls.assert_called_once_with(
                 checkpoint_saver=checkpoint_saver,
                 mp_manager=storage_writer._main_process_torchmp_manager,
-                thread_count=storage_writer._thread_count,
+                files_per_rank=storage_writer._files_per_rank,
             )
             mock_new_storage_writer_instance.reset.assert_called_once_with(checkpoint_id.data)
             mock_new_storage_writer_instance.stage_write_data_buckets.assert_called_once_with(
                 checkpoint_id, dummy_write_buckets, non_blocking=True
             )
 
-        @pytest.mark.parametrize("expected_thread_count", [1, 2, 3, 5])
-        def test_async_save_reinitializes_storage_writer_with_thread_count(
-            self, mocker, async_save_setup, storage_writer, checkpoint_saver, dummy_write_buckets, expected_thread_count
+        @pytest.mark.parametrize("expected_files_per_rank", [1, 2, 3, 5])
+        def test_async_save_reinitializes_storage_writer_with_files_per_rank(
+            self, mocker, async_save_setup, storage_writer, checkpoint_saver, dummy_write_buckets,
+            expected_files_per_rank,
         ):
-            """Tests that the StorageWriter is re-initialized with the correct thread_count."""
+            """Tests that the StorageWriter is re-initialized with the correct files_per_rank."""
             # Given
             mock_statedictsaver = mocker.patch("ml_flashpoint.adapter.megatron.save_strategies.statedictsaver")
             (
@@ -216,8 +217,8 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
                 mocker.MagicMock(),
             )
 
-            # Set a specific thread_count on the original storage_writer
-            storage_writer._thread_count = expected_thread_count
+            # Set a specific files_per_rank on the original storage_writer
+            storage_writer._files_per_rank = expected_files_per_rank
 
             mock_memory_storage_writer_cls = mocker.patch(
                 "ml_flashpoint.adapter.megatron.save_strategies.MemoryStorageWriter"
@@ -230,7 +231,7 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             mock_memory_storage_writer_cls.assert_called_once_with(
                 checkpoint_saver=checkpoint_saver,
                 mp_manager=storage_writer._main_process_torchmp_manager,
-                thread_count=expected_thread_count,
+                files_per_rank=expected_files_per_rank,
             )
 
         def test_initialize_checkpoint_failure(self, mocker, async_save_setup, checkpoint_saver):

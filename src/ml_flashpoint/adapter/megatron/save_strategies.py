@@ -127,7 +127,7 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         self._storage_writer = MemoryStorageWriter(
             checkpoint_saver=self._checkpoint_saver,
             mp_manager=self._storage_writer._main_process_torchmp_manager,
-            thread_count=self._storage_writer._thread_count,
+            files_per_rank=self._storage_writer._files_per_rank,
         )
         # 1c. Reset the StorageWriter for this checkpoint version.
         self._storage_writer.reset(checkpoint_id.data)

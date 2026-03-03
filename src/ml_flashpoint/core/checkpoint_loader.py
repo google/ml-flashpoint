@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import IO, Callable, List, Optional, Set, Tuple, TypeVar, cast
 
 import torch
-import torch.distributed as dist
 from torch.distributed._shard._utils import narrow_tensor_by_index
 from torch.distributed.checkpoint import Metadata
 from torch.distributed.checkpoint.filesystem import _StorageInfo

@@ -284,12 +284,12 @@ class TestMemoryStorageWriter:
 
             # When
             # This should trigger _ensure_manager_ready()
-            resolved_manager = writer.mp_manager
+            actual_manager = writer.mp_manager
 
             # Then
             # Verify it blocked on future.result()
             mock_future.result.assert_called_once()
-            assert resolved_manager is mp_manager
+            assert actual_manager is mp_manager
             # Verify proxy objects were initialized
             assert writer._write_events_per_checkpoint_id is not None
             assert type(writer._write_events_per_checkpoint_id).__name__ == "DictProxy"

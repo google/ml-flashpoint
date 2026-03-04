@@ -16,6 +16,7 @@
 import logging
 import os
 import threading
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from ml_flashpoint.checkpoint_object_manager.buffer_io import BufferIO
@@ -65,7 +66,7 @@ class BufferIOProxy:
 
         self._closed = True
 
-        _LOGGER.info("Closing BufferIOProxy object...")
+        _LOGGER.debug("Closing BufferIOProxy object...")
         if truncate and not self._buffer_io.is_readonly:
             try:
                 final_data_len = self._buffer_io._metadata.len_written_data
@@ -73,7 +74,7 @@ class BufferIOProxy:
 
                 current_size = len(self._buffer_io._mv)
                 if truncate_size != current_size:
-                    _LOGGER.info(
+                    _LOGGER.debug(
                         "BufferIOProxy: Truncating reusable buffer from %d to %d bytes", current_size, truncate_size
                     )
                     self._buffer_io.resize(truncate_size)
@@ -91,7 +92,7 @@ class BufferIOProxy:
         self.close()
 
     def _auto_resize(self, required_bytes: int):
-        """Resizes the buffer to accommodate required_bytes from current position."""
+        """Resizes the buffer to accommodate an additional required_bytes from the current position."""
         current_size = self._buffer_io.buffer_obj.get_capacity()
         current_pos = self._buffer_io.tell()
         required_size = METADATA_SIZE + current_pos + required_bytes
@@ -99,7 +100,7 @@ class BufferIOProxy:
         # Use 1MB padding or 10% growth (whichever is larger) to amortize resize costs
         new_size = int(max(current_size * RESIZE_FACTOR, required_size + PADDING_SIZE))
 
-        _LOGGER.info(
+        _LOGGER.debug(
             "BufferIOProxy: Auto-resizing from %d to %d bytes (required: %d)",
             current_size,
             new_size,
@@ -127,6 +128,16 @@ class BufferIOProxy:
             self._auto_resize(size)
 
         return self._buffer_io.next_buffer_slice(size)
+
+
+@dataclass
+class BufferPoolConfig:
+    """Configuration for the BufferPool."""
+
+    pool_dir_path: str
+    rank: int
+    num_buffers: int
+    buffer_size: int
 
 
 class BufferPool:
@@ -174,10 +185,10 @@ class BufferPool:
 
         try:
             os.makedirs(self.pool_dir, exist_ok=True)
-            _LOGGER.info("BufferPool initialized with directory: %s", self.pool_dir)
+            _LOGGER.debug("BufferPool initialized with directory: %s", self.pool_dir)
             self._preallocate_buffers()
-        except OSError as e:
-            _LOGGER.error("Failed to create/populate BufferPool: %s", e)
+        except OSError:
+            _LOGGER.exception("Failed to create/populate BufferPool.")
             raise
 
     @log_execution_time(logger=_LOGGER, name="acquire", level=logging.INFO)
@@ -201,9 +212,9 @@ class BufferPool:
 
             # 1. Try to find a free buffer
             if self.free_buffers:
-                _LOGGER.info("Number of free buffers: %d", len(self.free_buffers))
+                _LOGGER.debug("Number of free buffers: %d", len(self.free_buffers))
                 free_buffer = self.free_buffers.pop()
-                _LOGGER.info(
+                _LOGGER.debug(
                     "Acquired buffer from pool for %s, the buffer name is %s",
                     associated_symlink,
                     free_buffer.buffer_obj.get_id(),
@@ -222,7 +233,7 @@ class BufferPool:
                     raise
 
             # 2. If no free buffer, return None
-            _LOGGER.info("BufferPool exhausted. All %d buffers are in use.", self.num_buffers)
+            _LOGGER.debug("BufferPool exhausted. All %d buffers are in use.", self.num_buffers)
             return None
 
     def _gc(self) -> None:
@@ -234,9 +245,9 @@ class BufferPool:
                 to_release.append(buffer_path)
 
         if to_release:
-            _LOGGER.info("Garbage collecting %d buffers whose symlinks are gone.", len(to_release))
+            _LOGGER.debug("Garbage collecting %d buffers whose symlinks are gone.", len(to_release))
             for buffer_path in to_release:
-                _LOGGER.info("Garbage collecting buffer %s", buffer_path)
+                _LOGGER.debug("Garbage collecting buffer %s", buffer_path)
                 buf_io, _ = self.active_buffers.pop(buffer_path)
                 self.free_buffers.append(buf_io)
 
@@ -249,7 +260,7 @@ class BufferPool:
         Use cases using temp dir will cleanup the dir.
         """
         with self._lock:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Tearing down BufferPool. Closing %d free and %d active buffers.",
                 len(self.free_buffers),
                 len(self.active_buffers),
@@ -274,7 +285,7 @@ class BufferPool:
         """Reuses an existing buffer object, resizing if necessary."""
         try:
             current_capacity = buffer_io.buffer_obj.get_capacity()
-            _LOGGER.info("Reusing pool buffer (capacity %d).", current_capacity)
+            _LOGGER.debug("Reusing pool buffer (capacity %d).", current_capacity)
 
             # Reset the buffer for reuse: start at the beginning and clear written length.
             buffer_io.seek(0)
@@ -305,7 +316,7 @@ class BufferPool:
 
             # Create/Reset buffer file
             try:
-                _LOGGER.info("Pre-allocating buffer: %s with size %d", buffer_path, self.buffer_size)
+                _LOGGER.debug("Pre-allocating buffer: %s with size %d", buffer_path, self.buffer_size)
 
                 # Always overwrite to ensure a clean state
                 buffer_obj = BufferObject(buffer_path, self.buffer_size, overwrite=True)

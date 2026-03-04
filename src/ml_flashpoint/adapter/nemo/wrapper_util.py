@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from typing import Union
 
 import torch
@@ -30,10 +31,13 @@ from ml_flashpoint.adapter.nemo.checkpoint_io import MLFlashpointAsyncFinalizabl
 from ml_flashpoint.adapter.nemo.nemo_checkpoint_loader import NeMoMLFlashpointCheckpointLoader
 from ml_flashpoint.adapter.pytorch.memory_storage_writer import MemoryStorageWriter
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
+from ml_flashpoint.core.buffer_pool import BufferPoolConfig
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId
 from ml_flashpoint.core.checkpoint_loader import DefaultMLFlashpointCheckpointLoader
 from ml_flashpoint.core.checkpoint_saver import DEFAULT_INITIAL_BUFFER_SIZE_BYTES, DefaultMLFlashpointCheckpointSaver
 from ml_flashpoint.replication.replication_manager import ReplicationManager
+
+NUM_OF_BUFFERS_PER_OBJECT = 3
 
 
 def wrap_trainer_and_auto_resume_with_mlflashpoint(
@@ -69,7 +73,15 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
         raise ValueError("The 'flashpoint_base_container' argument cannot be empty.")
 
     flashpoint_base_container = CheckpointContainerId(flashpoint_base_container)
-    ckpt_obj_manager = CheckpointObjectManager()
+
+    pool_config = BufferPoolConfig(
+        pool_dir_path=os.path.join(str(flashpoint_base_container), "buffer_pool"),
+        rank=trainer.global_rank,
+        num_buffers=write_thread_count * NUM_OF_BUFFERS_PER_OBJECT,
+        buffer_size=initial_write_buffer_size_bytes,
+    )
+
+    ckpt_obj_manager = CheckpointObjectManager(pool_config=pool_config)
     replication_manager = ReplicationManager()
     replication_manager.initialize(checkpoint_object_manager=ckpt_obj_manager)
 

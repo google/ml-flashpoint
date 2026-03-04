@@ -35,6 +35,7 @@ from ml_flashpoint.adapter.nemo.wrapper_util import (
 )
 from ml_flashpoint.adapter.pytorch.memory_storage_writer import MemoryStorageWriter
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
+from ml_flashpoint.core.buffer_pool import BufferPoolConfig
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId
 from ml_flashpoint.core.checkpoint_loader import DefaultMLFlashpointCheckpointLoader
 from ml_flashpoint.core.checkpoint_saver import (
@@ -61,7 +62,15 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
     def mock_replication_manager(self, mocker):
         return mocker.MagicMock(spec=ReplicationManager)
 
-    def test_successful_wrap_and_resume_creation(self, mocker):
+    @pytest.fixture
+    def mock_ckpt_obj_manager_cls(self, mocker):
+        # Patch the CheckpointObjectManager class imported in wrapper_util.py
+        cls_mock = mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.CheckpointObjectManager")
+        # Ensure it returns a MagicMock instance when called
+        cls_mock.return_value = mocker.MagicMock(spec=CheckpointObjectManager)
+        return cls_mock
+
+    def test_successful_wrap_and_resume_creation(self, mocker, mock_ckpt_obj_manager_cls):
         """Tests the successful creation of MLFlashpointAutoResume and wrapping."""
         # Given
         # Mock the heavy components
@@ -90,13 +99,20 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         )
 
         # Then
-        # 1. ReplicationManager initialized
         mock_replication_manager_cls.assert_called_once()
         mock_replication_manager_instance.initialize.assert_called_once()
+
+        mock_ckpt_obj_manager_cls.assert_called_once()
+        call_args = mock_ckpt_obj_manager_cls.call_args
+        assert "pool_config" in call_args.kwargs
+        pool_config = call_args.kwargs["pool_config"]
+        assert isinstance(pool_config, BufferPoolConfig)
+        assert pool_config.pool_dir_path == f"{flashpoint_base_container}/buffer_pool"
+
         # Capture the ckpt_obj_manager passed to initialize
         _, kwargs_init = mock_replication_manager_instance.initialize.call_args
         ckpt_obj_manager = kwargs_init["checkpoint_object_manager"]
-        assert isinstance(ckpt_obj_manager, CheckpointObjectManager)
+        assert ckpt_obj_manager == mock_ckpt_obj_manager_cls.return_value
 
         # 2. wrap_trainer_checkpoint_io_with_mlflashpoint called
         mock_wrap_trainer.assert_called_once_with(

@@ -15,12 +15,12 @@
 import os
 import shutil
 import threading
-from typing import Any, ClassVar, Dict, Optional
+from typing import ClassVar, Optional
 
 from ml_flashpoint.checkpoint_object_manager.buffer_io import BufferIO
 from ml_flashpoint.checkpoint_object_manager.buffer_metadata import METADATA_SIZE
 from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject
-from ml_flashpoint.core.buffer_pool import BufferPool
+from ml_flashpoint.core.buffer_pool import BufferPool, BufferPoolConfig
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.mlf_logging import get_logger
 
@@ -34,29 +34,20 @@ class CheckpointObjectManager:
     awareness of buffers (within a rank).
     """
 
-    # Class-level registry for BufferPools in the worker process.
-    # Key: pool_dir_path (str), Value: BufferPool instance
-    _worker_pools: ClassVar[Dict[str, BufferPool]] = {}
-    _worker_pools_lock = threading.Lock()
+    # Class-level registry for BufferPool in the worker process.
+    _worker_pool: ClassVar[Optional[BufferPool]] = None
+    _worker_pool_lock = threading.Lock()
 
-    def __init__(self, pool_config: Optional[Dict[str, Any]] = None):
+    def __init__(self, pool_config: Optional[BufferPoolConfig] = None):
         """Initializes the CheckpointObjectManager.
 
         Args:
             pool_config: Optional configuration for the BufferPool.
         """
-        self.pool_config = pool_config
+        self._pool_config = pool_config
         # Buffer pool is used for worker process only.
         self._worker_process_buffer_pool: Optional[BufferPool] = None
         self._worker_process_pool_lock = threading.Lock()
-
-    def set_pool_config(self, pool_config: Dict[str, Any]):
-        """Sets the configuration for the BufferPool.
-
-        Args:
-            pool_config: Configuration dictionary for the BufferPool.
-        """
-        self.pool_config = pool_config
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -81,51 +72,48 @@ class CheckpointObjectManager:
         if self._worker_process_buffer_pool:
             return self._worker_process_buffer_pool
 
-        if not self.pool_config:
-            return None
-
-        pool_dir = self.pool_config.get("pool_dir_path")
-        if not pool_dir:
-            _LOGGER.warning("pool_config missing 'pool_dir_path', cannot use worker registry.")
+        if not self._pool_config:
             return None
 
         # 2. Registry lookup / Creation
-        with self._worker_pools_lock:
-            # Re-check instance variable just in case
-            if self._worker_process_buffer_pool:
+        with self._worker_pool_lock:
+            if self._worker_pool:
+                _LOGGER.debug("Reusing existing BufferPool from worker registry.")
+                self._worker_process_buffer_pool = self._worker_pool
                 return self._worker_process_buffer_pool
 
-            # Check registry
-            if pool_dir in self._worker_pools:
-                _LOGGER.debug("Reusing existing BufferPool for %s from worker registry.", pool_dir)
-                self._worker_process_buffer_pool = self._worker_pools[pool_dir]
-                return self._worker_process_buffer_pool
+            # Check config before creation
+            pool_dir = self._pool_config.pool_dir_path
+            if not pool_dir:
+                _LOGGER.warning("pool_config missing 'pool_dir_path', cannot create BufferPool.")
+                return None
 
             # Create new
             try:
-                _LOGGER.info("Initializing BufferPool with config: %s", self.pool_config)
-                pool = BufferPool(**self.pool_config)
-                self._worker_pools[pool_dir] = pool
+                _LOGGER.info("Initializing BufferPool with config: %s", self._pool_config)
+                # Unpack dataclass to dict then unpack dict to kwargs
+                pool = BufferPool(**self._pool_config.__dict__)
+                type(self)._worker_pool = pool
                 self._worker_process_buffer_pool = pool
-            except Exception as e:
-                _LOGGER.error("Failed to initialize BufferPool: %s", e)
-                # Keep _buffer_pool as None
+            except Exception:
+                _LOGGER.exception("Failed to initialize BufferPool")
                 pass
 
         return self._worker_process_buffer_pool
 
     def teardown_pool(self):
         """Teardown the BufferPool if it exists and remove from registry."""
-        # If we don't have a local reference, try to find it via config (e.g. after unpickling)
+        # If we don't have a local reference, try to find it via registry
         pool_to_teardown = self._worker_process_buffer_pool
-        pool_dir = None
 
-        if self.pool_config:
-            pool_dir = self.pool_config.get("pool_dir_path")
+        with self._worker_pool_lock:
+            if not pool_to_teardown and self._worker_pool:
+                pool_to_teardown = self._worker_pool
 
-        with self._worker_pools_lock:
-            if pool_dir and pool_dir in self._worker_pools:
-                pool_to_teardown = self._worker_pools.pop(pool_dir)
+            if pool_to_teardown:
+                # Clear registry if it matches
+                if self._worker_pool is pool_to_teardown:
+                    type(self)._worker_pool = None
 
             # Also clear local reference
             self._worker_process_buffer_pool = None
@@ -176,7 +164,7 @@ class CheckpointObjectManager:
             # Remove existing link/file if overwrite is True
             if os.path.exists(str(object_id)):
                 if overwrite:
-                    os.remove(str(object_id))
+                    self.delete_object(object_id)
                 else:
                     raise FileExistsError(f"File {object_id} already exists and overwrite=False")
 
@@ -283,4 +271,25 @@ class CheckpointObjectManager:
             # This catches filesystem errors (e.g., permissions) during deletion.
             _LOGGER.exception("Error deleting container directory '%s'", container_id)
             # Re-raise to notify the caller that the deletion failed.
+            raise
+
+    def delete_object(self, object_id: CheckpointObjectId) -> None:
+        """Deletes a checkpoint object (file or symlink) from the filesystem.
+
+        Args:
+            object_id: The unique identifier (path) of the object to be deleted.
+
+        Raises:
+            OSError: If deletion fails due to filesystem errors.
+        """
+        object_path = str(object_id)
+        _LOGGER.debug("Attempting to delete object: '%s'", object_path)
+        try:
+            if os.path.lexists(object_path):
+                os.remove(object_path)
+                _LOGGER.debug("Successfully deleted object: '%s'", object_path)
+            else:
+                _LOGGER.warning("Object '%s' does not exist. Nothing to delete.", object_path)
+        except OSError:
+            _LOGGER.exception("Error deleting object '%s'", object_path)
             raise

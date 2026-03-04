@@ -823,8 +823,6 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             assert instance.checkpoint_io == mock_checkpoint_io
             assert instance._mlf_async_calls_queue == mock_mlf_queue
             assert instance._alt_async_calls_queue == mock_alt_queue
-            # Verify pool config was set
-            mock_checkpoint_io.chkpt_obj_manager.set_pool_config.assert_called_once()
 
         def test_incompatible_checkpoint_io_type_raises_error(self, mocker):
             """Tests that a ValueError is raised for an incompatible CheckpointIO type."""
@@ -1204,6 +1202,40 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             scheduled_request = teardown_call[0][0]
             assert scheduled_request.async_fn == mock_checkpoint_io.chkpt_obj_manager.teardown_pool
             assert scheduled_request.async_fn_args == ()
+
+        def test_teardown_handles_closed_queue(self, mocker):
+            """Tests that teardown handles exceptions when scheduling async request (e.g. queue closed)."""
+            # Given
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            mock_checkpoint_io.trainer.global_rank = 0
+            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_mlf_queue = mocker.MagicMock()
+            mock_alt_queue = mocker.MagicMock()
+            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
+            instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
+            # simulate queue not closed for truthiness check
+            mock_mlf_queue.__bool__.return_value = True
+            mock_mlf_queue.get_num_unfinalized_calls.return_value = 0
+            mock_alt_queue.get_num_unfinalized_calls.return_value = 0
+
+            # Simulate exception during schedule_async_request
+            mock_mlf_queue.schedule_async_request.side_effect = Exception("Queue closed")
+
+            # When
+            # Should not raise exception
+            instance.teardown()
+
+            # Then
+            mock_mlf_queue.schedule_async_request.assert_called_once()
 
     class TestIntegration:
         """Integration tests for MLFlashpointAsyncFinalizableCheckpointIO."""

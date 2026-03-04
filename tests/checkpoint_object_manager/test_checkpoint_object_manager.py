@@ -22,7 +22,7 @@ import pytest
 
 from ml_flashpoint.checkpoint_object_manager.buffer_io import METADATA_SIZE, BufferIO
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
-from ml_flashpoint.core.buffer_pool import BufferPool
+from ml_flashpoint.core.buffer_pool import BufferPool, BufferPoolConfig
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 
 
@@ -572,6 +572,60 @@ class TestDeleteContainer:
         assert file_path.exists()
 
 
+class TestDeleteObject:
+    def test_delete_object_success(self, manager_setup, mocker):
+        """Tests that delete_object successfully removes a file."""
+        manager, is_mock, mocks, temp_dir_path = manager_setup
+        object_id = CheckpointObjectId(str(temp_dir_path / "object_to_delete.bin"))
+
+        if is_mock:
+            mocker.patch("os.path.lexists", return_value=True)
+            mock_remove = mocker.patch("os.remove")
+        else:
+            with open(str(object_id), "wb") as f:
+                f.write(b"content")
+
+        manager.delete_object(object_id)
+
+        if is_mock:
+            mock_remove.assert_called_once_with(str(object_id))
+        else:
+            assert not os.path.exists(str(object_id))
+
+    def test_delete_object_missing_file_logs_warning(self, manager_setup, mocker):
+        """Tests that delete_object logs a warning if the file does not exist."""
+        manager, is_mock, mocks, temp_dir_path = manager_setup
+        object_id = CheckpointObjectId(str(temp_dir_path / "missing_object.bin"))
+
+        mock_logger = mocker.patch("ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager._LOGGER")
+
+        if is_mock:
+            mocker.patch("os.path.lexists", return_value=False)
+            mock_remove = mocker.patch("os.remove")
+
+        manager.delete_object(object_id)
+
+        if is_mock:
+            mock_remove.assert_not_called()
+        else:
+            # Real mode: verify no exception and warning logged
+            pass
+
+        mock_logger.warning.assert_called_once()
+        assert "does not exist" in mock_logger.warning.call_args[0][0]
+
+    def test_delete_object_failure_propagates_exception(self, mocker):
+        """Tests that delete_object propagates exceptions from os.remove."""
+        manager = CheckpointObjectManager()
+        object_id = CheckpointObjectId("/tmp/fail_delete")
+
+        mocker.patch("os.path.lexists", return_value=True)
+        mocker.patch("os.remove", side_effect=OSError("Permission denied"))
+
+        with pytest.raises(OSError, match="Permission denied"):
+            manager.delete_object(object_id)
+
+
 class TestManagerIntegration:
     def test_manager_full_lifecycle(self, temp_dir_path):
         """
@@ -706,17 +760,12 @@ class TestManagerIntegration:
 
 
 class TestCheckpointObjectManagerInstance:
-    def test_set_pool_config(self):
-        """Tests that set_pool_config updates the configuration."""
-        manager = CheckpointObjectManager()
-        config = {"pool_dir_path": "/tmp", "num_buffers": 1}
-        manager.set_pool_config(config)
-        assert manager.pool_config == config
-
     def test_lazy_initialization(self, mocker):
         """Tests that BufferPool is lazily initialized on acquire_buffer."""
         # Ensure pool_config has pool_dir_path for registry check
-        manager = CheckpointObjectManager(pool_config={"pool_dir_path": "/tmp/lazy", "a": 1})
+        manager = CheckpointObjectManager(
+            pool_config=BufferPoolConfig(pool_dir_path="/tmp/lazy", num_buffers=1, rank=0, buffer_size=0)
+        )
         mock_buffer_pool_cls = mocker.patch(
             "ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager.BufferPool"
         )
@@ -725,7 +774,7 @@ class TestCheckpointObjectManagerInstance:
         assert manager._worker_process_buffer_pool is None
 
         # Clear registry to ensure no interference
-        CheckpointObjectManager._worker_pools.clear()
+        CheckpointObjectManager._worker_pool = None
 
         # Call acquire_buffer should trigger init
         # We need to mock os.makedirs and exists to pass the early checks in acquire_buffer
@@ -738,31 +787,82 @@ class TestCheckpointObjectManagerInstance:
 
         manager.acquire_buffer(CheckpointObjectId("/tmp/lazy/foo"), 100)
 
-        mock_buffer_pool_cls.assert_called_once_with(pool_dir_path="/tmp/lazy", a=1)
+        mock_buffer_pool_cls.assert_called_once_with(pool_dir_path="/tmp/lazy", num_buffers=1, rank=0, buffer_size=0)
         assert manager._worker_process_buffer_pool == mock_pool_instance
+        assert CheckpointObjectManager._worker_pool == mock_pool_instance
+
+    def test_get_existing_pool_missing_pool_dir_logs_warning(self, mocker):
+        """Tests that missing pool_dir_path logs a warning and returns None (no pool created)."""
+        # Ensure registry is empty
+        CheckpointObjectManager._worker_pool = None
+
+        # Config with empty pool_dir_path
+        config = BufferPoolConfig(pool_dir_path="", num_buffers=1, rank=0, buffer_size=0)
+        manager = CheckpointObjectManager(pool_config=config)
+
+        mock_logger = mocker.patch("ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager._LOGGER")
+
+        # When
+        pool = manager._get_or_create_buffer_pool()
+
+        # Then
+        assert pool is None
+        assert CheckpointObjectManager._worker_pool is None
+        mock_logger.warning.assert_called_once_with("pool_config missing 'pool_dir_path', cannot create BufferPool.")
+
+    def test_get_pool_returns_none_when_config_is_none(self):
+        """Tests that _get_or_create_buffer_pool returns None when pool_config is None."""
+        manager = CheckpointObjectManager(pool_config=None)
+        assert manager._get_or_create_buffer_pool() is None
+
+    def test_get_pool_returns_none_on_init_failure(self, mocker):
+        """Tests that _get_or_create_buffer_pool returns None and logs error if BufferPool init fails."""
+        CheckpointObjectManager._worker_pool = None
+        config = BufferPoolConfig(pool_dir_path="/tmp/fail_init", num_buffers=1, rank=0, buffer_size=0)
+        manager = CheckpointObjectManager(pool_config=config)
+
+        mock_logger = mocker.patch("ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager._LOGGER")
+        mock_pool_cls = mocker.patch("ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager.BufferPool")
+        mock_pool_cls.side_effect = Exception("Init failed")
+
+        pool = manager._get_or_create_buffer_pool()
+
+        assert pool is None
+        assert CheckpointObjectManager._worker_pool is None
+        # Verify it logged the error
+        mock_logger.exception.assert_called_once()
+        assert "Failed to initialize BufferPool" in mock_logger.exception.call_args[0][0]
 
     def test_pickling_resets_pool(self):
         """Tests that pickling/unpickling resets the pool and lock."""
         import pickle
 
-        manager = CheckpointObjectManager(pool_config={"a": 1})
+        # Use a real config object but with minimal values
+        config = BufferPoolConfig(pool_dir_path="/tmp/pickle_test", num_buffers=1, rank=0, buffer_size=0)
+        manager = CheckpointObjectManager(pool_config=config)
         # Simulate initialized pool
         manager._worker_process_buffer_pool = "fake_pool"
 
         pickled = pickle.dumps(manager)
         unpickled = pickle.loads(pickled)
 
-        assert unpickled.pool_config == {"a": 1}
+        assert unpickled._pool_config == config
         assert unpickled._worker_process_buffer_pool is None
         assert isinstance(unpickled._worker_process_pool_lock, type(threading.Lock()))
         assert unpickled._worker_process_pool_lock is not manager._worker_process_pool_lock
 
+    def test_init_with_config(self):
+        """Tests initialization with a pool configuration."""
+        config = BufferPoolConfig(pool_dir_path="/tmp", num_buffers=1, rank=0, buffer_size=0)
+        manager = CheckpointObjectManager(pool_config=config)
+        assert manager._pool_config == config
+
     def test_worker_side_pool_reuse(self, mocker):
         """Tests that multiple managers in the same process reuse the same BufferPool."""
         # Clear registry first
-        CheckpointObjectManager._worker_pools.clear()
+        CheckpointObjectManager._worker_pool = None
 
-        config = {"pool_dir_path": "/tmp/reuse_test", "num_buffers": 1}
+        config = BufferPoolConfig(pool_dir_path="/tmp/reuse_test", num_buffers=1, rank=0, buffer_size=0)
         manager1 = CheckpointObjectManager(pool_config=config)
         manager2 = CheckpointObjectManager(pool_config=config)
 
@@ -778,7 +878,7 @@ class TestCheckpointObjectManagerInstance:
         manager1.acquire_buffer(CheckpointObjectId("/tmp/reuse_test/1"), 100)
 
         assert manager1._worker_process_buffer_pool == mock_pool_instance
-        assert CheckpointObjectManager._worker_pools["/tmp/reuse_test"] == mock_pool_instance
+        assert CheckpointObjectManager._worker_pool == mock_pool_instance
         mock_pool_cls.assert_called_once()
 
         # 2. Second manager acquires -> should reuse pool
@@ -790,17 +890,23 @@ class TestCheckpointObjectManagerInstance:
 
     def test_teardown_clears_worker_registry(self, mocker):
         """Tests that teardown_pool removes the pool from the registry."""
-        CheckpointObjectManager._worker_pools.clear()
+        CheckpointObjectManager._worker_pool = None
 
-        config = {"pool_dir_path": "/tmp/teardown_test", "num_buffers": 1}
+        config = BufferPoolConfig(pool_dir_path="/tmp/teardown_test", num_buffers=1, rank=0, buffer_size=0)
         manager = CheckpointObjectManager(pool_config=config)
 
         # Manually populate registry
         mock_pool = mocker.Mock(spec=BufferPool)
-        CheckpointObjectManager._worker_pools["/tmp/teardown_test"] = mock_pool
-        # manager._worker_process_buffer_pool is None (simulating unpickled state)
+        CheckpointObjectManager._worker_pool = mock_pool
+        # manager._worker_process_buffer_pool is None (simulating unpickled state, or just separate instance)
+
+        # We also need to set the local ref if we want to simulate it being acquired?
+        # The teardown logic now checks both.
+        # Let's test the case where we only have the global ref (e.g. from another manager)
+        # But wait, teardown_pool uses `_worker_process_buffer_pool` mainly.
+        # If `_worker_process_buffer_pool` is None, it checks `_worker_pool`.
 
         manager.teardown_pool()
 
-        assert "/tmp/teardown_test" not in CheckpointObjectManager._worker_pools
+        assert CheckpointObjectManager._worker_pool is None
         mock_pool.teardown.assert_called_once()

@@ -14,6 +14,7 @@
 
 """Tests for the NeMo wrapper utility."""
 
+import concurrent.futures
 import dataclasses
 
 import pytest
@@ -794,44 +795,55 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         _, kwargs = spy_memory_storage_writer_init.call_args
         assert kwargs["thread_count"] == expected_thread_count
 
-    def test_spawn_context_used_for_mp_manager(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
-        """Tests that torch_mp.get_context('spawn').Manager() is correctly instantiated and passed."""
+    def test_spawn_context_and_background_manager_initialization(
+        self, mocker, mock_ckpt_obj_manager, mock_replication_manager
+    ):
+        """
+        Tests that the Manager is created using a 'spawn' context in a background
+        thread and passed to the StorageWriter as a Future.
+        """
         # Given
         trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
         trainer.callbacks = [mocker.MagicMock(spec=MLFlashpointCheckpointCallback)]
         trainer.strategy = mocker.MagicMock(spec=nl_strategies.MegatronStrategy)
-        original_checkpoint_io = mocker.MagicMock(spec=MegatronCheckpointIO)
-        trainer.strategy.checkpoint_io = original_checkpoint_io
-        base_container = "/test_base_container"
+        trainer.strategy.checkpoint_io = mocker.MagicMock(spec=MegatronCheckpointIO)
 
+        # Mock 'spawn' context to verify safety
         mock_get_context = mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.torch_mp.get_context")
+        mock_ctx = mock_get_context.return_value
 
-        mock_ctx = mock_get_context.return_value  # The mocked context object
-        mock_manager_instance = mock_ctx.Manager.return_value  # The mocked manager instance
+        # Mock ThreadPoolExecutor to verify background execution
+        mock_executor_cls = mocker.patch(
+            "ml_flashpoint.adapter.nemo.wrapper_util.concurrent.futures.ThreadPoolExecutor"
+        )
+        mock_executor = mock_executor_cls.return_value
+        mock_future = mocker.MagicMock(spec=concurrent.futures.Future)
+        mock_executor.submit.return_value = mock_future
 
-        spy_memory_storage_writer_init = mocker.spy(MemoryStorageWriter, "__init__")
+        # Spy on StorageWriter to check dependency injection
+        spy_writer_init = mocker.spy(MemoryStorageWriter, "__init__")
 
         # When
         wrap_trainer_checkpoint_io_with_mlflashpoint(
-            trainer,
-            base_container,
-            mock_ckpt_obj_manager,
-            mock_replication_manager,
+            trainer=trainer,
+            flashpoint_base_container="/test_container",
+            ckpt_obj_manager=mock_ckpt_obj_manager,
+            replication_manager=mock_replication_manager,
             async_save=True,
-            checkpoint_loader=mocker.MagicMock(spec=DefaultMLFlashpointCheckpointLoader),
+            checkpoint_loader=mocker.MagicMock(),
         )
 
         # Then
-        # Verify get_context was called explicitly with 'spawn'
+        # Verify safety: 'spawn' context was explicitly requested
         mock_get_context.assert_called_once_with("spawn")
 
-        # Verify Manager() was called on the correct spawn context
-        mock_ctx.Manager.assert_called_once()
+        # Verify performance: Manager creation was offloaded to the executor
+        mock_executor.submit.assert_called_once_with(mock_ctx.Manager)
 
-        # Verify the exact Manager instance was passed to MemoryStorageWriter
-        spy_memory_storage_writer_init.assert_called_once()
-        _, kwargs = spy_memory_storage_writer_init.call_args
-        assert kwargs["mp_manager"] is mock_manager_instance
+        # Verify logic: The FUTURE was passed to the writer instead of an instance
+        spy_writer_init.assert_called_once()
+        _, kwargs = spy_writer_init.call_args
+        assert kwargs["mp_manager"] is mock_future
 
     @pytest.mark.parametrize("always_save_context, expected_value", [(True, True), (False, False)])
     def test_always_save_context_forwarding(

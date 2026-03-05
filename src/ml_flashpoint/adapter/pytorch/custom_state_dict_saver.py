@@ -85,11 +85,9 @@ def generate_plan(
     global_metadata: torchdistsaver.Metadata | None = None
 
     ckpt_kwargs = {"checkpoint_id": storage_writer.current_checkpoint_id, "process_group": world_dist_wrapper.group}
-    local_plan = cached_local_plan
 
     @_dcp_method_logger(**ckpt_kwargs)
     def local_step() -> SavePlan:
-        nonlocal local_plan
         storage_meta = storage_writer.storage_meta()
         planner.set_up_planner(
             state_dict=state_dict,
@@ -98,11 +96,12 @@ def generate_plan(
         )
         storage_writer.set_up_storage_writer(world_dist_wrapper.is_coordinator)
 
-        if not validated_cache_reuse:
-            local_plan = planner.create_local_plan()
+        if validated_cache_reuse and cached_local_plan:
+            plan = cached_local_plan
+        else:
+            plan = planner.create_local_plan()
 
-        local_plan = storage_writer.prepare_local_plan(local_plan)
-        return local_plan
+        return storage_writer.prepare_local_plan(plan)
 
     @_dcp_method_logger(**ckpt_kwargs)
     def global_step(all_local_plans: list[SavePlan]) -> list[SavePlan]:
@@ -115,12 +114,13 @@ def generate_plan(
     central_plan = None
     if validated_cache_reuse and cached_central_plan:
         _LOGGER.debug("Passed cache reusable")
-        local_step()
+        local_plan = local_step()
         central_plan = cached_central_plan
     else:
         with log_execution_time(logger=_LOGGER, name="generate_plan__reduce_scatter_plan"):
             _LOGGER.debug("Executing plan reduce_scatter to get central_plan...")
-            central_plan = world_dist_wrapper.reduce_scatter("plan", local_step, global_step)
+            local_plan = local_step()
+            central_plan = world_dist_wrapper.reduce_scatter("plan", lambda: local_plan, global_step)
 
         with log_execution_time(logger=_LOGGER, name="generate_plan__broadcast_metadata"):
             _LOGGER.debug("Executing global_metadata broadcast...")

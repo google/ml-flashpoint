@@ -131,6 +131,7 @@ class TestGeneratePlan:
         checkpoint_id = CheckpointContainerId("/test_checkpoint")
         state_dict = {"model": "test"}
         cached_plan = SavePlan([WriteItem(index=MetadataIndex("cached"), type=WriteItemType.TENSOR)])
+        dummy_local_plan = SavePlan([])
         # cached_local_plan = SavePlan([WriteItem(index=MetadataIndex("local"), type=WriteItemType.TENSOR)])
         # cached_metadata = Metadata(state_dict_metadata={"cached": "meta"})
 
@@ -150,7 +151,7 @@ class TestGeneratePlan:
             mock_storage_writer,
             mock_save_planner,
             dist_wrapper,
-            cached_ckpt_structure=(cached_plan, None, True),
+            cached_ckpt_structure=(cached_plan, dummy_local_plan, True),
         )
 
         # Then
@@ -327,6 +328,11 @@ class TestGeneratePlan:
         # Then
         assert isinstance(result, tuple)
         assert len(result) == 5
+        assert result[0] == []
+        assert result[1] is None
+        assert result[2] == SavePlan([])
+        assert result[3] == SavePlan([])
+        assert result[4] is False
 
 
 class TestWriteData:

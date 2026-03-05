@@ -19,7 +19,7 @@ import pytest
 
 from ml_flashpoint.checkpoint_object_manager.buffer_io import BufferIO
 from ml_flashpoint.checkpoint_object_manager.buffer_metadata import METADATA_SIZE
-from ml_flashpoint.core.buffer_pool import BufferIOProxy, BufferPool
+from ml_flashpoint.core.buffer_pool import BufferPool, BufferPoolConfig, PooledBufferIO
 
 
 class TestBufferPool:
@@ -35,20 +35,16 @@ class TestBufferPool:
 
     @pytest.fixture
     def buffer_pool(self, buffer_pool_config) -> Generator[BufferPool, None, None]:
-        # Reset singleton
-        BufferPool._instance = None
-
         pool = BufferPool(**buffer_pool_config)
         yield pool
 
         pool.teardown()
-        BufferPool._instance = None
 
     def test_acquire_preallocated_buffer(self, buffer_pool, buffer_pool_config):
         """Verifies that acquire reuses pre-allocated buffers."""
         buffer_io = buffer_pool.acquire()
         assert buffer_io is not None
-        assert isinstance(buffer_io, BufferIOProxy)
+        assert isinstance(buffer_io, PooledBufferIO)
 
         # Check that the buffer path follows the naming convention
         buffer_id = buffer_io.buffer_obj.get_id()
@@ -145,7 +141,7 @@ class TestBufferIOProxy:
     @pytest.fixture
     def proxy(self, mock_buffer_io):
         """Creates a BufferIOProxy wrapping the mock."""
-        return BufferIOProxy(mock_buffer_io)
+        return PooledBufferIO(mock_buffer_io)
 
     def test_delegation_basic(self, proxy, mock_buffer_io):
         """Verifies that basic methods are delegated to the underlying BufferIO."""
@@ -239,3 +235,54 @@ class TestBufferIOProxy:
         proxy.close(truncate=False)
         mock_buffer_io.resize.assert_not_called()
         assert proxy.closed
+
+
+class TestBufferPoolConfig:
+    def test_valid_config(self):
+        """Tests that a valid configuration does not raise any exceptions."""
+        config = BufferPoolConfig(pool_dir_path="/tmp/pool", rank=0, num_buffers=3, buffer_size=1024)
+        assert config.pool_dir_path == "/tmp/pool"
+        assert config.rank == 0
+        assert config.num_buffers == 3
+        assert config.buffer_size == 1024
+
+    def test_invalid_pool_dir_path(self):
+        """Tests that missing pool_dir_path raises ValueError."""
+        with pytest.raises(ValueError, match="pool_dir_path must be provided"):
+            BufferPoolConfig(pool_dir_path="", rank=0, num_buffers=3, buffer_size=1024)
+
+    def test_invalid_rank(self):
+        """Tests that invalid rank raises ValueError."""
+        with pytest.raises(ValueError, match="rank must be a non-negative integer"):
+            BufferPoolConfig(pool_dir_path="/tmp/pool", rank=-1, num_buffers=3, buffer_size=1024)
+        with pytest.raises(ValueError, match="rank must be a non-negative integer"):
+            BufferPoolConfig(
+                pool_dir_path="/tmp/pool",
+                rank="0",  # type: ignore
+                num_buffers=3,
+                buffer_size=1024,
+            )
+
+    def test_invalid_num_buffers(self):
+        """Tests that invalid num_buffers raises ValueError."""
+        with pytest.raises(ValueError, match="num_buffers must be a non-negative integer"):
+            BufferPoolConfig(pool_dir_path="/tmp/pool", rank=0, num_buffers=-1, buffer_size=1024)
+        with pytest.raises(ValueError, match="num_buffers must be a non-negative integer"):
+            BufferPoolConfig(
+                pool_dir_path="/tmp/pool",
+                rank=0,
+                num_buffers="3",  # type: ignore
+                buffer_size=1024,
+            )
+
+    def test_invalid_buffer_size(self):
+        """Tests that invalid buffer_size raises ValueError."""
+        with pytest.raises(ValueError, match="buffer_size must be a non-negative integer"):
+            BufferPoolConfig(pool_dir_path="/tmp/pool", rank=0, num_buffers=3, buffer_size=-100)
+        with pytest.raises(ValueError, match="buffer_size must be a non-negative integer"):
+            BufferPoolConfig(
+                pool_dir_path="/tmp/pool",
+                rank=0,
+                num_buffers=3,
+                buffer_size="1024",  # type: ignore
+            )

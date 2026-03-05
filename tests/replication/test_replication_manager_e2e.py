@@ -119,7 +119,7 @@ def test_async_replicate_end_to_end(tmp_path, services, mocker):
     result = futures[0].result()
     assert result.success
 
-    # close the buffer
+    # close the buffer - clean up as the original is no longer needed
     buffer_io.close()
 
     # Verify the replicated data on the receiver side

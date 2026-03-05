@@ -37,7 +37,6 @@ from torch.distributed.checkpoint.storage import WriteResult
 from ml_flashpoint.checkpoint_object_manager.buffer_io import BufferIO
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.checkpoint_object_manager.object_manager import object_manager_ext
-from ml_flashpoint.core.buffer_pool import BufferPool
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.checkpoint_saver import DefaultMLFlashpointCheckpointSaver, WriteItemResolver
 from ml_flashpoint.core.defaults import CheckpointFormat
@@ -101,17 +100,21 @@ class TestDefaultMLFlashpointCheckpointSaver:
 
     @pytest.fixture
     def chkpt_object_manager(self, temp_dir_path):
+        from ml_flashpoint.core.buffer_pool import BufferPoolConfig
+
         # Initialize BufferPool for tests
         pool_dir = os.path.join(temp_dir_path, ".buffer_pool")
-        # Reset singleton?
-        BufferPool._instance = None
-        BufferPool(pool_dir, buffer_size=1024 * 1024)
-        manager = CheckpointObjectManager()
+
+        # Reset class-level pool
+        CheckpointObjectManager._worker_pool = None
+
+        config = BufferPoolConfig(pool_dir_path=pool_dir, rank=0, num_buffers=3, buffer_size=1024 * 1024)
+        manager = CheckpointObjectManager(pool_config=config)
         yield manager
+
         # Teardown
-        if BufferPool._instance:
-            BufferPool._instance.teardown()
-            BufferPool._instance = None
+        manager.teardown_pool()
+        CheckpointObjectManager._worker_pool = None
 
     @pytest.fixture
     def replication_manager(self, mocker):

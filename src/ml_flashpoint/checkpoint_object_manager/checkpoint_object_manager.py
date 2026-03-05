@@ -36,7 +36,7 @@ class CheckpointObjectManager:
 
     # Class-level registry for BufferPool in the worker process.
     _worker_pool: ClassVar[Optional[BufferPool]] = None
-    _worker_pool_lock = threading.Lock()
+    _worker_pool_lock: ClassVar[threading.Lock] = threading.Lock()
 
     def __init__(self, pool_config: Optional[BufferPoolConfig] = None):
         """Initializes the CheckpointObjectManager.
@@ -45,78 +45,45 @@ class CheckpointObjectManager:
             pool_config: Optional configuration for the BufferPool.
         """
         self._pool_config = pool_config
-        # Buffer pool is used for worker process only.
-        self._worker_process_buffer_pool: Optional[BufferPool] = None
-        self._worker_process_pool_lock = threading.Lock()
-
-    def __getstate__(self):
-        state = self.__dict__.copy()
-        # Exclude lock and buffer pool from pickled state
-        del state["_worker_process_pool_lock"]
-        # buffer_pool is not picklable (contains lock), and we want to re-init it in worker anyway
-        state["_worker_process_buffer_pool"] = None
-        return state
-
-    def __setstate__(self, state):
-        self.__dict__.update(state)
-        # Re-initialize lock and ensure buffer pool is None
-        self._worker_process_pool_lock = threading.Lock()
-        self._worker_process_buffer_pool = None
 
     def _get_or_create_buffer_pool(self) -> Optional[BufferPool]:
         """Lazily initializes and returns the BufferPool instance.
 
         Check the class-level registry first to reuse existing pools in this process.
         """
-        # 1. Fast path: instance already has it
-        if self._worker_process_buffer_pool:
-            return self._worker_process_buffer_pool
+        # 1. Fast path: check class var directly
+        if CheckpointObjectManager._worker_pool:
+            return CheckpointObjectManager._worker_pool
 
         if not self._pool_config:
             return None
 
         # 2. Registry lookup / Creation
-        with self._worker_pool_lock:
-            if self._worker_pool:
+        with CheckpointObjectManager._worker_pool_lock:
+            if CheckpointObjectManager._worker_pool:
                 _LOGGER.debug("Reusing existing BufferPool from worker registry.")
-                self._worker_process_buffer_pool = self._worker_pool
-                return self._worker_process_buffer_pool
-
-            # Check config before creation
-            pool_dir = self._pool_config.pool_dir_path
-            if not pool_dir:
-                _LOGGER.warning("pool_config missing 'pool_dir_path', cannot create BufferPool.")
-                return None
+                return CheckpointObjectManager._worker_pool
 
             # Create new
             try:
                 _LOGGER.info("Initializing BufferPool with config: %s", self._pool_config)
                 # Unpack dataclass to dict then unpack dict to kwargs
                 pool = BufferPool(**self._pool_config.__dict__)
-                type(self)._worker_pool = pool
-                self._worker_process_buffer_pool = pool
+                CheckpointObjectManager._worker_pool = pool
             except Exception:
                 _LOGGER.exception("Failed to initialize BufferPool")
                 pass
 
-        return self._worker_process_buffer_pool
+        return CheckpointObjectManager._worker_pool
 
     def teardown_pool(self):
         """Teardown the BufferPool if it exists and remove from registry."""
-        # If we don't have a local reference, try to find it via registry
-        pool_to_teardown = self._worker_process_buffer_pool
+        pool_to_teardown = None
 
-        with self._worker_pool_lock:
-            if not pool_to_teardown and self._worker_pool:
-                pool_to_teardown = self._worker_pool
-
-            if pool_to_teardown:
-                # Clear registry if it matches
-                if self._worker_pool is pool_to_teardown:
-                    type(self)._worker_pool = None
-
-            # Also clear local reference
-            self._worker_process_buffer_pool = None
+        with CheckpointObjectManager._worker_pool_lock:
+            if CheckpointObjectManager._worker_pool:
+                pool_to_teardown = CheckpointObjectManager._worker_pool
+                CheckpointObjectManager._worker_pool = None
 
         if pool_to_teardown:
             try:
@@ -130,6 +97,11 @@ class CheckpointObjectManager:
         This method attempts to acquire a buffer from the rank level BufferPool. If the pool
         is not initialized or is exhausted, it falls back to creating a standalone
         BufferObject directly at the `object_id` path.
+
+        Note:
+            If a buffer is acquired from the pool, its actual capacity may be smaller than
+            the requested `buffer_size` if a smaller buffer is reused. But resize will happen
+            when writing to the buffer.
 
         Args:
             object_id: A unique identifier (logical path) for the new buffer object.
@@ -219,7 +191,7 @@ class CheckpointObjectManager:
             _LOGGER.exception("Could not open buffer '%s'. Returning None.", object_id)
             return None
 
-    def close_buffer(self, buffer_io: BufferIO, truncate: bool = True) -> None:
+    def close_buffer(self, buffer_io: BufferIO, skip_close_if_symlink: bool = False, truncate: bool = True) -> None:
         """Closes the provided BufferIO object.
 
         This is a helper method that directly calls the .close() method on the
@@ -227,6 +199,7 @@ class CheckpointObjectManager:
 
         Args:
             buffer_io: The BufferIO instance to close.
+            skip_close_if_symlink: If True, the buffer will not be closed if it is a symlink.
             truncate: Passed to the buffer's close() method.
 
         Raises:
@@ -234,6 +207,10 @@ class CheckpointObjectManager:
         """
         if not isinstance(buffer_io, BufferIO) or buffer_io.closed:
             _LOGGER.warning("Attempted to close an invalid or already-closed buffer. Ignoring.")
+            return
+
+        if skip_close_if_symlink and os.path.islink(buffer_io.buffer_obj.get_id()):
+            _LOGGER.debug("Buffer for object_id='%s' is a symlink. Ignoring.", buffer_io.buffer_obj.get_id())
             return
 
         try:

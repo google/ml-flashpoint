@@ -32,7 +32,7 @@ PADDING_SIZE = 1024 * 1024
 RESIZE_FACTOR = 1.1
 
 
-class BufferIOProxy:
+class PooledBufferIO:
     """Proxies a BufferIO object to prevent it from being closed by the client.
 
     This allows the BufferPool to reuse the underlying BufferIO object even if
@@ -46,7 +46,7 @@ class BufferIOProxy:
     def __getattr__(self, name):
         # Delegate attribute access to the underlying BufferIO object
         if self._closed:
-            _LOGGER.warning("BufferIOProxy: Accessing closed buffer")
+            _LOGGER.warning("PooledBufferIO: Accessing closed buffer")
         return getattr(self._buffer_io, name)
 
     @log_execution_time(logger=_LOGGER, name="close", level=logging.INFO)
@@ -66,7 +66,7 @@ class BufferIOProxy:
 
         self._closed = True
 
-        _LOGGER.debug("Closing BufferIOProxy object...")
+        _LOGGER.debug("Closing PooledBufferIO object...")
         if truncate and not self._buffer_io.is_readonly:
             try:
                 final_data_len = self._buffer_io._metadata.len_written_data
@@ -75,11 +75,11 @@ class BufferIOProxy:
                 current_size = len(self._buffer_io._mv)
                 if truncate_size != current_size:
                     _LOGGER.debug(
-                        "BufferIOProxy: Truncating reusable buffer from %d to %d bytes", current_size, truncate_size
+                        "PooledBufferIO: Truncating reusable buffer from %d to %d bytes", current_size, truncate_size
                     )
                     self._buffer_io.resize(truncate_size)
             except Exception:
-                _LOGGER.warning("BufferIOProxy: Failed to truncate buffer during close.", exc_info=True)
+                _LOGGER.warning("PooledBufferIO: Failed to truncate buffer during close.", exc_info=True)
 
     @property
     def closed(self) -> bool:
@@ -101,7 +101,7 @@ class BufferIOProxy:
         new_size = int(max(current_size * RESIZE_FACTOR, required_size + PADDING_SIZE))
 
         _LOGGER.debug(
-            "BufferIOProxy: Auto-resizing from %d to %d bytes (required: %d)",
+            "PooledBufferIO: Auto-resizing from %d to %d bytes (required: %d)",
             current_size,
             new_size,
             required_size,
@@ -138,6 +138,16 @@ class BufferPoolConfig:
     rank: int
     num_buffers: int
     buffer_size: int
+
+    def __post_init__(self):
+        if not self.pool_dir_path:
+            raise ValueError("pool_dir_path must be provided in BufferPoolConfig")
+        if not isinstance(self.rank, int) or self.rank < 0:
+            raise ValueError("rank must be a non-negative integer in BufferPoolConfig")
+        if not isinstance(self.num_buffers, int) or self.num_buffers < 0:
+            raise ValueError("num_buffers must be a non-negative integer in BufferPoolConfig")
+        if not isinstance(self.buffer_size, int) or self.buffer_size < 0:
+            raise ValueError("buffer_size must be a non-negative integer in BufferPoolConfig")
 
 
 class BufferPool:
@@ -192,7 +202,7 @@ class BufferPool:
             raise
 
     @log_execution_time(logger=_LOGGER, name="acquire", level=logging.INFO)
-    def acquire(self, associated_symlink: Optional[str] = None) -> BufferIOProxy:
+    def acquire(self, associated_symlink: Optional[str] = None) -> PooledBufferIO:
         """Acquires a buffer from the pool.
 
         Args:
@@ -201,7 +211,7 @@ class BufferPool:
                 from GC until the pool is torn down.
 
         Returns:
-            A BufferIO object (wrapped in a BufferIOProxy).
+            A BufferIO object (wrapped in a PooledBufferIO).
 
         Raises:
             RuntimeError: If the pool is exhausted and no buffers can be reclaimed.
@@ -221,7 +231,7 @@ class BufferPool:
                 )
                 try:
                     buf_io = self._reuse_buffer(free_buffer, associated_symlink)
-                    return BufferIOProxy(buf_io)
+                    return PooledBufferIO(buf_io)
                 except Exception:
                     # If reuse fails (e.g. symlink creation), we must put the buffer back!
                     _LOGGER.exception("Failed to reuse buffer for '%s'. Releasing buffer.", associated_symlink)
@@ -232,15 +242,18 @@ class BufferPool:
                     self.free_buffers.append(free_buffer)
                     raise
 
-            # 2. If no free buffer, return None
+            # 2. If no free buffer, raise RuntimeError (CheckpointObjectManager will catch and fallback)
             _LOGGER.debug("BufferPool exhausted. All %d buffers are in use.", self.num_buffers)
-            return None
+            raise RuntimeError(f"BufferPool exhausted. All {self.num_buffers} buffers are in use.")
 
     def _gc(self) -> None:
         """Releases buffers whose associated symlinks no longer exist."""
         # Check all active buffers
         to_release = []
         for buffer_path, (buf_io, symlink) in self.active_buffers.items():
+            # We use os.path.exists (not lexists) here to detect broken symlinks.
+            # If the symlink exists but points to a non-existent file, exists() returns False,
+            # correctly identifying it as a candidate for GC.
             if symlink and not os.path.exists(symlink):
                 to_release.append(buffer_path)
 
@@ -270,14 +283,14 @@ class BufferPool:
                 try:
                     buf.close(truncate=True)
                 except Exception:
-                    _LOGGER.warning("BufferIOProxy: Failed to close buffer during teardown.", exc_info=True)
+                    _LOGGER.warning("PooledBufferIO: Failed to close buffer during teardown.", exc_info=True)
             self.free_buffers.clear()
 
             for buffer_path, (buf, _) in self.active_buffers.items():
                 try:
                     buf.close(truncate=True)
                 except Exception:
-                    _LOGGER.warning("BufferIOProxy: Failed to close buffer during teardown.", exc_info=True)
+                    _LOGGER.warning("PooledBufferIO: Failed to close buffer during teardown.", exc_info=True)
             self.active_buffers.clear()
 
     @log_execution_time(logger=_LOGGER, name="_reuse_buffer", level=logging.INFO)

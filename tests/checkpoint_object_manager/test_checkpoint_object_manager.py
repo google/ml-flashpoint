@@ -16,7 +16,6 @@ import os
 import pathlib
 import shutil
 import tempfile
-import threading
 
 import pytest
 
@@ -63,7 +62,11 @@ def manager_setup(request, mocker, temp_dir_path):
         pass
 
     manager = CheckpointObjectManager()
+
+    # Ensure _worker_pool is reset before and after tests using this fixture
+    CheckpointObjectManager._worker_pool = None
     yield manager, is_mock, mocks, temp_dir_path
+    CheckpointObjectManager._worker_pool = None
 
 
 @pytest.fixture
@@ -157,7 +160,7 @@ class TestAcquireBuffer:
             # Setup: Pool exists but raises RuntimeError on acquire
             mock_pool = mocker.MagicMock(spec=BufferPool)
             mock_pool.acquire.side_effect = RuntimeError("Pool exhausted")
-            manager._worker_process_buffer_pool = mock_pool
+            CheckpointObjectManager._worker_pool = mock_pool
 
             # Setup: Standalone creation succeeds
             mock_instance = mocker.MagicMock()
@@ -459,6 +462,90 @@ class TestCloseBuffer:
         # Verify that the close method was indeed called.
         mock_buffer_io.close.assert_called_once_with(truncate=True)
 
+    def test_close_buffer_skips_symlink_when_param_true(self, real_buffer_manager, temp_dir_path):
+        """
+        Tests that close_buffer does NOT close the buffer if it is a symlink
+        and skip_close_if_symlink is True.
+        """
+        manager, _ = real_buffer_manager
+        target_path = temp_dir_path / "target_buffer.bin"
+        link_path = temp_dir_path / "link_to_buffer.bin"
+        object_id = CheckpointObjectId(str(link_path))
+
+        # Create target file
+        with open(target_path, "wb") as f:
+            f.write(b"\x00" * (METADATA_SIZE + 10))
+
+        # Create symlink
+        os.symlink(target_path, link_path)
+
+        # Open the buffer via the symlink
+        buffer_io = manager.get_buffer(object_id)
+        assert buffer_io is not None
+        assert not buffer_io.closed
+        # confirm it is a link
+        assert os.path.islink(str(object_id))
+
+        # Attempt to close with skip_close_if_symlink=True
+        manager.close_buffer(buffer_io, skip_close_if_symlink=True)
+
+        # Should NOT be closed
+        assert not buffer_io.closed
+
+        # cleanup
+        buffer_io.close()
+
+    def test_close_buffer_closes_symlink_when_param_false(self, real_buffer_manager, temp_dir_path):
+        """
+        Tests that close_buffer DOES close the buffer if it is a symlink
+        but skip_close_if_symlink is False (default).
+        """
+        manager, _ = real_buffer_manager
+        target_path = temp_dir_path / "target_buffer_2.bin"
+        link_path = temp_dir_path / "link_to_buffer_2.bin"
+        object_id = CheckpointObjectId(str(link_path))
+
+        # Create target file
+        with open(target_path, "wb") as f:
+            f.write(b"\x00" * (METADATA_SIZE + 10))
+
+        # Create symlink
+        os.symlink(target_path, link_path)
+
+        # Open the buffer via the symlink
+        buffer_io = manager.get_buffer(object_id)
+        assert buffer_io is not None
+
+        # Attempt to close with skip_close_if_symlink=False
+        manager.close_buffer(buffer_io, skip_close_if_symlink=False)
+
+        # Should be closed
+        assert buffer_io.closed
+
+    def test_close_buffer_closes_regular_file_when_param_true(self, real_buffer_manager, temp_dir_path):
+        """
+        Tests that close_buffer DOES close the buffer if it is a regular file,
+        even if skip_close_if_symlink is True.
+        """
+        manager, _ = real_buffer_manager
+        file_path = temp_dir_path / "regular_file.bin"
+        object_id = CheckpointObjectId(str(file_path))
+
+        # Create regular file
+        with open(file_path, "wb") as f:
+            f.write(b"\x00" * (METADATA_SIZE + 10))
+
+        # Open the buffer
+        buffer_io = manager.get_buffer(object_id)
+        assert buffer_io is not None
+        assert not os.path.islink(str(object_id))
+
+        # Attempt to close with skip_close_if_symlink=True
+        manager.close_buffer(buffer_io, skip_close_if_symlink=True)
+
+        # Should be closed
+        assert buffer_io.closed
+
 
 class TestDeleteContainer:
     def test_delete_container_success(self, manager_setup, mocker):
@@ -625,6 +712,32 @@ class TestDeleteObject:
         with pytest.raises(OSError, match="Permission denied"):
             manager.delete_object(object_id)
 
+    def test_delete_object_removes_broken_symlink(self, manager_setup, mocker):
+        """
+        Tests that broken symlinks are correctly identified and removed.
+        This verifies that os.path.lexists is used instead of os.path.exists.
+        """
+        manager, is_mock, mocks, temp_dir_path = manager_setup
+        object_id = CheckpointObjectId(str(temp_dir_path / "broken_link"))
+
+        if is_mock:
+            # Mock lexists to return True (link exists) but exists to return False (target missing)
+            mocker.patch("os.path.lexists", return_value=True)
+            mocker.patch("os.path.exists", return_value=False)
+            mock_remove = mocker.patch("os.remove")
+        else:
+            # Create a broken symlink on disk
+            os.symlink(temp_dir_path / "non_existent_target", str(object_id))
+            assert os.path.lexists(str(object_id))
+            assert not os.path.exists(str(object_id))
+
+        manager.delete_object(object_id)
+
+        if is_mock:
+            mock_remove.assert_called_once_with(str(object_id))
+        else:
+            assert not os.path.lexists(str(object_id))
+
 
 class TestManagerIntegration:
     def test_manager_full_lifecycle(self, temp_dir_path):
@@ -771,7 +884,7 @@ class TestCheckpointObjectManagerInstance:
         )
 
         # Access internal property to verify it's None initially
-        assert manager._worker_process_buffer_pool is None
+        assert CheckpointObjectManager._worker_pool is None
 
         # Clear registry to ensure no interference
         CheckpointObjectManager._worker_pool = None
@@ -788,31 +901,13 @@ class TestCheckpointObjectManagerInstance:
         manager.acquire_buffer(CheckpointObjectId("/tmp/lazy/foo"), 100)
 
         mock_buffer_pool_cls.assert_called_once_with(pool_dir_path="/tmp/lazy", num_buffers=1, rank=0, buffer_size=0)
-        assert manager._worker_process_buffer_pool == mock_pool_instance
         assert CheckpointObjectManager._worker_pool == mock_pool_instance
-
-    def test_get_existing_pool_missing_pool_dir_logs_warning(self, mocker):
-        """Tests that missing pool_dir_path logs a warning and returns None (no pool created)."""
-        # Ensure registry is empty
-        CheckpointObjectManager._worker_pool = None
-
-        # Config with empty pool_dir_path
-        config = BufferPoolConfig(pool_dir_path="", num_buffers=1, rank=0, buffer_size=0)
-        manager = CheckpointObjectManager(pool_config=config)
-
-        mock_logger = mocker.patch("ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager._LOGGER")
-
-        # When
-        pool = manager._get_or_create_buffer_pool()
-
-        # Then
-        assert pool is None
-        assert CheckpointObjectManager._worker_pool is None
-        mock_logger.warning.assert_called_once_with("pool_config missing 'pool_dir_path', cannot create BufferPool.")
 
     def test_get_pool_returns_none_when_config_is_none(self):
         """Tests that _get_or_create_buffer_pool returns None when pool_config is None."""
+        CheckpointObjectManager._worker_pool = None
         manager = CheckpointObjectManager(pool_config=None)
+
         assert manager._get_or_create_buffer_pool() is None
 
     def test_get_pool_returns_none_on_init_failure(self, mocker):
@@ -841,15 +936,18 @@ class TestCheckpointObjectManagerInstance:
         config = BufferPoolConfig(pool_dir_path="/tmp/pickle_test", num_buffers=1, rank=0, buffer_size=0)
         manager = CheckpointObjectManager(pool_config=config)
         # Simulate initialized pool
-        manager._worker_process_buffer_pool = "fake_pool"
+        CheckpointObjectManager._worker_pool = "fake_pool"
 
         pickled = pickle.dumps(manager)
         unpickled = pickle.loads(pickled)
 
         assert unpickled._pool_config == config
-        assert unpickled._worker_process_buffer_pool is None
-        assert isinstance(unpickled._worker_process_pool_lock, type(threading.Lock()))
-        assert unpickled._worker_process_pool_lock is not manager._worker_process_pool_lock
+        # Verify that pickling/unpickling works fine and doesn't crash on the class var
+        # Note: Class vars are not pickled with instance, so unpickled instance sees whatever is on the class.
+        assert CheckpointObjectManager._worker_pool == "fake_pool"
+
+        # Cleanup
+        CheckpointObjectManager._worker_pool = None
 
     def test_init_with_config(self):
         """Tests initialization with a pool configuration."""
@@ -877,14 +975,15 @@ class TestCheckpointObjectManagerInstance:
 
         manager1.acquire_buffer(CheckpointObjectId("/tmp/reuse_test/1"), 100)
 
-        assert manager1._worker_process_buffer_pool == mock_pool_instance
+        manager1.acquire_buffer(CheckpointObjectId("/tmp/reuse_test/1"), 100)
+
         assert CheckpointObjectManager._worker_pool == mock_pool_instance
         mock_pool_cls.assert_called_once()
 
         # 2. Second manager acquires -> should reuse pool
         manager2.acquire_buffer(CheckpointObjectId("/tmp/reuse_test/2"), 100)
 
-        assert manager2._worker_process_buffer_pool == mock_pool_instance
+        assert CheckpointObjectManager._worker_pool == mock_pool_instance
         # Should NOT have called constructor again
         mock_pool_cls.assert_called_once()
 
@@ -898,13 +997,6 @@ class TestCheckpointObjectManagerInstance:
         # Manually populate registry
         mock_pool = mocker.Mock(spec=BufferPool)
         CheckpointObjectManager._worker_pool = mock_pool
-        # manager._worker_process_buffer_pool is None (simulating unpickled state, or just separate instance)
-
-        # We also need to set the local ref if we want to simulate it being acquired?
-        # The teardown logic now checks both.
-        # Let's test the case where we only have the global ref (e.g. from another manager)
-        # But wait, teardown_pool uses `_worker_process_buffer_pool` mainly.
-        # If `_worker_process_buffer_pool` is None, it checks `_worker_pool`.
 
         manager.teardown_pool()
 

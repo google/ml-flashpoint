@@ -20,7 +20,6 @@ import time
 from typing import Optional, Union
 
 import torch
-from torch import multiprocessing as torch_mp
 from torch.distributed.checkpoint import Metadata, SavePlan, SavePlanner, StorageWriter, staging
 from torch.distributed.checkpoint.filesystem import _StorageInfo
 from torch.distributed.checkpoint.metadata import STATE_DICT_TYPE, MetadataIndex, StorageMeta
@@ -128,7 +127,7 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
     def __setstate__(self, state):
         """Custom unpickling to restore state and set mp_manager to None."""
         self.__dict__.update(state)
-        self._main_process_torchmp_manager_future = None 
+        self._main_process_torchmp_manager_future = None
 
     def _check_checkpoint_id(self) -> None:
         if self._current_checkpoint_id is None:
@@ -156,7 +155,7 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
 
         if self._write_events_per_checkpoint_id is None and self._main_process_torchmp_manager_future is not None:
             self._write_events_per_checkpoint_id = self._main_process_torchmp_manager_future.result().dict()
-        
+
         if self._write_results_per_checkpoint_id is None and self._main_process_torchmp_manager_future is not None:
             self._write_results_per_checkpoint_id = self._main_process_torchmp_manager_future.result().dict()
 
@@ -200,7 +199,9 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
     ) -> list[ObjectWriteBucket]:
         # Create a new, unset Event for this specific checkpoint save
         if checkpoint_id not in self._write_events_per_checkpoint_id:
-            self._write_events_per_checkpoint_id[checkpoint_id] = self._main_process_torchmp_manager_future.result().Event()
+            self._write_events_per_checkpoint_id[checkpoint_id] = (
+                self._main_process_torchmp_manager_future.result().Event()
+            )
 
         write_buckets = self.checkpoint_saver.prepare_write_data(
             checkpoint_id, plan.items, planner, plan.storage_data.prefix, bucket_count=self._thread_count

@@ -93,7 +93,7 @@ auto_resume = wrap_trainer_and_auto_resume_with_mlflashpoint(
     # write_thread_count=1, # Optional, defaults to 1
     # initial_write_buffer_size_bytes=DESIRED_NUM_BYTES, # Optional, defaults to 16 GB
     # use_optimized_save=True, # Optional, defaults to True. Uses the optimized save method to reduce write time.
-    # use_cached_ckpt_structure=True, # Optional, defaults to False. Reuses the checkpoint structure from the previous save for faster planning(activated after 2 validation saves).
+    # use_cached_ckpt_structure=True, # Optional, defaults to False. Caches the checkpoint structure after identifying 2 consecutive save plan structures that are equal.
 )
 ```
 

@@ -92,6 +92,7 @@ auto_resume = wrap_trainer_and_auto_resume_with_mlflashpoint(
     # always_save_context=False, # Optional, defaults to False
     # write_thread_count=1, # Optional, defaults to 1
     # initial_write_buffer_size_bytes=DESIRED_NUM_BYTES, # Optional, defaults to 16 GB
+    # use_cached_ckpt_structure=True, # Optional, defaults to False. Reuses the checkpoint structure from the previous save for faster planning.
 )
 ```
 
@@ -148,6 +149,7 @@ memory_storage_writer = MemoryStorageWriter(...)
 # Use it to instantiate the Save Strategy
 megatron_save_strategy = MLFlashpointMegatronAsyncSaveStrategy(
     storage_writer=memory_storage_writer,
+    # use_cached_ckpt_structure=True, # Optional, defaults to False. Reuses the checkpoint structure from the previous save for faster planning.
 )
 ```
 
@@ -167,7 +169,7 @@ async_request = save_local_aware_megatron_checkpoint(
 
 !!! note
 
-    Make sure to specify the checkpoint ID/path when saving based on the current step using: 
+    Make sure to specify the checkpoint ID/path when saving based on the current step using:
     `CheckpointContainerId.create_child(base_container, CheckpointContainerId.format_version_container(current_step))`
     where `base_container` is the base path CheckpointContainerId used for all checkpoints for the current job, e.g. `"/tmp/mlf-checkpoints/job123"`.
 
@@ -229,7 +231,7 @@ Code: See the [`ml_flashpoint.adapter.pytorch`](https://github.com/google/ml-fla
 To use directly with PyTorch DCP, use the provided `StorageWriter` and `StorageReader` implementations.
 You can use whatever `Planner` implementations work for your use case, or resort to the defaults.
 
-If your per-rank checkpoint data exceeds the default buffer size (16 GB as of this writing), you can increase it using the optional `initial_buffer_size_bytes` parameter. 
+If your per-rank checkpoint data exceeds the default buffer size (16 GB as of this writing), you can increase it using the optional `initial_buffer_size_bytes` parameter.
 
 #### Imports
 ```python

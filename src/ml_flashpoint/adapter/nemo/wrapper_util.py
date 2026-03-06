@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Union
+from typing import Any, Union
+from megatron.core.dist_checkpointing.strategies import (
+    FullyParallelSaveWrapper,
+    FullyParallelLoadWrapper
+)
 
 import torch
 from nemo import lightning as nl
@@ -248,11 +252,6 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
         ml_flashpoint_checkpoint_io = MLFlashpointAsyncFinalizableCheckpointIO(ml_flashpoint_checkpoint_io)
 
     trainer.strategy.checkpoint_io = ml_flashpoint_checkpoint_io
-    from typing import Any
-from megatron.core.dist_checkpointing.strategies import (
-    FullyParallelSaveWrapper,
-    FullyParallelLoadWrapper
-)
 
 def apply_parallel_wrappers(
     save_strategy: "SaveShardedStrategy",

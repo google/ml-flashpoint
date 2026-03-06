@@ -150,7 +150,7 @@ memory_storage_writer = MemoryStorageWriter(...)
 # Use it to instantiate the Save Strategy
 megatron_save_strategy = MLFlashpointMegatronAsyncSaveStrategy(
     storage_writer=memory_storage_writer,
-    # use_cached_ckpt_structure=True, # Optional, defaults to False. Reuses the checkpoint structure from the previous save for faster planning.
+    # use_cached_ckpt_structure=True, # Optional, defaults to False. Caches the checkpoint structure after identifying 2 consecutive save plan structures that are equal.
 )
 ```
 
@@ -265,6 +265,7 @@ memory_storage_writer = MemoryStorageWriter(
         ckpt_obj_manager=checkpoint_object_manager,
         replication_manager=replication_manager,
         # initial_buffer_size_bytes=initial_write_buffer_size_bytes, # Optional - increase for larger checkpoint sizes per rank
+        # use_optimized_save=True, # Optional, defaults to True. Uses the optimized save method to reduce write time.
     ),
     mp_manager=torch_mp.Manager(),
 )

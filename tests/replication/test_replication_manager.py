@@ -117,7 +117,9 @@ def test_async_replicate_no_destination(replication_manager, mocker):
 
     # Then
     assert result == []
-    replication_manager._checkpoint_object_manager.close_buffer.assert_called_once_with(buffer_io)
+    replication_manager._checkpoint_object_manager.close_buffer.assert_called_once_with(
+        buffer_io, skip_close_if_symlink=True
+    )
 
 
 def test_async_replicate_success(replication_manager, mocker):
@@ -173,7 +175,10 @@ def test_final_replication_callback_success(replication_manager, mocker):
     replication_manager._final_replication_callback(mock_buffer_io, completed_futures, 123.45)
 
     # Then
-    replication_manager._checkpoint_object_manager.close_buffer.assert_called_once_with(mock_buffer_io)
+    replication_manager._checkpoint_object_manager.close_buffer.assert_called_once_with(
+        mock_buffer_io, skip_close_if_symlink=True
+    )
+
     mock_logger.error.assert_not_called()
 
 
@@ -196,7 +201,10 @@ def test_final_replication_callback_failure(replication_manager, mocker):
     replication_manager._final_replication_callback(mock_buffer_io, completed_futures, 123.45)
 
     # Then
-    replication_manager._checkpoint_object_manager.close_buffer.assert_called_once_with(mock_buffer_io)
+    replication_manager._checkpoint_object_manager.close_buffer.assert_called_once_with(
+        mock_buffer_io, skip_close_if_symlink=True
+    )
+
     mock_logger.error.assert_any_call(
         "Buffer object '%s' replication failed with exception: '%s'",
         "obj_id_1",

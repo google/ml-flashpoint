@@ -273,7 +273,7 @@ class ReplicationManager:
             # TODO: Change all the f-string to placeholder in python logging.
             _LOGGER.info("No replication needed for '%s', closing buffer.", obj_id)
             try:
-                self._checkpoint_object_manager.close_buffer(buffer_io)
+                self._checkpoint_object_manager.close_buffer(buffer_io, skip_close_if_symlink=True)
             except Exception:
                 _LOGGER.exception("Failed to close buffer '%s'", obj_id)
             return []
@@ -375,7 +375,7 @@ class ReplicationManager:
         )
         # Close buffer when all the replication tasks for the buffer object are done.
         with log_execution_time(_LOGGER, "_final_replication_callback__close_buffer", level=logging.DEBUG):
-            self._checkpoint_object_manager.close_buffer(buffer_io)
+            self._checkpoint_object_manager.close_buffer(buffer_io, skip_close_if_symlink=True)
         if buffer_io.buffer_obj:
             _LOGGER.info("Buffer '%s' closed.", buffer_io.buffer_obj.get_id())
         if errors:

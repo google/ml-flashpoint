@@ -63,6 +63,7 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
         # When/Then
         assert strategy._storage_writer is storage_writer
         assert strategy._checkpoint_saver is checkpoint_saver
+        assert strategy._use_cached_ckpt_structure is False
 
     def test_can_handle_sharded_objects(self, storage_writer):
         # Given

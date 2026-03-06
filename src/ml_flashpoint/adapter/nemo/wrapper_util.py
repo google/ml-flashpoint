@@ -15,6 +15,10 @@
 from typing import Union
 
 import torch
+from megatron.core.dist_checkpointing.strategies.fully_parallel import (
+    FullyParallelLoadStrategyWrapper,
+    FullyParallelSaveStrategyWrapper,
+)
 from nemo import lightning as nl
 from nemo.lightning.io.pl import MegatronCheckpointIO
 from nemo.lightning.pytorch import strategies as nl_strategies
@@ -45,6 +49,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
     write_thread_count: int = 1,
     initial_write_buffer_size_bytes: int = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
     use_optimized_save: bool = True,
+    use_fully_parallel_wrapper: bool = False,
 ) -> MLFlashpointAutoResume:
     """Wraps the trainer and creates an MLFlashpointAutoResume instance wrapping `default_auto_resume`.
 
@@ -62,6 +67,8 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
         write_thread_count: Optional. The number of threads to use for writing checkpoint data. Defaults to 1.
         initial_write_buffer_size_bytes: Optional. The initial size of the buffer for writing checkpoint data
             in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`.
+        use_fully_parallel_wrapper: Whether to wrap save/load strategies with `FullyParallel...Wrapper`.
+            Defaults to `False`.
     Returns:
         An MLFlashpointAutoResume instance configured for ML Flashpoint, wrapping `default_auto_resume`.
     """
@@ -90,6 +97,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
         write_thread_count=write_thread_count,
         initial_write_buffer_size_bytes=initial_write_buffer_size_bytes,
         use_optimized_save=use_optimized_save,
+        use_fully_parallel_wrapper=use_fully_parallel_wrapper,
     )
 
     default_auto_resume_args = vars(default_auto_resume) if default_auto_resume else {}
@@ -111,6 +119,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
     write_thread_count: int = 1,
     initial_write_buffer_size_bytes: int = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
     use_optimized_save: bool = True,
+    use_fully_parallel_wrapper: bool = False,
 ):
     """Wraps the trainer's checkpoint I/O with ML Flashpoint capabilities.
 
@@ -138,6 +147,8 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
         write_thread_count: Optional. The number of threads to use for writing checkpoint data. Defaults to 1.
         initial_write_buffer_size_bytes: Optional. The initial size of the buffer for writing checkpoint data
             in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`.
+        use_fully_parallel_wrapper: Whether to wrap save/load strategies with `FullyParallel...Wrapper`.
+            Defaults to `False`.
 
     Returns:
         None. The trainer's checkpoint_io is modified in-place.
@@ -224,6 +235,10 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
         replication_manager=replication_manager,
         checkpoint_loader=checkpoint_loader,
     )
+
+    if use_fully_parallel_wrapper:
+        save_strategy = FullyParallelSaveStrategyWrapper(save_strategy)
+        load_strategy = FullyParallelLoadStrategyWrapper(load_strategy)
 
     ml_flashpoint_checkpoint_io = MLFlashpointCheckpointIO(
         flashpoint_base_path=flashpoint_base_container,

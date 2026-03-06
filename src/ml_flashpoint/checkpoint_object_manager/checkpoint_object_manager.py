@@ -16,9 +16,10 @@ import os
 import shutil
 from typing import Optional
 
+from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject
+
 from ml_flashpoint.checkpoint_object_manager.buffer_io import BufferIO
 from ml_flashpoint.checkpoint_object_manager.buffer_metadata import METADATA_SIZE
-from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.mlf_logging import get_logger
 

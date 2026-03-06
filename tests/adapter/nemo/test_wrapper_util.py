@@ -17,6 +17,10 @@
 import dataclasses
 
 import pytest
+from megatron.core.dist_checkpointing.strategies.fully_parallel import (
+    FullyParallelLoadStrategyWrapper,
+    FullyParallelSaveStrategyWrapper,
+)
 from nemo import lightning as nl
 from nemo.lightning.io.pl import MegatronCheckpointIO
 from nemo.lightning.pytorch import strategies as nl_strategies
@@ -103,6 +107,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
             write_thread_count=1,
             initial_write_buffer_size_bytes=DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
             use_optimized_save=True,
+            use_fully_parallel_wrapper=False,
         )
 
         # 3. Result is correct type and has correct attributes
@@ -488,6 +493,76 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         assert isinstance(trainer.strategy.checkpoint_io, MLFlashpointCheckpointIO)
         assert trainer.strategy.checkpoint_io.fallback_checkpoint_io is original_checkpoint_io
         assert trainer.strategy.checkpoint_io.async_save is True
+
+    def test_fully_parallel_wrapper_enabled(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
+        """Tests that FullyParallel wrappers are applied when flag=True."""
+
+        # Given
+        trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.callbacks = [mocker.MagicMock(spec=MLFlashpointCheckpointCallback)]
+        trainer.strategy = mocker.MagicMock(spec=nl_strategies.MegatronStrategy)
+        original_checkpoint_io = mocker.MagicMock(spec=MegatronCheckpointIO)
+        trainer.strategy.checkpoint_io = original_checkpoint_io
+        base_container = "/test_base_container"
+
+        # When
+        wrap_trainer_checkpoint_io_with_mlflashpoint(
+            trainer,
+            base_container,
+            mock_ckpt_obj_manager,
+            mock_replication_manager,
+            async_save=True,
+            checkpoint_loader=mocker.MagicMock(spec=DefaultMLFlashpointCheckpointLoader),
+            use_fully_parallel_wrapper=True,  # 🔥 enable it
+        )
+
+        # Then
+        wrapped_io = trainer.strategy.checkpoint_io
+        assert isinstance(wrapped_io, MLFlashpointCheckpointIO)
+
+        assert isinstance(
+            wrapped_io.save_strategy,
+            FullyParallelSaveStrategyWrapper,
+        )
+        assert isinstance(
+            wrapped_io.load_strategy,
+            FullyParallelLoadStrategyWrapper,
+        )
+
+    def test_fully_parallel_wrapper_disabled_by_default(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
+        """Tests that FullyParallel wrappers are NOT applied when flag=False."""
+
+        # Given
+        trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.callbacks = [mocker.MagicMock(spec=MLFlashpointCheckpointCallback)]
+        trainer.strategy = mocker.MagicMock(spec=nl_strategies.MegatronStrategy)
+        original_checkpoint_io = mocker.MagicMock(spec=MegatronCheckpointIO)
+        trainer.strategy.checkpoint_io = original_checkpoint_io
+        base_container = "/test_base_container"
+
+        # When
+        wrap_trainer_checkpoint_io_with_mlflashpoint(
+            trainer,
+            base_container,
+            mock_ckpt_obj_manager,
+            mock_replication_manager,
+            async_save=True,
+            checkpoint_loader=mocker.MagicMock(spec=DefaultMLFlashpointCheckpointLoader),
+            use_fully_parallel_wrapper=False,  # default behavior
+        )
+
+        # Then
+        wrapped_io = trainer.strategy.checkpoint_io
+        assert isinstance(wrapped_io, MLFlashpointCheckpointIO)
+
+        assert not isinstance(
+            wrapped_io.save_strategy,
+            FullyParallelSaveStrategyWrapper,
+        )
+        assert not isinstance(
+            wrapped_io.load_strategy,
+            FullyParallelLoadStrategyWrapper,
+        )
 
     def test_successful_wrapping_with_async_wrapper(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
         """Tests successful wrapping when an async wrapper is present."""

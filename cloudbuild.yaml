@@ -42,10 +42,7 @@ steps:
         # Install build dependencies
         $$PYBIN/pip install build
 
-        echo "Building C++ extensions with editable install as requested..."
-        SKBUILD_CMAKE_ARGS="-DBUILD_TESTING=OFF" $$PYBIN/pip install -e .
-
-        echo "Building wheel (scikit-build-core will handle abi3 and C++ compilation)..."
+        echo "Building wheel (scikit-build-core will handle abi3 and C++ extension compilation)..."
         SKBUILD_CMAKE_ARGS="-DBUILD_TESTING=OFF" $$PYBIN/python -m build --wheel
 
         echo "Repairing wheel with auditwheel to ensure manylinux compliance..."

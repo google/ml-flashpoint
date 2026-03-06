@@ -51,7 +51,7 @@ def storage_writer(mocker, checkpoint_saver) -> MemoryStorageWriter:
     # The mp_manager is mocked as it's not relevant to these tests.
     return MemoryStorageWriter(
         checkpoint_saver=checkpoint_saver,
-        mp_manager=mocker.MagicMock(),
+        mp_manager_future=mocker.MagicMock(),
     )
 
 
@@ -192,7 +192,7 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
 
             mock_memory_storage_writer_cls.assert_called_once_with(
                 checkpoint_saver=checkpoint_saver,
-                mp_manager=storage_writer._main_process_torchmp_manager,
+                mp_manager_future=storage_writer._main_process_torchmp_manager_future,
                 thread_count=storage_writer._thread_count,
             )
             mock_new_storage_writer_instance.reset.assert_called_once_with(checkpoint_id.data)
@@ -234,7 +234,7 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             # Then
             mock_memory_storage_writer_cls.assert_called_once_with(
                 checkpoint_saver=checkpoint_saver,
-                mp_manager=storage_writer._main_process_torchmp_manager,
+                mp_manager_future=storage_writer._main_process_torchmp_manager_future,
                 thread_count=expected_thread_count,
             )
 
@@ -290,7 +290,8 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             assert actual_storage_writer_used is not None
             assert isinstance(actual_storage_writer_used, MemoryStorageWriter)
             assert (
-                actual_storage_writer_used._main_process_torchmp_manager is storage_writer._main_process_torchmp_manager
+                actual_storage_writer_used._main_process_torchmp_manager_future
+                is storage_writer._main_process_torchmp_manager_future
             )
             assert kwargs["planner"] is mock_planner
             assert "world_dist_wrapper" in kwargs
@@ -404,8 +405,10 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
                 "ml_flashpoint.adapter.megatron.save_strategies.MemoryStorageWriter"
             )
             mock_storage_writer_instance = mock_memory_storage_writer_cls.return_value
-            # We need to set _main_process_torchmp_manager on the mock because the test asserts on it later
-            mock_storage_writer_instance._main_process_torchmp_manager = storage_writer._main_process_torchmp_manager
+            # We need to set _main_process_torchmp_manager_future on the mock because the test asserts on it later
+            mock_storage_writer_instance._main_process_torchmp_manager_future = (
+                storage_writer._main_process_torchmp_manager_future
+            )
             mock_storage_writer_instance.stage_write_data_buckets.return_value = dummy_write_buckets
 
             expected_kwarg_keys = {"checkpoint_id", "storage_writer", "global_metadata", "world_dist_wrapper"}
@@ -438,7 +441,8 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             assert actual_storage_writer_used is not None
             assert actual_storage_writer_used is mock_storage_writer_instance
             assert (
-                actual_storage_writer_used._main_process_torchmp_manager is storage_writer._main_process_torchmp_manager
+                actual_storage_writer_used._main_process_torchmp_manager_future
+                is storage_writer._main_process_torchmp_manager_future
             )
             assert kwargs["global_metadata"] == dummy_metadata
             assert kwargs["world_dist_wrapper"].use_dist is False

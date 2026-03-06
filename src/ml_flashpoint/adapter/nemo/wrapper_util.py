@@ -45,6 +45,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
     write_thread_count: int = 1,
     initial_write_buffer_size_bytes: int = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
     use_optimized_save: bool = True,
+    use_cached_ckpt_structure: bool = False,
 ) -> MLFlashpointAutoResume:
     """Wraps the trainer and creates an MLFlashpointAutoResume instance wrapping `default_auto_resume`.
 
@@ -62,6 +63,8 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
         write_thread_count: Optional. The number of threads to use for writing checkpoint data. Defaults to 1.
         initial_write_buffer_size_bytes: Optional. The initial size of the buffer for writing checkpoint data
             in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`.
+        use_cached_ckpt_structure: Whether to reuse the checkpoint structure (plan) from the previous save.
+            Defaults to False.
     Returns:
         An MLFlashpointAutoResume instance configured for ML Flashpoint, wrapping `default_auto_resume`.
     """
@@ -90,6 +93,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
         write_thread_count=write_thread_count,
         initial_write_buffer_size_bytes=initial_write_buffer_size_bytes,
         use_optimized_save=use_optimized_save,
+        use_cached_ckpt_structure=use_cached_ckpt_structure,
     )
 
     default_auto_resume_args = vars(default_auto_resume) if default_auto_resume else {}
@@ -111,6 +115,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
     write_thread_count: int = 1,
     initial_write_buffer_size_bytes: int = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
     use_optimized_save: bool = True,
+    use_cached_ckpt_structure: bool = False,
 ):
     """Wraps the trainer's checkpoint I/O with ML Flashpoint capabilities.
 
@@ -138,6 +143,8 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
         write_thread_count: Optional. The number of threads to use for writing checkpoint data. Defaults to 1.
         initial_write_buffer_size_bytes: Optional. The initial size of the buffer for writing checkpoint data
             in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`.
+        use_cached_ckpt_structure: Whether to reuse the checkpoint structure (plan) from the previous save.
+            Defaults to False.
 
     Returns:
         None. The trainer's checkpoint_io is modified in-place.
@@ -218,7 +225,8 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
             ),
             mp_manager=ctx.Manager(),
             thread_count=write_thread_count,
-        )
+        ),
+        use_cached_ckpt_structure=use_cached_ckpt_structure,
     )
     load_strategy = MLFlashpointMegatronLoadStrategy(
         replication_manager=replication_manager,

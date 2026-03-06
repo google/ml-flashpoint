@@ -25,22 +25,32 @@ from ml_flashpoint.replication.replication_manager import ReplicationManager
 
 class TestNeMoCheckpointLoaderContext:
     @pytest.fixture
-    def loader(self):
+    def _setup_mocks(self, mocker):
+        self.mock_global_rank = MagicMock(return_value=0)
+        self.mock_local_rank = MagicMock(return_value=0)
+        self.mock_world_size = MagicMock(return_value=1)
+        self.mock_all_gather = MagicMock()
+        self.mock_broadcast = MagicMock()
+
+    @pytest.fixture
+    def loader(self, mocker, _setup_mocks):
         ckpt_manager = CheckpointObjectManager()
         repl_manager = MagicMock(spec=ReplicationManager)
         return NeMoMLFlashpointCheckpointLoader(
-            checkpoint_object_manager=ckpt_manager, replication_manager=repl_manager, recover_context=True
+            checkpoint_object_manager=ckpt_manager,
+            replication_manager=repl_manager,
+            global_rank_getter=self.mock_global_rank,
+            local_rank_getter=self.mock_local_rank,
+            broadcast_object_list_func=self.mock_broadcast,
+            all_gather_object_func=self.mock_all_gather,
+            world_size_getter=self.mock_world_size,
+            recover_context=True,
         )
 
     def test_get_checkpoint_objects_by_rank_finds_context(self, loader, mocker):
         """Test that get_checkpoint_objects_by_rank finds files in context/ dir when recover_context=True."""
-        mocker.patch("torch.distributed.get_world_size", return_value=1)
-        mocker.patch(
-            "torch.distributed.all_gather_object",
-            side_effect=lambda obj_list, local_obj: obj_list.__setitem__(0, local_obj),
-        )
-        # Mock get_node_local_rank to avoid external dependency issues if called
-        mocker.patch("torch.distributed.get_node_local_rank", return_value=0)
+        self.mock_world_size.return_value = 1
+        self.mock_all_gather.side_effect = lambda obj_list, local_obj: obj_list.__setitem__(0, local_obj)
 
         container_path = "/tmp/ckpt/step-1"
         container_id = CheckpointContainerId(container_path)
@@ -109,9 +119,9 @@ class TestNeMoCheckpointLoaderContext:
         mock_metadata.storage_data = {}
         mocker.patch.object(loader, "read_metadata", return_value=mock_metadata)
 
-        mocker.patch("torch.distributed.get_world_size", return_value=4)
+        self.mock_world_size.return_value = 4
         mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes", return_value=2)
-        mocker.patch("torch.distributed.get_rank", return_value=0)
+        self.mock_global_rank.return_value = 0
 
         ctx_file = str(Path(checkpoint.data) / "context" / "file1.txt")
         nested_ctx_file = str(Path(checkpoint.data) / "context" / "subdir" / "file3.txt")

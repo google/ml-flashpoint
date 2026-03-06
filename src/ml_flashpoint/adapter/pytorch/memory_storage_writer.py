@@ -87,7 +87,7 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
     def __init__(
         self,
         checkpoint_saver: MLFlashpointCheckpointSaver,
-        mp_manager: torch_mp.Manager,
+        mp_manager: Union[torch_mp.Manager, concurrent.futures.Future],
         thread_count: int = 1,
     ):
         """Initializes the MemoryStorageWriter.
@@ -112,23 +112,54 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
             _LOGGER.warning("thread_count must be >= 1, but was %d. Setting to 1.", thread_count)
             thread_count = 1
         self._thread_count = thread_count
-        # _main_process_torchmp_manager should only be used in the main process, not in the spawned processes.
-        # This is because mp_manager is not picklable.
-        self._main_process_torchmp_manager = mp_manager
-        self._write_events_per_checkpoint_id: dict[CheckpointContainerId, torch_mp.Event] = mp_manager.dict()
-        self._write_results_per_checkpoint_id: dict[CheckpointContainerId, list[WriteResult]] = mp_manager.dict()
+
+        # Capture the future if mp_manager is still being initialized in the background
+        self._mp_manager_future = mp_manager if isinstance(mp_manager, concurrent.futures.Future) else None
+        # If a real manager was passed (e.g. during a re-instantiation), store it directly.
+        self._main_process_torchmp_manager = mp_manager if not self._mp_manager_future else None
+
+        self._write_events_per_checkpoint_id = None
+        self._write_results_per_checkpoint_id = None
+
+    @property
+    def mp_manager(self) -> torch_mp.Manager:
+        """
+        Public property to safely access the Manager.
+        Will block and wait for the background initialization if it hasn't completed yet.
+        """
+        self._ensure_manager_ready()
+        return self._main_process_torchmp_manager
+
+    def _ensure_manager_ready(self) -> None:
+        """
+        Ensures the multiprocessing manager and its shared proxy objects are ready for use.
+        """
+        if self._main_process_torchmp_manager is None and self._mp_manager_future:
+            self._main_process_torchmp_manager = self._mp_manager_future.result()
+
+        if self._main_process_torchmp_manager is not None and self._write_events_per_checkpoint_id is None:
+            self._write_events_per_checkpoint_id: dict[CheckpointContainerId, torch_mp.Event] = (
+                self._main_process_torchmp_manager.dict()
+            )
+            self._write_results_per_checkpoint_id: dict[CheckpointContainerId, list[WriteResult]] = (
+                self._main_process_torchmp_manager.dict()
+            )
 
     def __getstate__(self):
         """Custom pickling to exclude unpicklable mp_manager."""
+        self._ensure_manager_ready()
         state = self.__dict__.copy()
         if "_main_process_torchmp_manager" in state:
             del state["_main_process_torchmp_manager"]
+        if "_mp_manager_future" in state:
+            del state["_mp_manager_future"]
         return state
 
     def __setstate__(self, state):
         """Custom unpickling to restore state and set mp_manager to None."""
         self.__dict__.update(state)
         self._main_process_torchmp_manager = None
+        self._mp_manager_future = None
 
     def _check_checkpoint_id(self) -> None:
         if self._current_checkpoint_id is None:
@@ -192,6 +223,7 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
     def prepare_write_data_buckets(
         self, checkpoint_id: CheckpointContainerId, plan: SavePlan, planner: SavePlanner
     ) -> list[ObjectWriteBucket]:
+        self._ensure_manager_ready()
         # Create a new, unset Event for this specific checkpoint save
         if checkpoint_id not in self._write_events_per_checkpoint_id:
             self._write_events_per_checkpoint_id[checkpoint_id] = self._main_process_torchmp_manager.Event()
@@ -233,6 +265,7 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
         staged_write_buckets: list[ObjectWriteBucket],
         replicate_after_write: bool,
     ) -> TorchFuture[list[WriteResult]]:
+        self._ensure_manager_ready()
         start_time = time.perf_counter()
         write_results = self._checkpoint_saver.write_data(
             checkpoint_id,
@@ -327,6 +360,7 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
                 the `wait_timeout_sec`, indicating that the write operation did not
                 complete successfully or in a timely manner.
         """
+        self._ensure_manager_ready()
         _LOGGER.debug("Waiting for event for checkpoint_id '%s' for up to %d sec...", checkpoint_id, wait_timeout_sec)
         event_set = self._write_events_per_checkpoint_id[checkpoint_id].wait(timeout=wait_timeout_sec)
         if not event_set:
@@ -359,6 +393,7 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
             metadata: The metadata associated with the checkpoint.
             results: A list of lists containing write results from all ranks.
         """
+        self._ensure_manager_ready()
         storage_data: dict[MetadataIndex, _StorageInfo] = dict()
         _LOGGER.debug(
             "finish: got %d lists as write results, updating storage_data with each element in them...", len(results)

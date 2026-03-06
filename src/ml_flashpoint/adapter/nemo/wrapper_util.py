@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import concurrent.futures
 from typing import Union
 
 import torch
@@ -205,6 +206,10 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
     # (OOM) errors upon restart. 'spawn' launches a clean interpreter without
     # the inherited CUDA state, allowing the GPU memory to be freed instantly.
     ctx = torch_mp.get_context("spawn")
+    # Create the Manager in a background thread to avoid blocking the main trainer initialization.
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    mp_manager_future = executor.submit(ctx.Manager)
+
     save_strategy = MLFlashpointMegatronAsyncSaveStrategy(
         storage_writer=MemoryStorageWriter(
             checkpoint_saver=DefaultMLFlashpointCheckpointSaver(
@@ -216,7 +221,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
                 initial_buffer_size_bytes=initial_write_buffer_size_bytes,
                 use_optimized_save=use_optimized_save,
             ),
-            mp_manager=ctx.Manager(),
+            mp_manager=mp_manager_future,
             thread_count=write_thread_count,
         )
     )

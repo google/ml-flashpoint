@@ -14,6 +14,7 @@
 
 import concurrent.futures
 import dataclasses
+import pickle
 import re
 
 import pytest
@@ -56,6 +57,10 @@ class DummyReplicationManager:
     pass
 
 
+class SerializableSaver:
+    pass
+
+
 class TestMemoryStorageWriter:
     @staticmethod
     def _create_metadata(state_dict_metadata=None):
@@ -76,9 +81,8 @@ class TestMemoryStorageWriter:
         writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
         # Then
         assert writer._checkpoint_saver is mock_saver
-        assert writer._main_process_torchmp_manager is mp_manager
-        assert type(writer._write_events_per_checkpoint_id).__name__ == "DictProxy"
-        assert len(writer._write_events_per_checkpoint_id) == 0
+        assert writer._write_events_per_checkpoint_id is None
+        assert writer._write_results_per_checkpoint_id is None
         assert writer._thread_count == 1
 
     @pytest.mark.parametrize(
@@ -250,6 +254,63 @@ class TestMemoryStorageWriter:
             writer.set_up_storage_writer(is_coordinator=False)
         except Exception as e:
             pytest.fail(f"set_up_storage_writer raised an exception: {e}")
+
+    class TestMemoryStorageWriterAsyncInit:
+        """Tests for the asynchronous initialization and lazy-loading logic."""
+
+        def test_init_with_future(self, mocker):
+            """Tests that the constructor correctly captures a Future without blocking."""
+            # Given
+            mock_future = mocker.MagicMock(spec=concurrent.futures.Future)
+            mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
+
+            # When
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mock_future)
+
+            # Then
+            # Verify the state is non-blocking and lazy
+            assert writer._mp_manager_future is mock_future
+            assert writer._main_process_torchmp_manager is None
+            assert writer._write_events_per_checkpoint_id is None
+
+        def test_mp_manager_property_synchronization(self, mocker, mp_manager):
+            """Tests that accessing the public mp_manager property triggers synchronization."""
+            # Given
+            mock_future = mocker.MagicMock(spec=concurrent.futures.Future)
+            # Simulate the background task returning the real Manager instance
+            mock_future.result.return_value = mp_manager
+            mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mock_future)
+
+            # When
+            # This should trigger _ensure_manager_ready()
+            actual_manager = writer.mp_manager
+
+            # Then
+            # Verify it blocked on future.result()
+            mock_future.result.assert_called_once()
+            assert actual_manager is mp_manager
+            # Verify proxy objects were initialized
+            assert writer._write_events_per_checkpoint_id is not None
+            assert type(writer._write_events_per_checkpoint_id).__name__ == "DictProxy"
+
+        def test_serialization_safety_with_future(self, mocker):
+            """Tests that the transient Future and Manager are excluded from pickling."""
+            # Given
+            mock_saver = SerializableSaver()
+            mock_future = concurrent.futures.Future()
+            mock_future.set_result(None)
+
+            mocker.patch.object(MemoryStorageWriter, "_ensure_manager_ready")
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mock_future)
+
+            # When
+            pickled_data = pickle.dumps(writer)
+            unpickled_writer = pickle.loads(pickled_data)
+
+            # Then: Verify transient properties are None after unpickling.
+            assert unpickled_writer._main_process_torchmp_manager is None
+            assert unpickled_writer._mp_manager_future is None
 
     class TestPrepareLocalPlan:
         def test_prepare_local_plan(self, mocker, mp_manager):
@@ -791,6 +852,7 @@ class TestMemoryStorageWriter:
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
             writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer._ensure_manager_ready()
             checkpoint_id = CheckpointContainerId("/test_write_data_multiprocess")
             writer.reset(checkpoint_id.data)
 
@@ -920,6 +982,7 @@ class TestMemoryStorageWriter:
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
             writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer._ensure_manager_ready()
             checkpoint_id = CheckpointContainerId("/test_checkpoint_finish")
             writer.reset(checkpoint_id.data)
             writer._write_results_per_checkpoint_id[checkpoint_id] = [
@@ -974,6 +1037,7 @@ class TestMemoryStorageWriter:
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
             writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer._ensure_manager_ready()
             checkpoint_id = CheckpointContainerId("/test_checkpoint_finish_inner_none")
             writer.reset(checkpoint_id.data)
             writer._write_results_per_checkpoint_id[checkpoint_id] = []
@@ -993,6 +1057,7 @@ class TestMemoryStorageWriter:
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
             writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer._ensure_manager_ready()
             checkpoint_id = CheckpointContainerId("/test_checkpoint_finish_exc")
             writer.reset(checkpoint_id.data)
             writer._write_results_per_checkpoint_id[checkpoint_id] = [
@@ -1013,7 +1078,9 @@ class TestMemoryStorageWriter:
         @pytest.fixture
         def writer(self, mocker, mp_manager):
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            return MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer._ensure_manager_ready()
+            return writer
 
         def test_init(self, writer):
             """Tests that _write_results_per_checkpoint_id is initialized and empty."""
@@ -1400,7 +1467,9 @@ class TestMemoryStorageWriter:
         @pytest.fixture
         def writer(self, mocker, mp_manager):
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            return MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer._ensure_manager_ready()
+            return writer
 
         def test_get_write_results_waits_for_event_happy_path(self, writer):
             """

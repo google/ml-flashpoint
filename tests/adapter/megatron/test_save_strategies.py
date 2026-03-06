@@ -607,3 +607,83 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             _, kwargs = mock_statedictsaver.generate_plan.call_args
             assert kwargs["cached_ckpt_structure"] is None
             assert strategy._use_cached_ckpt_structure is False
+
+        def test_async_save_ensure_metadata_deepcopy(self, mocker, async_save_setup):
+            """Tests that global_metadata is deepcopied to prevent cache pollution."""
+            import copy
+
+            # Given
+            mock_statedictsaver = mocker.patch("ml_flashpoint.adapter.megatron.save_strategies.statedictsaver")
+            strategy, checkpoint_id, sharded_state_dict, _ = async_save_setup
+
+            # Use a real object that supports deepcopy and modification tracking
+            class MockMetadata:
+                def __init__(self, data):
+                    self.data = data
+                    self.storage_data = None
+
+                def __eq__(self, other):
+                    return self.data == other.data and self.storage_data == other.storage_data
+
+                def __repr__(self):
+                    return f"MockMetadata(data={self.data}, storage_data={self.storage_data})"
+
+            original_metadata = MockMetadata({"key": "value"})
+
+            # Spy on deepcopy
+            deepcopy_spy = mocker.spy(copy, "deepcopy")
+
+            # --- Call 1: Fresh metadata ---
+            mock_statedictsaver.generate_plan.return_value = (
+                [],
+                original_metadata,
+                mocker.MagicMock(),
+                mocker.MagicMock(),
+                False,
+            )
+
+            # When
+            strategy.async_save(sharded_state_dict, checkpoint_id.data)
+
+            # Then
+            # 1. Verify deepcopy was called
+            assert deepcopy_spy.call_count >= 1
+            # 2. Verify cache holds a DIFFERENT object but with SAME content
+            assert strategy._cached_global_metadata is not original_metadata
+            assert strategy._cached_global_metadata == original_metadata
+
+            # Simulate "dirtying" the metadata that was passed to finalize_fns
+            original_metadata.storage_data = "DIRTY_DATA"
+            assert strategy._cached_global_metadata.storage_data is None
+
+            # --- Call 2: Reuse cached metadata ---
+            # Reset mocks
+            deepcopy_spy.reset_mock()
+            mock_statedictsaver.generate_plan.return_value = (
+                [],
+                None,  # Returns None, triggering cache retrieval
+                mocker.MagicMock(),
+                mocker.MagicMock(),
+                True,
+            )
+
+            # When
+            strategy._use_cached_ckpt_structure = True
+
+            request = strategy.async_save(sharded_state_dict, checkpoint_id.data)
+
+            # Then
+            # 1. Verify deepcopy called again (retrieving from cache)
+            assert deepcopy_spy.call_count >= 1
+
+            # 2. Verify the `global_metadata` passed to writing is a COPY
+            finish_write_partial = request.finalize_fns[1]
+            bound_metadata = finish_write_partial.keywords["global_metadata"]
+
+            # Verify bound_metadata is a COPY of cache
+            assert bound_metadata is not strategy._cached_global_metadata
+            assert bound_metadata == strategy._cached_global_metadata
+
+            # Verify modifications to bound_metadata don't affect cache
+            bound_metadata.storage_data = "NEW_DIRTY"
+            assert strategy._cached_global_metadata.storage_data is None

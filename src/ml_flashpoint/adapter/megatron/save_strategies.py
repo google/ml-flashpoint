@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import json
 import logging
 import os
@@ -197,9 +198,13 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         )
 
         if global_metadata is None:
-            global_metadata = self._cached_global_metadata
+            # We want to use the cached metadata structure, but ensure any modifications (like adding storage data)
+            # are done on a copy so the cache remains clean.
+            global_metadata = copy.deepcopy(self._cached_global_metadata)
         else:
-            self._cached_global_metadata = global_metadata
+            # Checkpoint structure (and thus metadata) changed or was generated for the first time.
+            # Cache a clean copy of the metadata before storage data is potentially added later.
+            self._cached_global_metadata = copy.deepcopy(global_metadata)
 
         # 5. Stage to CPU.
         staged_write_buckets = self._storage_writer.stage_write_data_buckets(

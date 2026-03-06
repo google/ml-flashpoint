@@ -154,10 +154,9 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
         self._current_save_id = generate_hfid("memwritersave")
 
         if self._write_events_per_checkpoint_id is None and self._main_process_torchmp_manager_future is not None:
-            self._write_events_per_checkpoint_id = self._main_process_torchmp_manager_future.result().dict()
-
-        if self._write_results_per_checkpoint_id is None and self._main_process_torchmp_manager_future is not None:
-            self._write_results_per_checkpoint_id = self._main_process_torchmp_manager_future.result().dict()
+            mp_manager = self._main_process_torchmp_manager_future.result()
+            self._write_events_per_checkpoint_id = mp_manager.dict()
+            self._write_results_per_checkpoint_id = mp_manager.dict()
 
     def storage_meta(self) -> Optional[StorageMeta]:
         self._check_checkpoint_id()

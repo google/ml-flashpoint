@@ -27,37 +27,33 @@ steps:
         pip install build
         python -m build --sdist
 
-  # 2. Build the manylinux wheels using cibuildwheel.
-  # This builds for both x86_64 and ARM64. 
-  # ARM64 is emulated using QEMU on the x86_64 host.
-  - name: 'python:3.10'
+  # 2. Build the manylinux wheels.
+  # We use the manylinux image directly to avoid the "reserved" docker.sock issue.
+  # This image is pre-loaded with Python versions and build tools.
+  - name: '$_MANYLINUX_IMAGE'
     id: 'build-wheels'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        # 1. Faster Docker CLI setup: Download static binary for the host architecture
-        echo "Fetching Docker binary statically (faster than apt-get)..."
-        curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-24.0.7.tgz" | \
-          tar xzC /usr/local/bin --strip-components=1 docker/docker
+        # Use Python 3.10 as the build controller (it will produce the abi3 wheel)
+        PYBIN="/opt/python/cp310-cp310/bin"
 
-        # 2. Register QEMU for ARM emulation
-        echo "Registering QEMU for ARM emulation..."
-        docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+        # Install build dependencies
+        $$PYBIN/pip install build
 
-        # 3. Setup cibuildwheel
-        pip install cibuildwheel
+        echo "Building wheel (scikit-build-core will handle abi3 and C++ extension compilation)..."
+        SKBUILD_CMAKE_ARGS="-DBUILD_TESTING=OFF" $$PYBIN/python -m build --wheel
 
-        echo "Building C++ extensions with editable install (local test - cibuildwheel will do this itself)..."
-        SKBUILD_CMAKE_ARGS="-DBUILD_TESTING=OFF" pip install -e .
+        echo "Repairing wheel with auditwheel to ensure manylinux compliance..."
+        # auditwheel repair will bundle any external shared libraries and fix the platform tag
+        $$PYBIN/auditwheel repair dist/*.whl --wheel-dir dist/
 
-        echo "Running cibuildwheel for configured architectures..."
-        # cibuildwheel will use the configuration from pyproject.toml
-        cibuildwheel --output-dir dist
-    volumes:
-      - name: 'docker-socket'
-        path: '/var/run/docker.sock'
+        # Remove the original non-compliant wheel (the one with the 'linux' tag)
+        # to ensure only the manylinux version is uploaded.
+        rm dist/*-linux_*.whl
     waitFor: ['build-sdist']
+
 
   # 3. Upload to internal Artifact Registry (AR) for OSS Exit Gate.
   - name: 'python:3.10'
@@ -90,3 +86,5 @@ options:
 
 substitutions:
   _PROJECT_NAME: 'ml-flashpoint'
+  # Default to x86_64; can be overridden in the Trigger for ARM64.
+  _MANYLINUX_IMAGE: 'quay.io/pypa/manylinux_2_28_x86_64'

@@ -77,7 +77,7 @@ _Release Notes: BEGINNING -> 194b781e75807afaba682f9eef2826464fcc120e_
 * (9d1316a) replication_manager: Implement sync_bulk_retrieve method.
 * (d0b8770) replication/transfer_service: Save received data to tmp object before finalizing.
 * (60dd014) replication_manager: Implement async_replicate of replication_manager.
-* (3cb4c38) adapter/pytorch: make writer files_per_rank and buffer size configurable with defaults
+* (3cb4c38) adapter/pytorch: make writer thread_count and buffer size configurable with defaults
 * (af05afb) replication/transfer_service: Implement async_get method.
 * (6c4fe99) replication/transfer_service: Implement async_put method.
 * (e62cd71) replication/transfer_service: Implement transfer_service initialize and shutdown.
@@ -106,7 +106,7 @@ _Release Notes: BEGINNING -> 194b781e75807afaba682f9eef2826464fcc120e_
 * (6d54996) adapter/nemo: implement MLFlashpointCheckpointCallback; add CheckpointContainerId.from_parent() helper
 
 ### :white_check_mark: Bug Fixes
-* (b33ddfa) wrapper_util: Expose write_files_per_rank and initial_write_buffer_size_bytes to user.
+* (b33ddfa) wrapper_util: Expose write_thread_count and initial_write_buffer_size_bytes to user.
 * (21cc19e) adapter/nemo: make CheckpointObjectManager a param to wrapper_util; passthrough kwargs in MLFlashpointAutoResume to parent
 * (23daae9) Fix implementation of PairwiseReplicationStrategy and add more tests.
 * (4620be7) core/saver: ensure writer can overwrite unfinished checkpoint data after recovery

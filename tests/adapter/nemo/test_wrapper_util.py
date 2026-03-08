@@ -103,6 +103,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
             write_thread_count=1,
             initial_write_buffer_size_bytes=DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
             use_optimized_save=True,
+            use_cached_ckpt_structure=False,
         )
 
         # 3. Result is correct type and has correct attributes
@@ -284,6 +285,30 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         mock_nemo_checkpoint_loader_cls.assert_called_once()
         _, kwargs = mock_nemo_checkpoint_loader_cls.call_args
         assert kwargs["recover_context"] == always_save_context
+
+    def test_use_cached_ckpt_structure_default_value(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
+        """Tests that use_cached_ckpt_structure defaults to False."""
+        # Given
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.ReplicationManager")
+        mock_wrap_trainer = mocker.patch(
+            "ml_flashpoint.adapter.nemo.wrapper_util.wrap_trainer_checkpoint_io_with_mlflashpoint"
+        )
+        trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        flashpoint_base_container = "/tmp/test_container"
+        default_auto_resume = nl.AutoResume()
+
+        # When
+        wrap_trainer_and_auto_resume_with_mlflashpoint(
+            trainer,
+            flashpoint_base_container,
+            async_save=True,
+            default_auto_resume=default_auto_resume,
+        )
+
+        # Then
+        mock_wrap_trainer.assert_called_once()
+        _, kwargs = mock_wrap_trainer.call_args
+        assert kwargs["use_cached_ckpt_structure"] is False
 
 
 class TestWrapTrainerCheckpointIOWithMLFlashpoint:
@@ -794,6 +819,46 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         _, kwargs = spy_memory_storage_writer_init.call_args
         assert kwargs["thread_count"] == expected_thread_count
 
+    @pytest.mark.parametrize("use_cached_ckpt_structure", [True, False])
+    def test_cached_ckpt_structure_forwarding(
+        self, mocker, mock_ckpt_obj_manager, mock_replication_manager, use_cached_ckpt_structure
+    ):
+        """Tests that use_cached_ckpt_structure is forwarded correctly."""
+        # Given
+        trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.callbacks = [mocker.MagicMock(spec=MLFlashpointCheckpointCallback)]
+        trainer.strategy = mocker.MagicMock(spec=nl_strategies.MegatronStrategy)
+        trainer.strategy.checkpoint_io = mocker.MagicMock(spec=MegatronCheckpointIO)
+        base_container = "/test_base_container"
+
+        # Mock the SaveStrategy to check initialization arguments
+        mock_save_strategy_cls = mocker.patch(
+            "ml_flashpoint.adapter.nemo.wrapper_util.MLFlashpointMegatronAsyncSaveStrategy"
+        )
+
+        # Mock dependencies
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.ReplicationManager")
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.MemoryStorageWriter")
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.DefaultMLFlashpointCheckpointSaver")
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.torch_mp.get_context")
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.MLFlashpointMegatronLoadStrategy")
+
+        # When
+        wrap_trainer_checkpoint_io_with_mlflashpoint(
+            trainer,
+            base_container,
+            mock_ckpt_obj_manager,
+            mock_replication_manager,
+            async_save=True,
+            checkpoint_loader=mocker.MagicMock(spec=DefaultMLFlashpointCheckpointLoader),
+            use_cached_ckpt_structure=use_cached_ckpt_structure,
+        )
+
+        # Then
+        mock_save_strategy_cls.assert_called_once()
+        _, kwargs = mock_save_strategy_cls.call_args
+        assert kwargs["use_cached_ckpt_structure"] == use_cached_ckpt_structure
+
     def test_spawn_context_used_for_mp_manager(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
         """Tests that torch_mp.get_context('spawn').Manager() is correctly instantiated and passed."""
         # Given
@@ -952,3 +1017,39 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         mock_saver.assert_called_once()
         _, kwargs = mock_saver.call_args
         assert kwargs["use_optimized_save"] == use_optimized_save
+
+    def test_use_cached_ckpt_structure_default_value(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
+        """Tests that use_cached_ckpt_structure defaults to False."""
+        # Given
+        trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.callbacks = [mocker.MagicMock(spec=MLFlashpointCheckpointCallback)]
+        trainer.strategy = mocker.MagicMock(spec=nl_strategies.MegatronStrategy)
+        trainer.strategy.checkpoint_io = mocker.MagicMock(spec=MegatronCheckpointIO)
+        base_container = "/test_base_container"
+
+        # Mock the SaveStrategy to check initialization arguments
+        mock_save_strategy_cls = mocker.patch(
+            "ml_flashpoint.adapter.nemo.wrapper_util.MLFlashpointMegatronAsyncSaveStrategy"
+        )
+
+        # Mock dependencies
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.ReplicationManager")
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.MemoryStorageWriter")
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.DefaultMLFlashpointCheckpointSaver")
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.torch_mp.get_context")
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.MLFlashpointMegatronLoadStrategy")
+
+        # When
+        wrap_trainer_checkpoint_io_with_mlflashpoint(
+            trainer,
+            base_container,
+            mock_ckpt_obj_manager,
+            mock_replication_manager,
+            async_save=True,
+            checkpoint_loader=mocker.MagicMock(spec=DefaultMLFlashpointCheckpointLoader),
+        )
+
+        # Then
+        mock_save_strategy_cls.assert_called_once()
+        _, kwargs = mock_save_strategy_cls.call_args
+        assert kwargs["use_cached_ckpt_structure"] is False

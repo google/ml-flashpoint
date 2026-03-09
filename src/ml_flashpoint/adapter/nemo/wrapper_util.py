@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Union
+from typing import Any, Union
+from megatron.core.dist_checkpointing.strategies import (
+    FullyParallelSaveWrapper,
+    FullyParallelLoadWrapper
+)
 
 import torch
 from nemo import lightning as nl
@@ -248,3 +252,25 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
         ml_flashpoint_checkpoint_io = MLFlashpointAsyncFinalizableCheckpointIO(ml_flashpoint_checkpoint_io)
 
     trainer.strategy.checkpoint_io = ml_flashpoint_checkpoint_io
+
+def apply_parallel_wrappers(
+    save_strategy: "SaveShardedStrategy",
+    load_strategy: "LoadShardedStrategy",
+    use_fully_parallel_wrapper: bool = False,
+) -> tuple["SaveShardedStrategy", "LoadShardedStrategy"]:
+    """Wraps checkpoint strategies with optional fully parallel wrappers.
+
+    Args:
+        save_strategy: The checkpoint save strategy to wrap.
+        load_strategy: The checkpoint load strategy to wrap.
+        use_fully_parallel_wrapper: If True, wraps the strategies with
+            `FullyParallelSaveWrapper` and `FullyParallelLoadWrapper`.
+
+    Returns:
+        A tuple containing the (potentially wrapped) save and load strategies.
+    """
+    if use_fully_parallel_wrapper:
+        save_strategy = FullyParallelSaveWrapper(save_strategy)
+        load_strategy = FullyParallelLoadWrapper(load_strategy)
+    return save_strategy, load_strategy
+

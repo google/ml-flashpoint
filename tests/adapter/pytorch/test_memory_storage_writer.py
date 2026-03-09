@@ -155,6 +155,26 @@ class TestMemoryStorageWriter:
         with pytest.raises(ValueError, match="A CheckpointContainerId must begin with '/'"):
             writer.reset(invalid_checkpoint_id)
 
+    def test_reset_initializes_shared_fields(self, mocker, mp_manager_future):
+        """Tests that the reset method initializes the shared fields."""
+        # Given
+        mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
+        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
+        checkpoint_id = "/test_checkpoint"
+
+        assert writer._write_events_per_checkpoint_id is None
+        assert writer._write_results_per_checkpoint_id is None
+
+        # When
+        writer.reset(checkpoint_id)
+
+        # Then
+        assert type(writer._write_events_per_checkpoint_id).__name__ == "DictProxy"
+        assert len(writer._write_events_per_checkpoint_id) == 0
+
+        assert type(writer._write_results_per_checkpoint_id).__name__ == "DictProxy"
+        assert len(writer._write_results_per_checkpoint_id) == 0
+
     def test_current_checkpoint_id_initial(self, mocker, mp_manager_future):
         """Tests that current_checkpoint_id is None initially."""
         # Given

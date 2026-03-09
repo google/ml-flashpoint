@@ -20,6 +20,7 @@ import time
 from typing import Optional, Union
 
 import torch
+import torch.multiprocessing as torch_mp
 from torch.distributed.checkpoint import Metadata, SavePlan, SavePlanner, StorageWriter, staging
 from torch.distributed.checkpoint.filesystem import _StorageInfo
 from torch.distributed.checkpoint.metadata import STATE_DICT_TYPE, MetadataIndex, StorageMeta
@@ -114,8 +115,8 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
         # _main_process_torchmp_manager should only be used in the main process, not in the spawned processes.
         # This is because mp_manager is not picklable.
         self._main_process_torchmp_manager_future = mp_manager_future
-        self._write_events_per_checkpoint_id = None
-        self._write_results_per_checkpoint_id = None
+        self._write_events_per_checkpoint_id: Optional[dict[CheckpointContainerId, torch_mp.Event]] = None
+        self._write_results_per_checkpoint_id: Optional[dict[CheckpointContainerId, list[WriteResult]]] = None
 
     def __getstate__(self):
         """Custom pickling to exclude unpicklable mp_manager."""

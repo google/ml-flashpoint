@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import json
 import logging
 import os
@@ -19,6 +20,7 @@ from functools import partial
 from pathlib import Path
 from typing import Union
 
+import torch
 from megatron.core.dist_checkpointing.mapping import ShardedStateDict
 from megatron.core.dist_checkpointing.strategies.async_utils import AsyncRequest
 from megatron.core.dist_checkpointing.strategies.base import AsyncSaveShardedStrategy
@@ -27,18 +29,40 @@ from megatron.core.dist_checkpointing.strategies.torch import (
     _replace_state_dict_keys_with_sharded_keys,
     mcore_to_pyt_state_dict,
 )
+from torch.distributed.checkpoint.metadata import Metadata
+from torch.distributed.checkpoint.planner import SavePlan
 from torch.distributed.checkpoint.utils import _DistWrapper
 from typing_extensions import override
 
 from ml_flashpoint.adapter.pytorch import custom_state_dict_saver as statedictsaver
 from ml_flashpoint.adapter.pytorch.memory_storage_writer import MemoryStorageWriter
-from ml_flashpoint.core import utils
+from ml_flashpoint.core import mlf_logging, utils
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId
 from ml_flashpoint.core.checkpoint_saver import MLFlashpointCheckpointSaver, ObjectWriteBucket
 from ml_flashpoint.core.mlf_logging import get_logger
 from ml_flashpoint.core.utils import log_execution_time
 
 _LOGGER = get_logger(__name__)
+
+
+def _save_checkpoint(
+    staged_buckets: list[ObjectWriteBucket],
+    checkpoint_id: CheckpointContainerId,
+    storage_writer: MemoryStorageWriter,
+    rank: int,
+    step: int,
+):
+    """
+    This function is the 'async_fn' run in Megatron's :class:`AsyncRequest`.
+    """
+
+    mlf_logging.setup_worker_logging(rank, step)
+    statedictsaver.write_data(
+        checkpoint_id=checkpoint_id,
+        storage_writer=storage_writer,
+        staged_write_buckets=staged_buckets,
+        replicate_after_write=False,
+    )
 
 
 def default_backend_format_name() -> str:
@@ -62,16 +86,26 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         storage_writer: MemoryStorageWriter,
         backend: str = default_backend_format_name(),
         version: int = default_backend_format_version(),
+        use_cached_ckpt_structure: bool = False,
     ):
         """
         Args:
             storage_writer (MemoryStorageWriter): The storage writer to use for saving operations.
             backend (str, optional): The name of the backend format. Defaults to "ml_flashpoint", which is recommended.
             version (int, optional): The version of the checkpoint format. Defaults to the latest version.
+            use_cached_ckpt_structure (bool, optional): Whether to reuse the checkpoint structure (plan)
+                from the previous save. Defaults to False.
         """
         super().__init__(backend=backend, version=version)
         self._storage_writer: MemoryStorageWriter = storage_writer
         self._checkpoint_saver: MLFlashpointCheckpointSaver = storage_writer.checkpoint_saver
+
+        # Cache for state dict saving
+        self._cached_central_plan: SavePlan | None = None
+        self._cached_local_plan: SavePlan | None = None
+        self._cached_global_metadata: Metadata | None = None
+        self._validated_cache_reuse: bool = False
+        self._use_cached_ckpt_structure: bool = use_cached_ckpt_structure
 
     @override
     def can_handle_sharded_objects(self) -> bool:
@@ -105,7 +139,7 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         # 1b. Re-initialize the StorageWriter to use a new instance per save to avoid hangs from shared state.
         self._storage_writer = MemoryStorageWriter(
             checkpoint_saver=self._checkpoint_saver,
-            mp_manager=self._storage_writer._mp_manager,
+            mp_manager=self._storage_writer._main_process_torchmp_manager,
             thread_count=self._storage_writer._thread_count,
         )
         # 1c. Reset the StorageWriter for this checkpoint version.
@@ -136,13 +170,41 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         # we also use Megatron's SavePlanner during saving for compatibility.
         planner: MCoreSavePlanner = MCoreSavePlanner(can_run_decentralized_global_plan=False)
         world_dist_wrapper = _DistWrapper(group=None, use_dist=not disable_dist, coordinator_rank=0)
-        plan, write_buckets, global_metadata = statedictsaver.generate_plan(
+        # Try twice to validate the generated `central_plan` is the same across iterations
+        # If so, reuse `cached_central_plan` and `cached_global_metadata`
+        # From the 3rd iteration, `save_state_dict_async_plan` will not generate `global_metadata`
+        # (return None) so `self.cached_global_metadata` is reused
+        cached_structure_args = None
+        if self._use_cached_ckpt_structure:
+            cached_structure_args = (
+                self._cached_central_plan,
+                self._cached_local_plan,
+                self._validated_cache_reuse,
+            )
+
+        (
+            write_buckets,
+            global_metadata,
+            self._cached_central_plan,
+            self._cached_local_plan,
+            self._validated_cache_reuse,
+        ) = statedictsaver.generate_plan(
             checkpoint_id=checkpoint_id,
             state_dict=pyt_state_dict,
             storage_writer=self._storage_writer,
             planner=planner,
             world_dist_wrapper=world_dist_wrapper,
+            cached_ckpt_structure=cached_structure_args,
         )
+
+        if global_metadata is None:
+            # We want to use the cached metadata structure, but ensure any modifications (like adding storage data)
+            # are done on a copy so the cache remains clean.
+            global_metadata = copy.deepcopy(self._cached_global_metadata)
+        else:
+            # Checkpoint structure (and thus metadata) changed or was generated for the first time.
+            # Cache a clean copy of the metadata before storage data is potentially added later.
+            self._cached_global_metadata = copy.deepcopy(global_metadata)
 
         # 5. Stage to CPU.
         staged_write_buckets = self._storage_writer.stage_write_data_buckets(
@@ -155,17 +217,6 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         metadata = {"sharded_backend": ""}
         with open(os.path.join(checkpoint_dir, "metadata.json"), "w") as f:
             json.dump(metadata, f)
-
-        def _save_checkpoint(staged_buckets: list[ObjectWriteBucket]):
-            """
-            This function is the 'async_fn' run in Megatron's :class:`AsyncRequest`.
-            """
-            statedictsaver.write_data(
-                checkpoint_id=checkpoint_id,
-                storage_writer=self._storage_writer,
-                staged_write_buckets=staged_buckets,
-                replicate_after_write=False,
-            )
 
         finalize_fns = [
             # Replicate written objects
@@ -188,9 +239,18 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
             ),
         ]
 
+        current_rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else -1
+        current_step = mlf_logging.get_current_step()
+
         return AsyncRequest(
             async_fn=_save_checkpoint,
             async_fn_args=(),
-            async_fn_kwargs={"staged_buckets": staged_write_buckets},
+            async_fn_kwargs={
+                "staged_buckets": staged_write_buckets,
+                "checkpoint_id": checkpoint_id,
+                "storage_writer": self._storage_writer,
+                "rank": current_rank,
+                "step": current_step,
+            },
             finalize_fns=finalize_fns,
         )

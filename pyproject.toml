@@ -19,8 +19,22 @@
 # ===================================================================
 [project]
 name = "ml-flashpoint"
-version = "0.0.0"
+dynamic = [ "version" ]
 description = "A memory-first, lightning fast, easy-to-use ML checkpointing library."
+readme = "README.md"
+license = { file = "LICENSE" }
+classifiers = [
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 
 # Specifies the minimum version of Python required to install and run this package.
 requires-python = ">=3.10"
@@ -101,6 +115,7 @@ requires = [
     "scikit-build-core==0.11.6",
     "cmake==3.31.10",
     "ninja==1.11.1.3",
+    "setuptools-scm==9.2.2",
 ]
 
 # The Python object that `pip` will call to execute the build.
@@ -113,6 +128,13 @@ build-backend = "scikit_build_core.build"
 # This section configures the behavior of the `scikit-build-core` build tool.
 # ===================================================================
 [tool.scikit-build]
+
+# Tells scikit-build-core to use setuptools-scm to retrieve the version from git.
+metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
+
+# Enable Stable ABI (abi3) for Python 3.10 and later.
+# This produces a single wheel per architecture that works on all future Python versions.
+wheel.py-api = "cp310"
 
 # Specifies the minimum version of CMake that must be present on the system.
 cmake.version = ">=3.18"
@@ -133,6 +155,14 @@ cmake.source-dir = "."
 # Searches standard locations by default. For more info, see:
 # https://scikit-build-core.readthedocs.io/en/latest/configuration/index.html#customizing-the-built-wheel
 # wheel.packages = ["src/ml_flashpoint"]
+
+# ===================================================================
+# Tool-specific Configuration for setuptools-scm
+# ===================================================================
+[tool.setuptools_scm]
+# Fallback version to use if git is not available or the directory is not a git repo.
+# This prevents build failures in environments like some CI runners or /tmp clones.
+fallback_version = "0.0.0"
 
 # ===================================================================
 # Tool-specific Configuration for Ruff
@@ -167,3 +197,27 @@ fail_under = 90
 [tool.gcovr]
 fail-under-line = "80"
 #fail-under-branch = "85"
+
+# ===================================================================
+# Tool-specific Configuration for cibuildwheel
+# ===================================================================
+[tool.cibuildwheel]
+# Build only once per architecture (using Python 3.10).
+# Because abi3 is enabled, this wheel will work for 3.10, 3.11, 3.12, 3.13, etc.
+build = "cp310-*"
+# Target both Intel (x86_64) and ARM (aarch64) architectures.
+archs = ["x86_64", "aarch64"]
+# Skip 32-bit builds and musllinux (less common, so skipping for simplicity)
+skip = "*-manylinux_i686 *-musllinux_*"
+
+[tool.cibuildwheel.linux]
+# Pass the flag to skip tests during the build inside the container
+environment = { SKBUILD_CMAKE_ARGS="-DBUILD_TESTING=OFF" }
+# We need to install the build requirements inside the cibuildwheel container.
+# We also print the architecture and environment for debugging.
+before-build = """
+  uname -m && \
+  pip install pybind11 scikit-build-core cmake ninja setuptools-scm && \
+  cmake --version
+"""
+

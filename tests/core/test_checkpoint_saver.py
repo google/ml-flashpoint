@@ -406,7 +406,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
             assert not os.path.exists(checkpoint_id.data)
 
         @pytest.mark.parametrize("local_rank", [0, 1, 8])
-        def test_initialize_checkpoint_creates_container_dir_when_not_exists_local_rank_0(
+        def test_initialize_checkpoint_creates_container_dir_when_not_exists(
             self,
             local_rank,
             temp_dir_path,
@@ -427,12 +427,9 @@ class TestDefaultMLFlashpointCheckpointSaver:
             saver.initialize_checkpoint(checkpoint_id)
 
             # Then
-            # Check for directory creation only on local rank 0
-            if local_rank == 0:
-                assert os.path.exists(checkpoint_id.data)
-                assert os.path.isdir(checkpoint_id.data)
-            else:
-                assert not os.path.exists(checkpoint_id.data)
+            # Check for directory creation on all ranks
+            assert os.path.exists(checkpoint_id.data)
+            assert os.path.isdir(checkpoint_id.data)
 
         @pytest.mark.parametrize("local_rank", [0, 1])
         def test_initialize_checkpoint_leaves_container_dir_when_exists(
@@ -494,11 +491,44 @@ class TestDefaultMLFlashpointCheckpointSaver:
 
             # Then
             assert os.path.exists(expected_dirty_marker_path)
-            if local_rank == 0:
-                assert os.path.exists(checkpoint_id.data)
-                assert os.path.isdir(checkpoint_id.data)
-            else:
-                assert not os.path.exists(checkpoint_id.data)
+            assert os.path.exists(checkpoint_id.data)
+            assert os.path.isdir(checkpoint_id.data)
+
+        def test_initialize_checkpoint_ensures_parent_dir_exists(
+            self,
+            temp_dir_path,
+            chkpt_object_manager,
+            replication_manager,
+        ):
+            # Given
+            local_rank = 0
+            saver = DefaultMLFlashpointCheckpointSaver(
+                global_rank_getter=lambda: 0,
+                local_rank_getter=lambda: local_rank,
+                global_barrier_func=lambda: None,
+                ckpt_obj_manager=chkpt_object_manager,
+                replication_manager=replication_manager,
+            )
+            # Create a nested path where the parent dir does not exist
+            # e.g., /tmp/.../subdir/checkpoint_init_nested
+            nested_dir = os.path.join(temp_dir_path, "subdir")
+            checkpoint_id = CheckpointContainerId(f"{nested_dir}/checkpoint_init_nested")
+
+            # Ensure the parent dir doesn't exist yet
+            if os.path.exists(nested_dir):
+                shutil.rmtree(nested_dir)
+
+            expected_dirty_marker_path = f"{checkpoint_id}__{local_rank}__unfinished"
+            expected_dirty_marker_dir = os.path.dirname(expected_dirty_marker_path)
+
+            # When
+            saver.initialize_checkpoint(checkpoint_id)
+
+            # Then
+            # Verify the parent directory of the dirty marker was created
+            assert os.path.exists(expected_dirty_marker_dir)
+            assert os.path.isdir(expected_dirty_marker_dir)
+            assert os.path.exists(expected_dirty_marker_path)
 
     class TestFinalizeCheckpoint:
         @pytest.mark.parametrize(
@@ -2132,3 +2162,54 @@ class TestDefaultMLFlashpointCheckpointSaver:
         assert buffer_io.buffer_obj.get_id() == str(object_id)
         assert buffer_io.read() == b"test_async_replicate_object data"
         buffer_io.close()
+
+    @staticmethod
+    def _return_zero():
+        return 0
+
+    @staticmethod
+    def _return_none():
+        return None
+
+    def test_pickling_excludes_replication_manager(self, chkpt_object_manager, replication_manager):
+        # Given
+        saver = DefaultMLFlashpointCheckpointSaver(
+            global_rank_getter=self._return_zero,
+            local_rank_getter=self._return_zero,
+            global_barrier_func=self._return_none,
+            ckpt_obj_manager=chkpt_object_manager,
+            replication_manager=replication_manager,
+            initial_buffer_size_bytes=1024,
+            use_optimized_save=False,
+        )
+
+        # When
+        pickled_saver = pickle.dumps(saver)
+        unpickled_saver = pickle.loads(pickled_saver)
+
+        # Then
+        assert unpickled_saver._replication_manager is None
+        # Verify other attributes are preserved
+        assert unpickled_saver._initial_buffer_size_bytes == 1024
+        assert unpickled_saver._use_optimized_save is False
+        # Verify callables are restored
+        assert unpickled_saver._global_rank_getter() == 0
+
+    def test_async_replicate_object_raises_when_manager_is_none(
+        self, chkpt_object_manager, replication_manager, temp_dir_path
+    ):
+        # Given
+        saver = DefaultMLFlashpointCheckpointSaver(
+            global_rank_getter=self._return_zero,
+            local_rank_getter=self._return_zero,
+            global_barrier_func=self._return_none,
+            ckpt_obj_manager=chkpt_object_manager,
+            replication_manager=replication_manager,
+        )
+        # Simulate state after unpickling in a worker or if initialized with None
+        saver._replication_manager = None
+        object_id = CheckpointObjectId.from_container(CheckpointContainerId(f"{temp_dir_path}/c1"), "obj1")
+
+        # When/Then
+        with pytest.raises(RuntimeError, match="ReplicationManager is not available"):
+            saver.async_replicate_object(object_id)

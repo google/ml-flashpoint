@@ -183,7 +183,7 @@ class TestMLFlashpointCheckpointIO:
     def test_save_ml_flashpoint_checkpoint_writes_common_state_dict(self, checkpoint_io_components, mocker):
         """Tests that the common state dict is written to a file during an MLF save."""
         # Given
-        mock_torch_distributed = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.torch.distributed")
+        mock_torch_distributed = mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.distributed")
         mock_torch_distributed.get_node_local_rank.return_value = 0
         checkpoint_io = checkpoint_io_components["checkpoint_io"]
         save_strategy = checkpoint_io_components["save_strategy"]
@@ -196,7 +196,7 @@ class TestMLFlashpointCheckpointIO:
 
         # Mock save_preprocess to return an empty sharded_state_dict and our common_state_dict
         mocker.patch(
-            "ml_flashpoint.adapter.nemo.checkpoint_io.mcore_state_dict_utils.save_preprocess",
+            "ml_flashpoint.adapter.megatron.save_utils.mcore_state_dict_utils.save_preprocess",
             return_value=({}, common_state_dict),
         )
 
@@ -225,7 +225,7 @@ class TestMLFlashpointCheckpointIO:
     def test_save_ml_flashpoint_checkpoint_async_success(self, checkpoint_io_components, mocker):
         """Tests a successful asynchronous MLF save."""
         # Given
-        mock_torch_distributed = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.torch.distributed")
+        mock_torch_distributed = mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.distributed")
         mock_torch_distributed.get_node_local_rank.return_value = 0
         checkpoint_io = checkpoint_io_components["checkpoint_io"]
         save_strategy = checkpoint_io_components["save_strategy"]
@@ -249,10 +249,10 @@ class TestMLFlashpointCheckpointIO:
         }
 
         mock_save_preprocess = mocker.patch(
-            "ml_flashpoint.adapter.nemo.checkpoint_io.mcore_state_dict_utils.save_preprocess",
+            "ml_flashpoint.adapter.megatron.save_utils.mcore_state_dict_utils.save_preprocess",
             return_value=(sharded_state_dict, common_state_dict),
         )
-        mock_torch_save = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.torch.save")
+        mock_torch_save = mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.save")
         expected_common_state_filename = COMMON_STATE_FNAME
 
         mock_async_request = mocker.MagicMock()
@@ -279,7 +279,7 @@ class TestMLFlashpointCheckpointIO:
     def test_save_ml_flashpoint_checkpoint_sync_success(self, tmp_path, mocker):
         """Tests a successful synchronous MLF save."""
         # Given
-        mock_torch_distributed = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.torch.distributed")
+        mock_torch_distributed = mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.distributed")
         mock_torch_distributed.get_node_local_rank.return_value = 0
         mock_alt_checkpoint_io = mocker.MagicMock()
         mock_chkpt_obj_manager = mocker.MagicMock()
@@ -317,10 +317,10 @@ class TestMLFlashpointCheckpointIO:
         }
 
         mock_save_preprocess = mocker.patch(
-            "ml_flashpoint.adapter.nemo.checkpoint_io.mcore_state_dict_utils.save_preprocess",
+            "ml_flashpoint.adapter.megatron.save_utils.mcore_state_dict_utils.save_preprocess",
             return_value=(sharded_state_dict, common_state_dict),
         )
-        mock_torch_save = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.torch.save")
+        mock_torch_save = mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.save")
         expected_common_state_filename = COMMON_STATE_FNAME
 
         # Mock _save_context to prevent side effects
@@ -344,7 +344,7 @@ class TestMLFlashpointCheckpointIO:
     def test_save_ml_flashpoint_checkpoint_async_failure_returns_none(self, checkpoint_io_components, mocker):
         """Tests that an async MLF save failure returns None."""
         # Given
-        mock_torch_distributed = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.torch.distributed")
+        mock_torch_distributed = mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.distributed")
         mock_torch_distributed.get_node_local_rank.return_value = 0
         checkpoint_io = checkpoint_io_components["checkpoint_io"]
         save_strategy = checkpoint_io_components["save_strategy"]
@@ -368,10 +368,10 @@ class TestMLFlashpointCheckpointIO:
         }
 
         mocker.patch(
-            "ml_flashpoint.adapter.nemo.checkpoint_io.mcore_state_dict_utils.save_preprocess",
+            "ml_flashpoint.adapter.megatron.save_utils.mcore_state_dict_utils.save_preprocess",
             return_value=(sharded_state_dict, common_state_dict),
         )
-        mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.torch.save")
+        mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.save")
 
         # Mock save strategy to fail
         test_exception = ValueError("Test async save failure")
@@ -390,7 +390,7 @@ class TestMLFlashpointCheckpointIO:
     def test_save_ml_flashpoint_checkpoint_sync_failure_returns_none(self, tmp_path, mocker):
         """Tests that a sync MLF save failure returns None."""
         # Given
-        mock_torch_distributed = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.torch.distributed")
+        mock_torch_distributed = mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.distributed")
         mock_torch_distributed.get_node_local_rank.return_value = 0
         mock_alt_checkpoint_io = mocker.MagicMock()
         mock_chkpt_obj_manager = mocker.MagicMock()
@@ -426,10 +426,10 @@ class TestMLFlashpointCheckpointIO:
         }
 
         mocker.patch(
-            "ml_flashpoint.adapter.nemo.checkpoint_io.mcore_state_dict_utils.save_preprocess",
+            "ml_flashpoint.adapter.megatron.save_utils.mcore_state_dict_utils.save_preprocess",
             return_value=(sharded_state_dict, common_state_dict),
         )
-        mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.torch.save")
+        mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.save")
 
         # Mock save strategy to fail
         test_exception = ValueError("Test sync save failure")
@@ -458,7 +458,7 @@ class TestMLFlashpointCheckpointIO:
     ):
         """Tests that common_state_dict is saved only on rank 0."""
         # Given
-        mock_torch_distributed = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.torch.distributed")
+        mock_torch_distributed = mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.distributed")
         mock_torch_distributed.get_node_local_rank.return_value = node_local_rank
         mock_torch_distributed.get_rank.return_value = 0  # Ensure global rank 0 to avoid context propagation logic
         checkpoint_io = checkpoint_io_components["checkpoint_io"]
@@ -470,10 +470,10 @@ class TestMLFlashpointCheckpointIO:
         checkpoint = {"common_state_dict": common_state_dict}
 
         mocker.patch(
-            "ml_flashpoint.adapter.nemo.checkpoint_io.mcore_state_dict_utils.save_preprocess",
+            "ml_flashpoint.adapter.megatron.save_utils.mcore_state_dict_utils.save_preprocess",
             return_value=({}, common_state_dict),
         )
-        mock_torch_save = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.torch.save")
+        mock_torch_save = mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.save")
         mock_os_makedirs = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.os.makedirs")
         save_strategy.async_save.return_value = mocker.MagicMock()
 
@@ -694,9 +694,9 @@ class TestMLFlashpointCheckpointIO:
         ckpt_version_path = base_path + "/checkpoint_context_test"
 
         # Mock distributed environment
-        mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.torch.distributed.get_node_local_rank", return_value=0)
+        mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.distributed.get_node_local_rank", return_value=0)
         mocker.patch(
-            "ml_flashpoint.adapter.nemo.checkpoint_io.torch.distributed.get_rank", return_value=1
+            "ml_flashpoint.adapter.megatron.save_utils.torch.distributed.get_rank", return_value=1
         )  # Not rank 0 global, but rank 0 local
 
         # Mock broadcast: simulating receiving data from rank 0
@@ -706,13 +706,13 @@ class TestMLFlashpointCheckpointIO:
             obj_list[0] = context_data
 
         mocker.patch(
-            "ml_flashpoint.adapter.nemo.checkpoint_io.torch.distributed.broadcast_object_list",
+            "ml_flashpoint.adapter.megatron.save_utils.torch.distributed.broadcast_object_list",
             side_effect=mock_broadcast_object_list,
         )
 
         # Mock mcore_state_dict_utils to avoid real distributed calls
         mocker.patch(
-            "ml_flashpoint.adapter.nemo.checkpoint_io.mcore_state_dict_utils.save_preprocess", return_value=({}, {})
+            "ml_flashpoint.adapter.megatron.save_utils.mcore_state_dict_utils.save_preprocess", return_value=({}, {})
         )
 
         # When
@@ -734,8 +734,8 @@ class TestMLFlashpointCheckpointIO:
         ckpt_version_path = base_path + "/checkpoint_context_sync_test"
 
         # Mock distributed environment for rank 0
-        mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.torch.distributed.get_node_local_rank", return_value=0)
-        mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.torch.distributed.get_rank", return_value=0)
+        mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.distributed.get_node_local_rank", return_value=0)
+        mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.distributed.get_rank", return_value=0)
 
         # Mock TrainerContext to validly 'dump' files (we simulate this by writing files in side_effect)
         mock_trainer_context_cls = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.TrainerContext")
@@ -753,11 +753,11 @@ class TestMLFlashpointCheckpointIO:
 
         # Mock mcore_state_dict_utils/torch.save/broadcast
         mocker.patch(
-            "ml_flashpoint.adapter.nemo.checkpoint_io.mcore_state_dict_utils.save_preprocess", return_value=({}, {})
+            "ml_flashpoint.adapter.megatron.save_utils.mcore_state_dict_utils.save_preprocess", return_value=({}, {})
         )
-        mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.torch.save")
+        mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.save")
         mock_broadcast = mocker.patch(
-            "ml_flashpoint.adapter.nemo.checkpoint_io.torch.distributed.broadcast_object_list"
+            "ml_flashpoint.adapter.megatron.save_utils.torch.distributed.broadcast_object_list"
         )
 
         # We do NOT mock os.makedirs, os.walk, open. They run for real.

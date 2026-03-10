@@ -92,6 +92,8 @@ auto_resume = wrap_trainer_and_auto_resume_with_mlflashpoint(
     # always_save_context=False, # Optional, defaults to False
     # write_thread_count=1, # Optional, defaults to 1
     # initial_write_buffer_size_bytes=DESIRED_NUM_BYTES, # Optional, defaults to 16 GB
+    # use_optimized_save=True, # Optional, defaults to True. Uses the optimized save method to reduce write time.
+    # use_cached_ckpt_structure=True, # Optional, defaults to False. Caches the checkpoint structure after identifying 2 consecutive save plan structures that are equal.
 )
 ```
 
@@ -133,6 +135,7 @@ from ml_flashpoint.replication.replication_manager import ReplicationManager
 
 # Megatron Checkpointing
 from megatron.core import dist_checkpointing as mcore_dist_checkpointing
+from ml_flashpoint.adapter.megatron.save_utils import save_local_aware_megatron_checkpoint
 ```
 
 #### Save Strategy
@@ -147,15 +150,27 @@ memory_storage_writer = MemoryStorageWriter(...)
 # Use it to instantiate the Save Strategy
 megatron_save_strategy = MLFlashpointMegatronAsyncSaveStrategy(
     storage_writer=memory_storage_writer,
+    # use_cached_ckpt_structure=True, # Optional, defaults to False. Caches the checkpoint structure after identifying 2 consecutive save plan structures that are equal.
 )
 ```
 
-Because Megatron's `dist_checkpointing.save()` function writes "common" data only on global rank 0, which does not align with local checkpointing, you can orchestrate saves using the save strategy the same way it's done in [`MLFlashpointCheckpointIO.save_checkpoint()`](https://github.com/google/ml-flashpoint/blob/b9767583520106f59743b9e8050769523cfbef6e/src/ml_flashpoint/adapter/nemo/checkpoint_io.py#L137-L171) in the `ml_flashpoint.adapter.nemo` package.
-You'll notice that the logic there aims to mimic `dist_checkpointing.save`, but it saves common data on each node (via local rank 0) as opposed to solely on the coordinator node (global rank 0).
+Because Megatron's `dist_checkpointing.save()` function writes "common" data only on global rank 0, which does not align with local checkpointing, use the provided helper function `save_local_aware_megatron_checkpoint()` from the `ml_flashpoint.adapter.megatron.save_utils` module.
+
+This helper mimics `dist_checkpointing.save()`, but saves common data on each node (via local rank 0) rather than solely on the coordinator node (global rank 0).
+
+```python
+# In your save loop
+async_request = save_local_aware_megatron_checkpoint(
+    checkpoint=state_dict,
+    checkpoint_dir=str(curr_step_checkpoint_id),
+    save_strategy=megatron_save_strategy,
+    async_save=True,
+)
+```
 
 !!! note
 
-    Make sure to specify the checkpoint ID/path when saving based on the current step using: 
+    Make sure to specify the checkpoint ID/path when saving based on the current step using:
     `CheckpointContainerId.create_child(base_container, CheckpointContainerId.format_version_container(current_step))`
     where `base_container` is the base path CheckpointContainerId used for all checkpoints for the current job, e.g. `"/tmp/mlf-checkpoints/job123"`.
 
@@ -217,7 +232,7 @@ Code: See the [`ml_flashpoint.adapter.pytorch`](https://github.com/google/ml-fla
 To use directly with PyTorch DCP, use the provided `StorageWriter` and `StorageReader` implementations.
 You can use whatever `Planner` implementations work for your use case, or resort to the defaults.
 
-If your per-rank checkpoint data exceeds the default buffer size (16 GB as of this writing), you can increase it using the optional `initial_buffer_size_bytes` parameter. 
+If your per-rank checkpoint data exceeds the default buffer size (16 GB as of this writing), you can increase it using the optional `initial_buffer_size_bytes` parameter.
 
 #### Imports
 ```python
@@ -250,6 +265,7 @@ memory_storage_writer = MemoryStorageWriter(
         ckpt_obj_manager=checkpoint_object_manager,
         replication_manager=replication_manager,
         # initial_buffer_size_bytes=initial_write_buffer_size_bytes, # Optional - increase for larger checkpoint sizes per rank
+        # use_optimized_save=True, # Optional, defaults to True. Uses the optimized save method to reduce write time.
     ),
     mp_manager=torch_mp.Manager(),
 )

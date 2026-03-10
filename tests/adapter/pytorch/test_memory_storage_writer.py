@@ -647,7 +647,9 @@ class TestMemoryStorageWriter:
             assert result_future.wait() == expected_write_results
 
         @pytest.mark.parametrize("files_per_rank", [1, 4, 8])
-        def test_write_staged_data_buckets_with_explicit_files_per_rank(self, mocker, mp_manager_future, files_per_rank):
+        def test_write_staged_data_buckets_with_explicit_files_per_rank(
+            self, mocker, mp_manager_future, files_per_rank
+        ):
             """Tests that write_staged_data_buckets calls checkpoint_saver.write_data with the specified
             files_per_rank."""
             # Given

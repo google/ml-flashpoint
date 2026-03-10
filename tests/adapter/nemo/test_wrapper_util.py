@@ -896,7 +896,7 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         # Verify the exact Manager instance was passed to MemoryStorageWriter
         spy_memory_storage_writer_init.assert_called_once()
         _, kwargs = spy_memory_storage_writer_init.call_args
-        assert kwargs["mp_manager"] is mock_manager_instance
+        assert kwargs["mp_manager_future"].result() is mock_manager_instance
 
     @pytest.mark.parametrize("always_save_context, expected_value", [(True, True), (False, False)])
     def test_always_save_context_forwarding(

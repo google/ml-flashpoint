@@ -81,7 +81,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
         checkpoint_object_manager=ckpt_obj_manager,
         replication_manager=replication_manager,
         global_rank_getter=dist.get_rank,
-        local_rank_getter=torch.distributed.get_node_local_rank,
+        local_rank_getter=dist.get_node_local_rank,
         broadcast_object_list_func=dist.broadcast_object_list,
         all_gather_object_func=dist.all_gather_object,
         world_size_getter=dist.get_world_size,

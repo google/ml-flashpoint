@@ -121,8 +121,7 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
     def __getstate__(self):
         """Custom pickling to exclude unpicklable mp_manager."""
         state = self.__dict__.copy()
-        if "_main_process_torchmp_manager_future" in state:
-            del state["_main_process_torchmp_manager_future"]
+        state.pop("_main_process_torchmp_manager_future", None)
         return state
 
     def __setstate__(self, state):

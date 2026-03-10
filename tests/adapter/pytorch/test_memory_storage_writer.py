@@ -175,6 +175,51 @@ class TestMemoryStorageWriter:
         assert type(writer._write_results_per_checkpoint_id).__name__ == "DictProxy"
         assert len(writer._write_results_per_checkpoint_id) == 0
 
+    @pytest.mark.parametrize(
+        "is_events_none, is_future_not_none, expect_init",
+        [
+            (True, True, True),  # Scenario 1 (T/T): Initialize fields
+            (True, False, False),  # Scenario 2 (T/F): Skip (future missing)
+            (False, True, False),  # Scenario 3 (F/T): Skip (already initialized)
+            (False, False, False),  # Scenario 4 (F/F): Skip
+        ],
+    )
+    def test_reset_shared_fields_conditional_logic(
+        self, mocker, mp_manager_future, is_events_none, is_future_not_none, expect_init
+    ):
+        """Tests the 4 scenarios for lazy initialization of shared fields in reset."""
+        # Given
+        mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
+        # Choose whether to pass the real future or None
+        init_future = mp_manager_future if is_future_not_none else None
+        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=init_future)
+
+        if not is_events_none:
+            # Manually simulate already-initialized state (e.g. from a previous call)
+            manager = mp_manager_future.result()
+            writer._write_events_per_checkpoint_id = manager.dict()
+            writer._write_results_per_checkpoint_id = manager.dict()
+
+        # If a future exists, spy on its .result() method to check for access
+        spy_result = mocker.spy(init_future, "result") if is_future_not_none else None
+
+        # When
+        writer.reset("/test_checkpoint")
+
+        # Then
+        if expect_init:
+            assert writer._write_events_per_checkpoint_id is not None
+            assert writer._write_results_per_checkpoint_id is not None
+            spy_result.assert_called_once()
+        else:
+            if is_events_none:
+                assert writer._write_events_per_checkpoint_id is None
+            else:
+                assert writer._write_events_per_checkpoint_id is not None
+
+            if spy_result:
+                spy_result.assert_not_called()
+
     def test_current_checkpoint_id_initial(self, mocker, mp_manager_future):
         """Tests that current_checkpoint_id is None initially."""
         # Given

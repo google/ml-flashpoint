@@ -176,6 +176,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         [
             ({}, DEFAULT_INITIAL_BUFFER_SIZE_BYTES),
             ({"initial_write_buffer_size_bytes": 12345}, 12345),
+            ({"initial_write_buffer_size_bytes": None}, DEFAULT_INITIAL_BUFFER_SIZE_BYTES),
         ],
     )
     def test_initial_save_buffer_size_forwarding(
@@ -743,6 +744,7 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         [
             ({}, DEFAULT_INITIAL_BUFFER_SIZE_BYTES),
             ({"initial_write_buffer_size_bytes": 12345}, 12345),
+            ({"initial_write_buffer_size_bytes": None}, DEFAULT_INITIAL_BUFFER_SIZE_BYTES),
         ],
     )
     def test_initial_save_buffer_size_forwarding(

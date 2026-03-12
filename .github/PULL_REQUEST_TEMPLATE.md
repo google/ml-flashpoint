@@ -1,4 +1,4 @@
-This change ... (provide a short description of what this change is and why you are making it).
+<!-- Provide a short description of what this change is and why you are making it. -->
 
 Fixes #<issue_number_goes_here>
 

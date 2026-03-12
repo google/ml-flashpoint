@@ -14,7 +14,7 @@
 
 import concurrent.futures
 import threading
-from typing import Union, Optional
+from typing import Optional, Union
 
 import torch
 import torch.distributed as dist

@@ -169,7 +169,8 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
         raise ValueError("The 'replication_manager' argument cannot be None.")
     if write_thread_count < 1:
         raise ValueError(f"write_thread_count must be >= 1, got {write_thread_count}.")
-    initial_write_buffer_size_bytes = initial_write_buffer_size_bytes or DEFAULT_INITIAL_BUFFER_SIZE_BYTES
+    if initial_write_buffer_size_bytes is None:
+        initial_write_buffer_size_bytes = DEFAULT_INITIAL_BUFFER_SIZE_BYTES
     if initial_write_buffer_size_bytes <= 0:
         raise ValueError(f"initial_write_buffer_size_bytes must be > 0, got {initial_write_buffer_size_bytes}.")
 

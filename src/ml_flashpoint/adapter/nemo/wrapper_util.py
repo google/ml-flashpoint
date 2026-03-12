@@ -12,9 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Union
+import concurrent.futures
+import threading
+from typing import Optional, Union
 
 import torch
+import torch.distributed as dist
 from megatron.core.dist_checkpointing.strategies.fully_parallel import (
     FullyParallelLoadStrategyWrapper,
     FullyParallelSaveStrategyWrapper,
@@ -47,7 +50,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
     default_auto_resume: nl.AutoResume = None,
     always_save_context: bool = False,
     write_thread_count: int = 1,
-    initial_write_buffer_size_bytes: int = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
+    initial_write_buffer_size_bytes: Optional[int] = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
     use_optimized_save: bool = True,
     use_cached_ckpt_structure: bool = False,
 ) -> MLFlashpointAutoResume:
@@ -66,7 +69,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
         always_save_context: Whether to always save the context. Defaults to `False`.
         write_thread_count: Optional. The number of threads to use for writing checkpoint data. Defaults to 1.
         initial_write_buffer_size_bytes: Optional. The initial size of the buffer for writing checkpoint data
-            in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`.
+            in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`, even if set to None explicitly.
         use_cached_ckpt_structure: Whether to reuse the checkpoint structure (plan) from the previous save.
             Defaults to False.
     Returns:
@@ -83,6 +86,11 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
     ckpt_loader = NeMoMLFlashpointCheckpointLoader(
         checkpoint_object_manager=ckpt_obj_manager,
         replication_manager=replication_manager,
+        global_rank_getter=dist.get_rank,
+        local_rank_getter=dist.get_node_local_rank,
+        broadcast_object_list_func=dist.broadcast_object_list,
+        all_gather_object_func=dist.all_gather_object,
+        world_size_getter=dist.get_world_size,
         recover_context=always_save_context,
     )
 
@@ -117,7 +125,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
     checkpoint_loader: DefaultMLFlashpointCheckpointLoader,
     always_save_context: bool = False,
     write_thread_count: int = 1,
-    initial_write_buffer_size_bytes: int = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
+    initial_write_buffer_size_bytes: Optional[int] = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
     use_optimized_save: bool = True,
     use_cached_ckpt_structure: bool = False,
 ):
@@ -146,7 +154,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
         always_save_context: Whether to always save the context. Defaults to `False`.
         write_thread_count: Optional. The number of threads to use for writing checkpoint data. Defaults to 1.
         initial_write_buffer_size_bytes: Optional. The initial size of the buffer for writing checkpoint data
-            in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`.
+            in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`, even if set to None explicitly.
         use_cached_ckpt_structure: Whether to reuse the checkpoint structure (plan) from the previous save.
             Defaults to False.
 
@@ -165,6 +173,8 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
         raise ValueError("The 'replication_manager' argument cannot be None.")
     if write_thread_count < 1:
         raise ValueError(f"write_thread_count must be >= 1, got {write_thread_count}.")
+    if initial_write_buffer_size_bytes is None:
+        initial_write_buffer_size_bytes = DEFAULT_INITIAL_BUFFER_SIZE_BYTES
     if initial_write_buffer_size_bytes <= 0:
         raise ValueError(f"initial_write_buffer_size_bytes must be > 0, got {initial_write_buffer_size_bytes}.")
 
@@ -216,6 +226,14 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
     # (OOM) errors upon restart. 'spawn' launches a clean interpreter without
     # the inherited CUDA state, allowing the GPU memory to be freed instantly.
     ctx = torch_mp.get_context("spawn")
+    mp_manager_future = concurrent.futures.Future()
+
+    def start_manager():
+        mp_manager_future.set_result(ctx.Manager())
+
+    thread = threading.Thread(target=start_manager, daemon=True)
+    thread.start()
+
     save_strategy = MLFlashpointMegatronAsyncSaveStrategy(
         storage_writer=MemoryStorageWriter(
             checkpoint_saver=DefaultMLFlashpointCheckpointSaver(
@@ -227,7 +245,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
                 initial_buffer_size_bytes=initial_write_buffer_size_bytes,
                 use_optimized_save=use_optimized_save,
             ),
-            mp_manager=ctx.Manager(),
+            mp_manager_future=mp_manager_future,
             thread_count=write_thread_count,
         ),
         use_cached_ckpt_structure=use_cached_ckpt_structure,

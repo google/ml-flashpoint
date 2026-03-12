@@ -128,6 +128,7 @@ from ml_flashpoint.adapter.megatron.save_strategies import (
 )
 
 # Loading
+import torch.distributed as dist
 from ml_flashpoint.adapter.megatron.load_strategies import MLFlashpointMegatronLoadStrategy
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.core.checkpoint_loader import DefaultMLFlashpointCheckpointLoader
@@ -191,6 +192,11 @@ replication_manager.initialize(checkpoint_object_manager)
 checkpoint_loader = DefaultMLFlashpointCheckpointLoader(
     checkpoint_object_manager=checkpoint_object_manager,
     replication_manager=replication_manager,
+    global_rank_getter=dist.get_rank,
+    local_rank_getter=torch.distributed.get_node_local_rank,
+    broadcast_object_list_func=dist.broadcast_object_list,
+    all_gather_object_func=dist.all_gather_object,
+    world_size_getter=dist.get_world_size,
 )
 
 # Instantiate the Load Strategy with the dependencies
@@ -237,6 +243,7 @@ If your per-rank checkpoint data exceeds the default buffer size (16 GB as of th
 #### Imports
 ```python
 import torch
+import torch.distributed as dist
 from torch import multiprocessing as torch_mp
 import torch.distributed.checkpoint as dcp
 
@@ -274,6 +281,11 @@ memory_storage_writer = MemoryStorageWriter(
 checkpoint_loader = DefaultMLFlashpointCheckpointLoader(
     checkpoint_object_manager=checkpoint_object_manager,
     replication_manager=replication_manager,
+    global_rank_getter=dist.get_rank,
+    local_rank_getter=torch.distributed.get_node_local_rank,
+    broadcast_object_list_func=dist.broadcast_object_list,
+    all_gather_object_func=dist.all_gather_object,
+    world_size_getter=dist.get_world_size,
 )
 memory_storage_reader = MemoryStorageReader(
     path=checkpoint_dir,

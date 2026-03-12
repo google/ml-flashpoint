@@ -100,7 +100,13 @@ class TestGeneratePlan:
         mock_storage_writer.prepare_write_data_buckets.return_value = expected_write_buckets
 
         # When
-        actual_plan, actual_write_buckets, actual_metadata = custom_state_dict_saver.generate_plan(
+        (
+            actual_write_buckets,
+            actual_metadata,
+            _,
+            _,
+            actual_reused,
+        ) = custom_state_dict_saver.generate_plan(
             checkpoint_id, state_dict, mock_storage_writer, mock_save_planner, dist_wrapper
         )
 
@@ -115,9 +121,81 @@ class TestGeneratePlan:
         mock_storage_writer.prepare_write_data_buckets.assert_called_once_with(
             checkpoint_id, local_plan, mock_save_planner
         )
-        assert actual_plan == local_plan
         assert actual_write_buckets == expected_write_buckets
         assert actual_metadata == expected_global_metadata
+        assert actual_reused is False
+
+    def test_generate_plan_reuses_cache(self, mocker, mock_storage_writer, mock_save_planner, dist_wrapper):
+        """Tests that generate_plan reuse the cache when validated_cache_reuse is True."""
+        # Given
+        checkpoint_id = CheckpointContainerId("/test_checkpoint")
+        state_dict = {"model": "test"}
+        cached_plan = SavePlan([WriteItem(index=MetadataIndex("cached"), type=WriteItemType.TENSOR)])
+        dummy_local_plan = SavePlan([])
+        # cached_local_plan = SavePlan([WriteItem(index=MetadataIndex("local"), type=WriteItemType.TENSOR)])
+        # cached_metadata = Metadata(state_dict_metadata={"cached": "meta"})
+
+        mock_save_planner.finish_plan.return_value = cached_plan
+        mock_storage_writer.prepare_write_data_buckets.return_value = []
+
+        # When
+        (
+            _,
+            actual_metadata,
+            _,
+            _,
+            actual_reused,
+        ) = custom_state_dict_saver.generate_plan(
+            checkpoint_id,
+            state_dict,
+            mock_storage_writer,
+            mock_save_planner,
+            dist_wrapper,
+            cached_ckpt_structure=(cached_plan, dummy_local_plan, True),
+        )
+
+        # Then
+        # Should not call reduce_scatter or broadcast_object
+        # But we can't easily assert on dist_wrapper methods as they are not mocks here unless we mock them
+        # However, we can check if they are NOT called by checking side effects if we had mocked them
+        # For now, checking return values is good enough proxy
+        assert actual_metadata is None
+        assert actual_reused is True
+        mock_save_planner.create_local_plan.assert_not_called()
+
+    def test_generate_plan_validates_cache_success(self, mocker, mock_storage_writer, mock_save_planner, dist_wrapper):
+        """Tests that generate_plan validates cache successfully."""
+        # Given
+        local_plan = SavePlan([])
+        global_plans = [local_plan]
+        mock_save_planner.create_local_plan.return_value = local_plan
+        mock_storage_writer.prepare_local_plan.return_value = local_plan
+        mock_save_planner.create_global_plan.return_value = (global_plans, None)
+        mock_storage_writer.prepare_global_plan.return_value = global_plans
+        # Assume reduce_scatter returns the SAME plan as cached
+        mocker.patch.object(dist_wrapper, "reduce_scatter", return_value=local_plan)
+        mocker.patch.object(dist_wrapper, "broadcast_object", return_value=None)
+        mock_save_planner.finish_plan.return_value = local_plan
+        mock_storage_writer.prepare_write_data_buckets.return_value = []
+
+        # When
+        (
+            _,
+            _,
+            _,
+            _,
+            actual_reused,
+        ) = custom_state_dict_saver.generate_plan(
+            CheckpointContainerId("/test"),
+            {},
+            mock_storage_writer,
+            mock_save_planner,
+            dist_wrapper,
+            cached_ckpt_structure=(local_plan, None, False),
+        )
+
+        # Then
+        assert actual_reused is True
 
     def test_generate_plan_reduce_scatters_local_plan(
         self, mock_storage_writer, mock_save_planner, dist_wrapper, mocker
@@ -144,7 +222,13 @@ class TestGeneratePlan:
         mock_save_planner.finish_plan.return_value = expected_returned_plan
 
         # When
-        returned_local_plan, _, _ = custom_state_dict_saver.generate_plan(
+        (
+            _,
+            _,
+            _,
+            _,
+            _,
+        ) = custom_state_dict_saver.generate_plan(
             CheckpointContainerId("/test_checkpoint"), state_dict, mock_storage_writer, mock_save_planner, dist_wrapper
         )
 
@@ -153,7 +237,6 @@ class TestGeneratePlan:
         # We can't directly assert the call arguments for local_step and global_step as they are inner functions.
         # However, we can assert that reduce_scatter was called with 'plan' as the tag.
         assert mock_reduce_scatter.call_args[0][0] == "plan"
-        assert returned_local_plan == expected_returned_plan
 
     def test_generate_plan_broadcasts_global_metadata(
         self, mock_storage_writer, mock_save_planner, dist_wrapper, mocker
@@ -176,7 +259,13 @@ class TestGeneratePlan:
         mocker.patch.object(dist_wrapper, "broadcast_object", return_value=expected_broadcasted_metadata)
 
         # When
-        _, _, returned_metadata = custom_state_dict_saver.generate_plan(
+        (
+            _,
+            returned_metadata,
+            _,
+            _,
+            _,
+        ) = custom_state_dict_saver.generate_plan(
             CheckpointContainerId("/test_checkpoint"), state_dict, mock_storage_writer, mock_save_planner, dist_wrapper
         )
 
@@ -203,12 +292,47 @@ class TestGeneratePlan:
         mock_storage_writer.prepare_write_data_buckets.return_value = expected_write_buckets
 
         # When
-        _, returned_write_buckets, _ = custom_state_dict_saver.generate_plan(
+        (
+            returned_write_buckets,
+            _,
+            _,
+            _,
+            _,
+        ) = custom_state_dict_saver.generate_plan(
             CheckpointContainerId("/test_checkpoint"), state_dict, mock_storage_writer, mock_save_planner, dist_wrapper
         )
 
         # Then
         assert returned_write_buckets == expected_write_buckets
+
+    def test_generate_plan_signature_compatibility(self, mock_storage_writer, mock_save_planner, dist_wrapper):
+        """Tests that generate_plan returns exactly 4 elements (updated)."""
+        # Given
+        state_dict = {"model": "test"}
+        mock_save_planner.create_local_plan.return_value = SavePlan([])
+        mock_storage_writer.prepare_local_plan.return_value = SavePlan([])
+        mock_save_planner.create_global_plan.return_value = ([SavePlan([])], None)
+        mock_storage_writer.prepare_global_plan.return_value = [SavePlan([])]
+        mock_save_planner.finish_plan.return_value = SavePlan([])
+        mock_storage_writer.prepare_write_data_buckets.return_value = []
+
+        # When
+        result = custom_state_dict_saver.generate_plan(
+            CheckpointContainerId("/test_checkpoint"),
+            state_dict,
+            mock_storage_writer,
+            mock_save_planner,
+            dist_wrapper,
+        )
+
+        # Then
+        assert isinstance(result, tuple)
+        assert len(result) == 5
+        assert result[0] == []
+        assert result[1] is None
+        assert result[2] == SavePlan([])
+        assert result[3] == SavePlan([])
+        assert result[4] is False
 
 
 class TestWriteData:

@@ -92,6 +92,8 @@ auto_resume = wrap_trainer_and_auto_resume_with_mlflashpoint(
     # always_save_context=False, # Optional, defaults to False
     # write_thread_count=1, # Optional, defaults to 1
     # initial_write_buffer_size_bytes=DESIRED_NUM_BYTES, # Optional, defaults to 16 GB
+    # use_optimized_save=True, # Optional, defaults to True. Uses the optimized save method to reduce write time.
+    # use_cached_ckpt_structure=True, # Optional, defaults to False. Caches the checkpoint structure after identifying 2 consecutive save plan structures that are equal.
 )
 ```
 
@@ -126,6 +128,7 @@ from ml_flashpoint.adapter.megatron.save_strategies import (
 )
 
 # Loading
+import torch.distributed as dist
 from ml_flashpoint.adapter.megatron.load_strategies import MLFlashpointMegatronLoadStrategy
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.core.checkpoint_loader import DefaultMLFlashpointCheckpointLoader
@@ -148,6 +151,7 @@ memory_storage_writer = MemoryStorageWriter(...)
 # Use it to instantiate the Save Strategy
 megatron_save_strategy = MLFlashpointMegatronAsyncSaveStrategy(
     storage_writer=memory_storage_writer,
+    # use_cached_ckpt_structure=True, # Optional, defaults to False. Caches the checkpoint structure after identifying 2 consecutive save plan structures that are equal.
 )
 ```
 
@@ -167,7 +171,7 @@ async_request = save_local_aware_megatron_checkpoint(
 
 !!! note
 
-    Make sure to specify the checkpoint ID/path when saving based on the current step using: 
+    Make sure to specify the checkpoint ID/path when saving based on the current step using:
     `CheckpointContainerId.create_child(base_container, CheckpointContainerId.format_version_container(current_step))`
     where `base_container` is the base path CheckpointContainerId used for all checkpoints for the current job, e.g. `"/tmp/mlf-checkpoints/job123"`.
 
@@ -188,6 +192,11 @@ replication_manager.initialize(checkpoint_object_manager)
 checkpoint_loader = DefaultMLFlashpointCheckpointLoader(
     checkpoint_object_manager=checkpoint_object_manager,
     replication_manager=replication_manager,
+    global_rank_getter=dist.get_rank,
+    local_rank_getter=torch.distributed.get_node_local_rank,
+    broadcast_object_list_func=dist.broadcast_object_list,
+    all_gather_object_func=dist.all_gather_object,
+    world_size_getter=dist.get_world_size,
 )
 
 # Instantiate the Load Strategy with the dependencies
@@ -229,11 +238,12 @@ Code: See the [`ml_flashpoint.adapter.pytorch`](https://github.com/google/ml-fla
 To use directly with PyTorch DCP, use the provided `StorageWriter` and `StorageReader` implementations.
 You can use whatever `Planner` implementations work for your use case, or resort to the defaults.
 
-If your per-rank checkpoint data exceeds the default buffer size (16 GB as of this writing), you can increase it using the optional `initial_buffer_size_bytes` parameter. 
+If your per-rank checkpoint data exceeds the default buffer size (16 GB as of this writing), you can increase it using the optional `initial_buffer_size_bytes` parameter.
 
 #### Imports
 ```python
 import torch
+import torch.distributed as dist
 from torch import multiprocessing as torch_mp
 import torch.distributed.checkpoint as dcp
 
@@ -262,6 +272,7 @@ memory_storage_writer = MemoryStorageWriter(
         ckpt_obj_manager=checkpoint_object_manager,
         replication_manager=replication_manager,
         # initial_buffer_size_bytes=initial_write_buffer_size_bytes, # Optional - increase for larger checkpoint sizes per rank
+        # use_optimized_save=True, # Optional, defaults to True. Uses the optimized save method to reduce write time.
     ),
     mp_manager=torch_mp.Manager(),
 )
@@ -270,6 +281,11 @@ memory_storage_writer = MemoryStorageWriter(
 checkpoint_loader = DefaultMLFlashpointCheckpointLoader(
     checkpoint_object_manager=checkpoint_object_manager,
     replication_manager=replication_manager,
+    global_rank_getter=dist.get_rank,
+    local_rank_getter=torch.distributed.get_node_local_rank,
+    broadcast_object_list_func=dist.broadcast_object_list,
+    all_gather_object_func=dist.all_gather_object,
+    world_size_getter=dist.get_world_size,
 )
 memory_storage_reader = MemoryStorageReader(
     path=checkpoint_dir,

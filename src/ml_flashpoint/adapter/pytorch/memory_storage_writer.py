@@ -20,7 +20,7 @@ import time
 from typing import Optional, Union
 
 import torch
-from torch import multiprocessing as torch_mp
+import torch.multiprocessing as torch_mp
 from torch.distributed.checkpoint import Metadata, SavePlan, SavePlanner, StorageWriter, staging
 from torch.distributed.checkpoint.filesystem import _StorageInfo
 from torch.distributed.checkpoint.metadata import STATE_DICT_TYPE, MetadataIndex, StorageMeta
@@ -87,7 +87,7 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
     def __init__(
         self,
         checkpoint_saver: MLFlashpointCheckpointSaver,
-        mp_manager: torch_mp.Manager,
+        mp_manager_future: concurrent.futures.Future,
         thread_count: int = 1,
     ):
         """Initializes the MemoryStorageWriter.
@@ -114,21 +114,20 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
         self._thread_count = thread_count
         # _main_process_torchmp_manager should only be used in the main process, not in the spawned processes.
         # This is because mp_manager is not picklable.
-        self._main_process_torchmp_manager = mp_manager
-        self._write_events_per_checkpoint_id: dict[CheckpointContainerId, torch_mp.Event] = mp_manager.dict()
-        self._write_results_per_checkpoint_id: dict[CheckpointContainerId, list[WriteResult]] = mp_manager.dict()
+        self._main_process_torchmp_manager_future = mp_manager_future
+        self._write_events_per_checkpoint_id: Optional[dict[CheckpointContainerId, torch_mp.Event]] = None
+        self._write_results_per_checkpoint_id: Optional[dict[CheckpointContainerId, list[WriteResult]]] = None
 
     def __getstate__(self):
         """Custom pickling to exclude unpicklable mp_manager."""
         state = self.__dict__.copy()
-        if "_main_process_torchmp_manager" in state:
-            del state["_main_process_torchmp_manager"]
+        state.pop("_main_process_torchmp_manager_future", None)
         return state
 
     def __setstate__(self, state):
         """Custom unpickling to restore state and set mp_manager to None."""
         self.__dict__.update(state)
-        self._main_process_torchmp_manager = None
+        self._main_process_torchmp_manager_future = None
 
     def _check_checkpoint_id(self) -> None:
         if self._current_checkpoint_id is None:
@@ -153,6 +152,11 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
         self._current_checkpoint_id = CheckpointContainerId(checkpoint_id)
         # Mimicking existing StorageWriter impls (e.g. `_FileSystemWriter`) by using a random ID as the save ID.
         self._current_save_id = generate_hfid("memwritersave")
+
+        if self._write_events_per_checkpoint_id is None and self._main_process_torchmp_manager_future is not None:
+            mp_manager = self._main_process_torchmp_manager_future.result()
+            self._write_events_per_checkpoint_id = mp_manager.dict()
+            self._write_results_per_checkpoint_id = mp_manager.dict()
 
     def storage_meta(self) -> Optional[StorageMeta]:
         self._check_checkpoint_id()
@@ -194,7 +198,9 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
     ) -> list[ObjectWriteBucket]:
         # Create a new, unset Event for this specific checkpoint save
         if checkpoint_id not in self._write_events_per_checkpoint_id:
-            self._write_events_per_checkpoint_id[checkpoint_id] = self._main_process_torchmp_manager.Event()
+            self._write_events_per_checkpoint_id[checkpoint_id] = (
+                self._main_process_torchmp_manager_future.result().Event()
+            )
 
         write_buckets = self.checkpoint_saver.prepare_write_data(
             checkpoint_id, plan.items, planner, plan.storage_data.prefix, bucket_count=self._thread_count

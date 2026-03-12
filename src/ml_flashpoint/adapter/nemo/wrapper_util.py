@@ -18,6 +18,10 @@ from typing import Optional, Union
 
 import torch
 import torch.distributed as dist
+from megatron.core.dist_checkpointing.strategies.fully_parallel import (
+    FullyParallelLoadStrategyWrapper,
+    FullyParallelSaveStrategyWrapper,
+)
 from nemo import lightning as nl
 from nemo.lightning.io.pl import MegatronCheckpointIO
 from nemo.lightning.pytorch import strategies as nl_strategies
@@ -250,6 +254,10 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
         replication_manager=replication_manager,
         checkpoint_loader=checkpoint_loader,
     )
+
+    if use_fully_parallel_wrapper:
+        save_strategy = FullyParallelSaveStrategyWrapper(save_strategy)
+        load_strategy = FullyParallelLoadStrategyWrapper(load_strategy)
 
     ml_flashpoint_checkpoint_io = MLFlashpointCheckpointIO(
         flashpoint_base_path=flashpoint_base_container,

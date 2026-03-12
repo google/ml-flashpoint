@@ -16,6 +16,7 @@ import io
 from typing import Union
 
 from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject
+
 from ml_flashpoint.core.mlf_logging import get_logger
 
 from .buffer_metadata import METADATA_SIZE, BufferMetadataType

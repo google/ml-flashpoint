@@ -20,10 +20,10 @@ import shutil
 import tempfile
 
 import pytest
+from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject
 
 from ml_flashpoint.checkpoint_object_manager.buffer_io import METADATA_SIZE, BufferIO
 from ml_flashpoint.checkpoint_object_manager.buffer_metadata import BufferMetadataType
-from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject
 from ml_flashpoint.core.defaults import CheckpointFormat
 
 

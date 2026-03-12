@@ -67,8 +67,12 @@ class CheckpointObjectManager:
             # Create new
             try:
                 _LOGGER.info("Initializing BufferPool with config: %s", self._pool_config)
-                # Unpack dataclass to dict then unpack dict to kwargs
-                pool = BufferPool(**self._pool_config.__dict__)
+                pool = BufferPool(
+                    pool_dir_path=self._pool_config.pool_dir_path,
+                    rank=self._pool_config.rank,
+                    num_buffers=self._pool_config.num_buffers,
+                    buffer_size=self._pool_config.buffer_size,
+                )
                 CheckpointObjectManager._worker_pool = pool
             except Exception:
                 _LOGGER.exception("Failed to initialize BufferPool")
@@ -208,7 +212,8 @@ class CheckpointObjectManager:
         if not isinstance(buffer_io, BufferIO) or buffer_io.closed:
             _LOGGER.warning("Attempted to close an invalid or already-closed buffer. Ignoring.")
             return
-
+        # TODO: Use a separate BufferIO type to distinguish between pooled and standalone buffers.
+        # This is a temporary workaround to prevent closing pooled buffers.
         if skip_close_if_symlink and os.path.islink(buffer_io.buffer_obj.get_id()):
             _LOGGER.debug("Buffer for object_id='%s' is a symlink. Ignoring.", buffer_io.buffer_obj.get_id())
             return

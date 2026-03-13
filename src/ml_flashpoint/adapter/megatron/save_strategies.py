@@ -141,12 +141,16 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         # 1a. First, initialize the checkpoint. This marks this checkpoint container as "dirty".
         # This must always be the very first operation.
         self._checkpoint_saver.initialize_checkpoint(checkpoint_id)
+        old_storage_writer = self._storage_writer
         # 1b. Re-initialize the StorageWriter to use a new instance per save to avoid hangs from shared state.
         self._storage_writer = MemoryStorageWriter(
             checkpoint_saver=self._checkpoint_saver,
             mp_manager_future=self._storage_writer._main_process_torchmp_manager_future,
             thread_count=self._storage_writer._thread_count,
         )
+        # Reuse existing proxy objects from the manager instead of creating new ones
+        self._storage_writer._write_events_per_checkpoint_id = old_storage_writer._write_events_per_checkpoint_id
+        self._storage_writer._write_results_per_checkpoint_id = old_storage_writer._write_results_per_checkpoint_id
         # 1c. Reset the StorageWriter for this checkpoint version.
         self._storage_writer.reset(checkpoint_id.data)
 
@@ -259,3 +263,9 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
             },
             finalize_fns=finalize_fns,
         )
+
+    def teardown(self) -> None:
+        """Tears down resources used by this strategy, including the StorageWriter and its mp_manager."""
+        if hasattr(self, "_storage_writer") and self._storage_writer is not None:
+            if hasattr(self._storage_writer, "teardown"):
+                self._storage_writer.teardown()

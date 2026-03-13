@@ -160,9 +160,9 @@ cmake.source-dir = "."
 # Tool-specific Configuration for setuptools-scm
 # ===================================================================
 [tool.setuptools_scm]
-# Fallback version to use if git is not available or the directory is not a git repo.
-# This prevents build failures in environments like some CI runners or /tmp clones.
-fallback_version = "0.0.0"
+# Fallback version for local development in non-git environments.
+# The '+' ensures PyPI will reject this version if it's accidentally uploaded.
+fallback_version = "0.0.0+dev.local"
 
 # ===================================================================
 # Tool-specific Configuration for Ruff

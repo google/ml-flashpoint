@@ -40,7 +40,7 @@ from ml_flashpoint.core.checkpoint_loader import DefaultMLFlashpointCheckpointLo
 from ml_flashpoint.core.checkpoint_saver import DEFAULT_INITIAL_BUFFER_SIZE_BYTES, DefaultMLFlashpointCheckpointSaver
 from ml_flashpoint.replication.replication_manager import ReplicationManager
 
-NUM_OF_BUFFERS_PER_OBJECT = 3
+NUM_OF_BUFFERS_PER_OBJECT = 2
 
 
 def wrap_trainer_and_auto_resume_with_mlflashpoint(

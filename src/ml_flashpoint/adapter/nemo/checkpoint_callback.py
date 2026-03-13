@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import logging
-from typing import Any, Union, Optional
+from typing import Any, Optional, Union
 
 import lightning.pytorch as pl
 from lightning.pytorch import callbacks as pl_callbacks

@@ -38,7 +38,7 @@ steps:
         fi
         
         # Strip the 'v' prefix and save for subsequent steps
-        VERSION=$(echo "$TAG_NAME" | sed 's/^v//')
+        VERSION=${TAG_NAME#v}
         echo "$VERSION" > _PYPI_VERSION.txt
         echo "Validated version: $VERSION"
 

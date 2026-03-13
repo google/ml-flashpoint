@@ -388,6 +388,21 @@ class MemoryStorageWriter(StorageWriter, staging.BlockingAsyncStager):
             checkpoint_id,
         )
         self._write_results_per_checkpoint_id.pop(checkpoint_id, None)
+        self._write_events_per_checkpoint_id.pop(checkpoint_id, None)
+
+    @log_execution_time(logger=_LOGGER, name="teardown", level=logging.INFO)
+    def teardown(self) -> None:
+        """Tears down the StorageWriter, including shutting down the torch_mp Manager."""
+        if self._main_process_torchmp_manager_future is not None:
+            try:
+                manager = self._main_process_torchmp_manager_future.result(timeout=1.0)
+                _LOGGER.info("Shutting down torch_mp Manager...")
+                manager.shutdown()
+                _LOGGER.info("Successfully shut down torch_mp Manager.")
+            except Exception as e:
+                _LOGGER.warning("Failed to shutdown torch_mp Manager: %s", e)
+            finally:
+                self._main_process_torchmp_manager_future = None
 
     @classmethod
     @override

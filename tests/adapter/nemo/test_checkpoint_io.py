@@ -784,6 +784,23 @@ class TestMLFlashpointCheckpointIO:
         # Check that NO thread was spawned
         mock_thread_cls.assert_not_called()
 
+    def test_teardown(self, checkpoint_io_components, mocker):
+        """Tests that teardown correctly propagates to the save strategy."""
+        # Given
+        checkpoint_io = checkpoint_io_components["checkpoint_io"]
+        save_strategy = checkpoint_io_components["save_strategy"]
+        fallback_checkpoint_io = checkpoint_io.fallback_checkpoint_io
+
+        mocker.spy(save_strategy, "teardown")
+        mocker.spy(fallback_checkpoint_io, "teardown")
+
+        # When
+        checkpoint_io.teardown()
+
+        # Then
+        save_strategy.teardown.assert_called_once()
+        fallback_checkpoint_io.teardown.assert_called_once()
+
 
 class TestMLFlashpointAsyncFinalizableCheckpointIO:
     """Parent test class for MLFlashpointAsyncFinalizableCheckpointIO."""
@@ -1108,6 +1125,34 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
 
             # Then
             self.mock_logger.warning.assert_not_called()
+
+        def test_teardown_propagates_to_mlf_checkpoint_io(self, mocker):
+            """Tests that teardown propagates the teardown call to the underlying MLFlashpointCheckpointIO."""
+            # Given
+            mock_checkpoint_io = mocker.Mock(
+                spec=MLFlashpointCheckpointIO,
+                trainer=mocker.MagicMock(),
+                save_strategy=mocker.MagicMock(),
+                load_strategy=mocker.MagicMock(),
+                chkpt_obj_manager=mocker.MagicMock(),
+                fallback_checkpoint_io=mocker.MagicMock(),
+                async_save=True,
+                flashpoint_base_dir="/mlf/checkpoints",
+            )
+            mock_checkpoint_io.trainer.global_rank = 0
+            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_mlf_queue = mocker.MagicMock()
+            mock_alt_queue = mocker.MagicMock()
+            self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
+            instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
+            mock_mlf_queue.get_num_unfinalized_calls.return_value = 0
+            mock_alt_queue.get_num_unfinalized_calls.return_value = 0
+
+            # When
+            instance.teardown()
+
+            # Then
+            mock_checkpoint_io.teardown.assert_called_once()
 
         def test_teardown_with_pending_mlf_saves(self, mocker):
             """Tests that a warning is logged when there are pending MLF saves."""

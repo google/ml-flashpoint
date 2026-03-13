@@ -14,7 +14,7 @@
 
 import concurrent.futures
 import threading
-from typing import Union
+from typing import Optional, Union
 
 import torch
 import torch.distributed as dist
@@ -46,7 +46,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
     default_auto_resume: nl.AutoResume = None,
     always_save_context: bool = False,
     write_files_per_rank: int = 1,
-    initial_write_buffer_size_bytes: int = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
+    initial_write_buffer_size_bytes: Optional[int] = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
     use_optimized_save: bool = True,
     use_cached_ckpt_structure: bool = False,
 ) -> MLFlashpointAutoResume:
@@ -65,7 +65,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
         always_save_context: Whether to always save the context. Defaults to `False`.
         write_files_per_rank: Optional. The number of files each rank writes to for checkpoint data. Defaults to 1.
         initial_write_buffer_size_bytes: Optional. The initial size of the buffer for writing checkpoint data
-            in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`.
+            in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`, even if set to None explicitly.
         use_cached_ckpt_structure: Whether to reuse the checkpoint structure (plan) from the previous save.
             Defaults to False.
     Returns:
@@ -121,7 +121,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
     checkpoint_loader: DefaultMLFlashpointCheckpointLoader,
     always_save_context: bool = False,
     write_files_per_rank: int = 1,
-    initial_write_buffer_size_bytes: int = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
+    initial_write_buffer_size_bytes: Optional[int] = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
     use_optimized_save: bool = True,
     use_cached_ckpt_structure: bool = False,
 ):
@@ -150,7 +150,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
         always_save_context: Whether to always save the context. Defaults to `False`.
         write_files_per_rank: Optional. The number of files each rank writes to for checkpoint data. Defaults to 1.
         initial_write_buffer_size_bytes: Optional. The initial size of the buffer for writing checkpoint data
-            in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`.
+            in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`, even if set to None explicitly.
         use_cached_ckpt_structure: Whether to reuse the checkpoint structure (plan) from the previous save.
             Defaults to False.
 
@@ -169,6 +169,8 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
         raise ValueError("The 'replication_manager' argument cannot be None.")
     if write_files_per_rank < 1:
         raise ValueError(f"write_files_per_rank must be >= 1, got {write_files_per_rank}.")
+    if initial_write_buffer_size_bytes is None:
+        initial_write_buffer_size_bytes = DEFAULT_INITIAL_BUFFER_SIZE_BYTES
     if initial_write_buffer_size_bytes <= 0:
         raise ValueError(f"initial_write_buffer_size_bytes must be > 0, got {initial_write_buffer_size_bytes}.")
 

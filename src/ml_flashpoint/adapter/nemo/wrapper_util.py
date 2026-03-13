@@ -63,7 +63,8 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
         async_save: Whether to enable asynchronous saving for checkpoints.
         default_auto_resume: The default AutoResume configuration to inherit from.
         always_save_context: Whether to always save the context. Defaults to `False`.
-        write_files_per_rank: Optional. The number of files each rank writes to for checkpoint data. Defaults to 1.
+        write_files_per_rank: Optional. The number of files each rank writes to for checkpoint data.
+            Checkpoint data will be split roughly evenly among the files (per rank). Defaults to 1.
         initial_write_buffer_size_bytes: Optional. The initial size of the buffer for writing checkpoint data
             in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`.
         use_cached_ckpt_structure: Whether to reuse the checkpoint structure (plan) from the previous save.
@@ -148,7 +149,8 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
         async_save: Whether to enable asynchronous saving.
         checkpoint_loader: The checkpoint loader to use.
         always_save_context: Whether to always save the context. Defaults to `False`.
-        write_files_per_rank: Optional. The number of files each rank writes to for checkpoint data. Defaults to 1.
+        write_files_per_rank: Optional. The number of files each rank writes to for checkpoint data.
+            Checkpoint data will be split roughly evenly among the files (per rank). Defaults to 1.
         initial_write_buffer_size_bytes: Optional. The initial size of the buffer for writing checkpoint data
             in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`.
         use_cached_ckpt_structure: Whether to reuse the checkpoint structure (plan) from the previous save.

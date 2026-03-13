@@ -26,11 +26,12 @@ steps:
           exit 1
         fi
         
-        # Regex for vX.Y.Z (plus optional suffixes like -alpha, -rc1)
-        if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; then
-          echo "Error: Invalid tag format '$TAG_NAME'. Expected vX.Y.Z[-suffix]."
+        # Regex for vX.Y.Z (plus optional suffixes starting with '-')
+        if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$ ]]; then
+          echo "Error: Invalid tag format '$TAG_NAME'. Expected vX.Y.Z or vX.Y.Z-suffix"
           exit 1
         fi
+
         
         if [[ "$TAG_NAME" == "v0.0.0"* ]]; then
           echo "Error: Cannot publish fallback version '$TAG_NAME'."
@@ -93,7 +94,7 @@ steps:
         rm dist/*-linux_*.whl
     waitFor: ['build-sdist']
 
-  # 3. Upload to internal Artifact Registry (AR) for OSS Exit Gate.
+  # 4. Upload to internal Artifact Registry (AR) for OSS Exit Gate.
   - name: 'python:3.10'
     id: 'upload-to-ar'
     entrypoint: 'bash'
@@ -104,7 +105,7 @@ steps:
         twine upload --repository-url https://us-python.pkg.dev/oss-exit-gate-prod/${_PROJECT_NAME}--pypi dist/*
     waitFor: ['build-wheels']
 
-  # 4. Create and upload the manifest to GCS to trigger the Exit Gate publication.
+  # 5. Create and upload the manifest to GCS to trigger the Exit Gate publication.
   # The presence of this file in the specific GCS bucket triggers the verification and publishing process.
   - name: 'gcr.io/cloud-builders/gcloud'
     id: 'trigger-exit-gate'

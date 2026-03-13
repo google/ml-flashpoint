@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import logging
-from typing import Any, Optional, Union
+from typing import Any, Union, Optional
 
 import lightning.pytorch as pl
 from lightning.pytorch import callbacks as pl_callbacks
@@ -64,8 +64,7 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
                 job run (session).
                 Checkpoint versions will be written to child containers within this base. This base container should be
                 the same one that is used in :class:`MLFlashpointAutoResume`, and must be unique per job run.
-            every_n_steps (int): The step frequency to checkpoint. 1 is a typical, recommended value.
-                Must be a positive integer.
+            every_n_steps (int): The step frequency to checkpoint. Must be a positive integer.
             skip_every_n_steps (int, optional): The step frequency to skip checkpointing. This is suggested to be set to
                 the interval used for long-term checkpointing by the alternative strategy. Defaults to 0 (no skipping).
             enabled (bool): Whether this callback should be enabled. Defaults to True.

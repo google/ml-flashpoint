@@ -548,7 +548,7 @@ class TestReadData:
     ) -> None:
         stream, storage_data, stream_size = checkpoint_file
         checkpoint_obj_id = CheckpointObjectId(str(Path(checkpoint_directory) / "checkpoint.data"))
-        with chkpt_object_manager.create_buffer(checkpoint_obj_id, buffer_size=stream_size) as f:
+        with chkpt_object_manager.acquire_buffer(checkpoint_obj_id, buffer_size=stream_size) as f:
             f.write(stream.read())
         stream.seek(0)
 
@@ -597,7 +597,7 @@ class TestReadData:
         # Arrange
         stream, storage_data, stream_size = checkpoint_file
         checkpoint_obj_id = CheckpointObjectId(str(Path(checkpoint_directory) / "checkpoint.data"))
-        with chkpt_object_manager.create_buffer(checkpoint_obj_id, buffer_size=stream_size) as f:
+        with chkpt_object_manager.acquire_buffer(checkpoint_obj_id, buffer_size=stream_size) as f:
             f.write(stream.read())
         stream.seek(0)
 
@@ -640,7 +640,7 @@ class TestReadData:
         # Arrange
         stream, storage_data, stream_size = checkpoint_file
         checkpoint_obj_id = CheckpointObjectId(str(Path(checkpoint_directory) / "checkpoint.data"))
-        with chkpt_object_manager.create_buffer(checkpoint_obj_id, buffer_size=stream_size) as f:
+        with chkpt_object_manager.acquire_buffer(checkpoint_obj_id, buffer_size=stream_size) as f:
             f.write(stream.read())
 
         # Setup for the tensor request
@@ -703,7 +703,7 @@ class TestReadData:
         # Arrange
         stream, storage_data, stream_size = checkpoint_file
         checkpoint_obj_id = CheckpointObjectId(str(Path(checkpoint_directory) / "checkpoint.data"))
-        with chkpt_object_manager.create_buffer(checkpoint_obj_id, buffer_size=stream_size) as f:
+        with chkpt_object_manager.acquire_buffer(checkpoint_obj_id, buffer_size=stream_size) as f:
             f.write(stream.read())
 
         req = ReadItem(

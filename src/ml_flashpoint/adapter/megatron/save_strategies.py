@@ -107,6 +107,11 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         self._validated_cache_reuse: bool = False
         self._use_cached_ckpt_structure: bool = use_cached_ckpt_structure
 
+    @property
+    def thread_count(self) -> int:
+        """Returns the number of threads used by the storage writer."""
+        return self._storage_writer._thread_count
+
     @override
     def can_handle_sharded_objects(self) -> bool:
         # Not currently used, but in case it is, ensure this strategy is used for ShardedObjects as well.

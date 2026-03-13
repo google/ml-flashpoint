@@ -344,6 +344,7 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
         if _is_ml_flashpoint_checkpoint(self.mlf_checkpoint_io.flashpoint_base_dir, path):
             queue_type = "ml_flashpoint"
             corresponding_async_calls_queue = self._mlf_async_calls_queue
+
         else:
             queue_type = "alternative"
             corresponding_async_calls_queue = self._alt_async_calls_queue
@@ -399,6 +400,21 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
         ):
             # Can't do finalization now because some ranks might be lost
             _LOGGER.warning("Some async checkpoint saves might be not finalized properly.")
+
+        # Teardown BufferPool in the worker
+        # We schedule a task to teardown.
+        if hasattr(self, "_mlf_async_calls_queue") and self._mlf_async_calls_queue:
+            try:
+                self._mlf_async_calls_queue.schedule_async_request(
+                    MegatronAsyncRequest(
+                        async_fn=self.mlf_checkpoint_io.chkpt_obj_manager.teardown_pool,
+                        async_fn_args=(),
+                        finalize_fns=[],
+                    )
+                )
+            except Exception:
+                # Queue might be closed already
+                pass
 
         if hasattr(self._mlf_async_calls_queue, "close"):
             self._mlf_async_calls_queue.close()

@@ -271,10 +271,13 @@ class MLFlashpointCheckpointIO(AsyncCompatibleCheckpointIO):
         if hasattr(super(), "teardown"):
             super().teardown()
 
-        if hasattr(self, "save_strategy") and hasattr(self.save_strategy, "teardown"):
+        if hasattr(self, "save_strategy") and self.save_strategy and hasattr(self.save_strategy, "teardown"):
             self.save_strategy.teardown()
-
-        if hasattr(self, "fallback_checkpoint_io") and hasattr(self.fallback_checkpoint_io, "teardown"):
+        if (
+            hasattr(self, "fallback_checkpoint_io")
+            and self.fallback_checkpoint_io
+            and hasattr(self.fallback_checkpoint_io, "teardown")
+        ):
             self.fallback_checkpoint_io.teardown()
 
 
@@ -406,7 +409,11 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
         """Warns if there are any pending checkpoint saves and cleans up resources."""
         super().teardown()
 
-        if hasattr(self, "mlf_checkpoint_io") and hasattr(self.mlf_checkpoint_io, "teardown"):
+        if (
+            hasattr(self, "mlf_checkpoint_io")
+            and self.mlf_checkpoint_io
+            and hasattr(self.mlf_checkpoint_io, "teardown")
+        ):
             self.mlf_checkpoint_io.teardown()
 
         if (

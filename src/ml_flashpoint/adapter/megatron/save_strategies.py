@@ -266,6 +266,9 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
 
     def teardown(self) -> None:
         """Tears down resources used by this strategy, including the StorageWriter and its mp_manager."""
-        if hasattr(self, "_storage_writer") and self._storage_writer is not None:
-            if hasattr(self._storage_writer, "teardown"):
-                self._storage_writer.teardown()
+        if (
+            hasattr(self, "_storage_writer")
+            and self._storage_writer is not None
+            and hasattr(self._storage_writer, "teardown")
+        ):
+            self._storage_writer.teardown()

@@ -7,7 +7,7 @@
 1. Ensure you have sufficient space on your base container mount.
 1. If you have enough memory, but are running out of buffer space during writes, you can:
     1. Increase the default initial buffer size via `initial_write_buffer_size_bytes` in the `wrap` API you are using (the default is 16 GB).
-    1. Increase the write thread count, so that each rank writes to multiple buffers, effectively cutting the size of each buffer proportionally, via `write_thread_count` in the `wrap` API you are using (the default is 1).
+    1. Increase the number of files per rank, so that each rank writes to multiple buffers, effectively cutting the size of each buffer proportionally, via `write_files_per_rank` in the `wrap` API you are using (the default is 1).
 
 ### How can I clean up ML Flashpoint checkpoints after job completion?
 

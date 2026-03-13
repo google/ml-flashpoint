@@ -40,8 +40,8 @@ steps:
         
         # Strip the 'v' prefix and save for subsequent steps
         VERSION=${TAG_NAME#v}
-        echo "$VERSION" > _PYPI_VERSION.txt
-        echo "Validated version: $VERSION"
+        echo "$$VERSION" > _PYPI_VERSION.txt
+        echo "Validated version: $$VERSION"
 
   # 2. Build the source distribution (sdist).
   - name: 'python:3.10'

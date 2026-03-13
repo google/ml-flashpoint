@@ -53,7 +53,7 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
         self,
         checkpoint_base_container: Union[str, CheckpointContainerId],
         every_n_steps: int,
-        skip_every_n_steps: Optional[int] = 0,
+        skip_every_n_steps: Optional[int] = None,
         enabled: bool = True,
     ):
         """

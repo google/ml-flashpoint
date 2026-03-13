@@ -265,7 +265,7 @@ class MLFlashpointCheckpointIO(AsyncCompatibleCheckpointIO):
         else:
             self.fallback_checkpoint_io.remove_checkpoint(path)
 
-    @log_execution_time(logger=_LOGGER, name="MLFlashpointCheckpointIO.teardown", level=logging.INFO)
+    @log_execution_time(logger=_LOGGER, name="MLFlashpointCheckpointIO.teardown")
     def teardown(self) -> None:
         """Tears down the CheckpointIO instance and its strategies/fallbacks."""
         if hasattr(super(), "teardown"):

@@ -13,21 +13,52 @@
 # limitations under the License.
 
 steps:
-  # 1. Build the source distribution (sdist).
+  # 1. Validate the tag and normalize the version.
+  # This ensures the build only proceeds for properly formatted release tags (vX.Y.Z).
+  # The normalized version (without 'v') is saved to a file for subsequent steps.
+  - name: 'bash'
+    id: 'validate-tag'
+    args:
+      - '-c'
+      - |
+        if [ -z "${TAG_NAME}" ]; then
+          echo "Error: TAG_NAME is not set. This pipeline is only for tag-based releases."
+          exit 1
+        fi
+        
+        # Regex for vX.Y.Z (plus optional suffixes starting with '-')
+        if [[ ! "${TAG_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$ ]]; then
+          echo "Error: Invalid tag format '${TAG_NAME}'. Expected vX.Y.Z or vX.Y.Z-suffix"
+          exit 1
+        fi
+        
+        if [[ "${TAG_NAME}" == "v0.0.0"* ]]; then
+          echo "Error: Cannot publish fallback version '${TAG_NAME}'."
+          exit 1
+        fi
+        
+        # Strip the 'v' prefix using sed
+        VERSION=$$(echo "${TAG_NAME}" | sed 's/^v//')
+        echo "$$VERSION" > _PYPI_VERSION.txt
+        echo "Validated version: $$VERSION"
+
+  # 2. Build the source distribution (sdist).
   - name: 'python:3.10'
     id: 'build-sdist'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        if [ -z "$TAG_NAME" ]; then
-          echo "Error: TAG_NAME is not set. This pipeline is only for tag-based releases."
-          exit 1
-        fi
+        # Explicitly setting the version to use, so that it doesn't use local versions derived from Git
+        # when running for a tag that is behind the latest commit on main.
+        export SETUPTOOLS_SCM_PRETEND_VERSION=$(cat _PYPI_VERSION.txt)
+        echo "Building sdist for version: $${SETUPTOOLS_SCM_PRETEND_VERSION}"
+
         pip install build
         python -m build --sdist
+    waitFor: ['validate-tag']
 
-  # 2. Build the manylinux wheels.
+  # 3. Build the manylinux wheels.
   # We use the manylinux image directly to avoid the "reserved" docker.sock issue.
   # This image is pre-loaded with Python versions and build tools.
   - name: '$_MANYLINUX_IMAGE'
@@ -38,9 +69,17 @@ steps:
       - |
         # Use Python 3.10 as the build controller (it will produce the abi3 wheel)
         PYBIN="/opt/python/cp310-cp310/bin"
+        export SETUPTOOLS_SCM_PRETEND_VERSION=$(cat _PYPI_VERSION.txt)
 
         # Install build dependencies
-        $$PYBIN/pip install build
+        $$PYBIN/pip install build setuptools-scm
+
+        # Validation: Ensure scikit-build-core is actually using our pretend version
+        DETECTED_VERSION=$$($$PYBIN/python -c "import setuptools_scm; print(setuptools_scm.get_version())")
+        if [ "$$DETECTED_VERSION" != "$$SETUPTOOLS_SCM_PRETEND_VERSION" ]; then
+          echo "Error: Version mismatch! Expected $$SETUPTOOLS_SCM_PRETEND_VERSION but detected $$DETECTED_VERSION."
+          exit 1
+        fi
 
         echo "Building wheel (scikit-build-core will handle abi3 and C++ extension compilation)..."
         SKBUILD_CMAKE_ARGS="-DBUILD_TESTING=OFF" $$PYBIN/python -m build --wheel
@@ -54,8 +93,7 @@ steps:
         rm dist/*-linux_*.whl
     waitFor: ['build-sdist']
 
-
-  # 3. Upload to internal Artifact Registry (AR) for OSS Exit Gate.
+  # 4. Upload to internal Artifact Registry (AR) for OSS Exit Gate.
   - name: 'python:3.10'
     id: 'upload-to-ar'
     entrypoint: 'bash'
@@ -66,7 +104,7 @@ steps:
         twine upload --repository-url https://us-python.pkg.dev/oss-exit-gate-prod/${_PROJECT_NAME}--pypi dist/*
     waitFor: ['build-wheels']
 
-  # 4. Create and upload the manifest to GCS to trigger the Exit Gate publication.
+  # 5. Create and upload the manifest to GCS to trigger the Exit Gate publication.
   # The presence of this file in the specific GCS bucket triggers the verification and publishing process.
   - name: 'gcr.io/cloud-builders/gcloud'
     id: 'trigger-exit-gate'

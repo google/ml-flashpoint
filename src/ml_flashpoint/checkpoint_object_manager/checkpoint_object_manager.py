@@ -14,12 +14,16 @@
 
 import os
 import shutil
+import threading
+from typing import ClassVar, Optional
 from typing import Optional
 
 from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject
 
 from ml_flashpoint.checkpoint_object_manager.buffer_io import BufferIO
 from ml_flashpoint.checkpoint_object_manager.buffer_metadata import METADATA_SIZE
+from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject
+from ml_flashpoint.core.buffer_pool import BufferPool, BufferPoolConfig
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.mlf_logging import get_logger
 
@@ -33,60 +37,140 @@ class CheckpointObjectManager:
     awareness of buffers (within a rank).
     """
 
-    def create_buffer(self, object_id: CheckpointObjectId, buffer_size: int, overwrite: bool = False) -> "BufferIO":
-        """Creates a new underlying C++ BufferObject and wraps it in a BufferIO stream.
+    # Class-level registry for BufferPool in the worker process.
+    _worker_pool: ClassVar[Optional[BufferPool]] = None
+    _worker_pool_lock: ClassVar[threading.Lock] = threading.Lock()
 
-        This method handles the instantiation of the low-level buffer and its
-        registration within the manager's tracking map.
+    def __init__(self, pool_config: Optional[BufferPoolConfig] = None):
+        """Initializes the CheckpointObjectManager.
 
         Args:
-            object_id: A unique identifier for the new buffer object.
+            pool_config: Optional configuration for the BufferPool.
+        """
+        self._pool_config = pool_config
+
+    def _get_or_create_buffer_pool(self) -> Optional[BufferPool]:
+        """Lazily initializes and returns the BufferPool instance.
+
+        Check the class-level registry first to reuse existing pools in this process.
+        """
+        # 1. Fast path: check class var directly
+        if CheckpointObjectManager._worker_pool:
+            return CheckpointObjectManager._worker_pool
+
+        if not self._pool_config:
+            return None
+
+        # 2. Registry lookup / Creation
+        with CheckpointObjectManager._worker_pool_lock:
+            if CheckpointObjectManager._worker_pool:
+                _LOGGER.debug("Reusing existing BufferPool from worker registry.")
+                return CheckpointObjectManager._worker_pool
+
+            # Create new
+            try:
+                _LOGGER.info("Initializing BufferPool with config: %s", self._pool_config)
+                pool = BufferPool(
+                    pool_dir_path=self._pool_config.pool_dir_path,
+                    rank=self._pool_config.rank,
+                    num_buffers=self._pool_config.num_buffers,
+                    buffer_size=self._pool_config.buffer_size,
+                )
+                CheckpointObjectManager._worker_pool = pool
+            except Exception:
+                _LOGGER.exception("Failed to initialize BufferPool")
+                pass
+
+        return CheckpointObjectManager._worker_pool
+
+    def teardown_pool(self):
+        """Teardown the BufferPool if it exists and remove from registry."""
+        pool_to_teardown = None
+
+        with CheckpointObjectManager._worker_pool_lock:
+            if CheckpointObjectManager._worker_pool:
+                pool_to_teardown = CheckpointObjectManager._worker_pool
+                CheckpointObjectManager._worker_pool = None
+
+        if pool_to_teardown:
+            try:
+                pool_to_teardown.teardown()
+            except Exception as e:
+                _LOGGER.debug("Failed to teardown BufferPool: %s", e)
+
+    def acquire_buffer(self, object_id: CheckpointObjectId, buffer_size: int, overwrite: bool = True) -> "BufferIO":
+        """Acquires a buffer, preferring the BufferPool if available.
+
+        This method attempts to acquire a buffer from the rank level BufferPool. If the pool
+        is not initialized or is exhausted, it falls back to creating a standalone
+        BufferObject directly at the `object_id` path.
+
+        Note:
+            If a buffer is acquired from the pool, its actual capacity may be smaller than
+            the requested `buffer_size` if a smaller buffer is reused. But resize will happen
+            when writing to the buffer.
+
+        Args:
+            object_id: A unique identifier (logical path) for the new buffer object.
             buffer_size: The desired size of the buffer in bytes.
-            overwrite: If True, allows overwriting an existing object. Defaults to False.
+            overwrite: If True, allows overwriting an existing object. Defaults to True.
 
         Returns:
-            A new BufferIO instance wrapping the created buffer on success.
+            A BufferIO instance.
 
         Raises:
             ValueError: If the provided buffer_size is not a positive integer.
-            RuntimeError: If the underlying C++ BufferObject or the BufferIO wrapper
-                        fails to initialize for any reason (e.g., file system errors).
+            RuntimeError: If the buffer cannot be created or acquired.
         """
         # Validate the buffer size argument.
         if buffer_size <= 0:
-            _LOGGER.error("Failed to create buffer: buffer_size must be a positive integer, but got %d.", buffer_size)
+            _LOGGER.error("Failed to acquire buffer: buffer_size must be a positive integer, but got %d.", buffer_size)
             raise ValueError("Buffer size must be a positive integer.")
 
         buffer_size += METADATA_SIZE
-        _LOGGER.info(
-            "Creating a new buffer for object_id='%s' with size=%d bytes (includes additional overhead), "
-            + "overwrite=%s.",
+        _LOGGER.debug(
+            "Acquiring buffer for object_id='%s' with size=%d bytes (includes overhead), overwrite=%s.",
             object_id,
             buffer_size,
             overwrite,
         )
 
+        # 1. Try to acquire from BufferPool
         try:
-            # Instantiate the underlying C++ BufferObject.
-            # This is a critical step where interaction with C++ code happens.
-            _LOGGER.debug("Instantiating C++ BufferObject for '%s'.", object_id)
-            buffer_obj = BufferObject(str(object_id), buffer_size, overwrite)
+            # Ensure parent dir exists for the link
+            os.makedirs(os.path.dirname(str(object_id)), exist_ok=True)
 
-            # Wrap the C++ object in our Python BufferIO file-like object.
-            _LOGGER.debug("Wrapping C++ object in BufferIO for '%s'.", object_id)
-            buffer_io = BufferIO(buffer_obj)
+            # Remove existing link/file if overwrite is True
+            if os.path.exists(str(object_id)):
+                if overwrite:
+                    self.delete_object(object_id)
+                else:
+                    raise FileExistsError(f"File {object_id} already exists and overwrite=False")
+
+            pool = self._get_or_create_buffer_pool()
+            if pool:
+                # Pool manages the physical creation/resizing AND the logical link (symlink) creation.
+                buffer_io = pool.acquire(associated_symlink=str(object_id))
+
+                _LOGGER.debug("Acquired buffer for '%s'", object_id)
+
+                return buffer_io
+            else:
+                _LOGGER.debug(
+                    "BufferPool not configured or validation failed. Falling back to standalone buffer creation."
+                )
+        except RuntimeError:
+            _LOGGER.debug("BufferPool exhausted. Falling back to standalone buffer creation.")
+
+        # 2. Fallback: Create a standalone BufferObject
+        try:
+            _LOGGER.debug("Instantiating standalone C++ BufferObject for '%s'.", object_id)
+            buffer_obj = BufferObject(str(object_id), buffer_size, overwrite)
+            return BufferIO(buffer_obj)
 
         except Exception as e:
-            # This block catches any error during the C++ object creation or the
-            # BufferIO wrapper initialization (e.g., from pybind11 or BufferIO's __init__).
-            _LOGGER.exception("An unexpected error occurred during buffer creation for object_id='%s'", object_id)
-            # Re-raise it as a more generic RuntimeError to signal a fundamental
-            # failure in the creation process.
-            raise RuntimeError(f"Failed to create and wrap buffer for '{object_id}'") from e
-
-        _LOGGER.debug("Successfully created and wrapped buffer for '%s'.", object_id)
-
-        return buffer_io
+            _LOGGER.exception("Failed to create buffer for object_id='%s'", object_id)
+            raise RuntimeError(f"Failed to create buffer for '{object_id}'") from e
 
     def get_buffer(
         self,
@@ -114,7 +198,7 @@ class CheckpointObjectManager:
             _LOGGER.exception("Could not open buffer '%s'. Returning None.", object_id)
             return None
 
-    def close_buffer(self, buffer_io: BufferIO, truncate: bool = True) -> None:
+    def close_buffer(self, buffer_io: BufferIO, skip_close_if_symlink: bool = False, truncate: bool = True) -> None:
         """Closes the provided BufferIO object.
 
         This is a helper method that directly calls the .close() method on the
@@ -122,6 +206,7 @@ class CheckpointObjectManager:
 
         Args:
             buffer_io: The BufferIO instance to close.
+            skip_close_if_symlink: If True, the buffer will not be closed if it is a symlink.
             truncate: Passed to the buffer's close() method.
 
         Raises:
@@ -129,6 +214,11 @@ class CheckpointObjectManager:
         """
         if not isinstance(buffer_io, BufferIO) or buffer_io.closed:
             _LOGGER.warning("Attempted to close an invalid or already-closed buffer. Ignoring.")
+            return
+        # TODO: Use a separate BufferIO type to distinguish between pooled and standalone buffers.
+        # This is a temporary workaround to prevent closing pooled buffers.
+        if skip_close_if_symlink and os.path.islink(buffer_io.buffer_obj.get_id()):
+            _LOGGER.debug("Buffer for object_id='%s' is a symlink. Ignoring.", buffer_io.buffer_obj.get_id())
             return
 
         try:
@@ -166,4 +256,25 @@ class CheckpointObjectManager:
             # This catches filesystem errors (e.g., permissions) during deletion.
             _LOGGER.exception("Error deleting container directory '%s'", container_id)
             # Re-raise to notify the caller that the deletion failed.
+            raise
+
+    def delete_object(self, object_id: CheckpointObjectId) -> None:
+        """Deletes a checkpoint object (file or symlink) from the filesystem.
+
+        Args:
+            object_id: The unique identifier (path) of the object to be deleted.
+
+        Raises:
+            OSError: If deletion fails due to filesystem errors.
+        """
+        object_path = str(object_id)
+        _LOGGER.debug("Attempting to delete object: '%s'", object_path)
+        try:
+            if os.path.lexists(object_path):
+                os.remove(object_path)
+                _LOGGER.debug("Successfully deleted object: '%s'", object_path)
+            else:
+                _LOGGER.warning("Object '%s' does not exist. Nothing to delete.", object_path)
+        except OSError:
+            _LOGGER.exception("Error deleting object '%s'", object_path)
             raise

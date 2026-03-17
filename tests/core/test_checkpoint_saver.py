@@ -99,8 +99,22 @@ class TestDefaultMLFlashpointCheckpointSaver:
         shutil.rmtree(_temp_dir)
 
     @pytest.fixture
-    def chkpt_object_manager(self):
-        return CheckpointObjectManager()
+    def chkpt_object_manager(self, temp_dir_path):
+        from ml_flashpoint.core.buffer_pool import BufferPoolConfig
+
+        # Initialize BufferPool for tests
+        pool_dir = os.path.join(temp_dir_path, ".buffer_pool")
+
+        # Reset class-level pool
+        CheckpointObjectManager._worker_pool = None
+
+        config = BufferPoolConfig(pool_dir_path=pool_dir, rank=0, num_buffers=3, buffer_size=1024 * 1024)
+        manager = CheckpointObjectManager(pool_config=config)
+        yield manager
+
+        # Teardown
+        manager.teardown_pool()
+        CheckpointObjectManager._worker_pool = None
 
     @pytest.fixture
     def replication_manager(self, mocker):
@@ -1438,7 +1452,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
             )
 
             # Mock the checkpoint object manager to raise an IOError during buffer creation
-            mocker.patch.object(saver._chkpt_obj_manager, "create_buffer", side_effect=IOError("Test IOError"))
+            mocker.patch.object(saver._chkpt_obj_manager, "acquire_buffer", side_effect=IOError("Test IOError"))
             with pytest.raises(IOError):
                 saver.write_data(
                     checkpoint_id,
@@ -2143,7 +2157,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
 
         # Create a real file using the manager to ensure proper format
         os.makedirs(os.path.dirname(object_id.data), exist_ok=True)
-        with chkpt_object_manager.create_buffer(object_id, 1024) as f:
+        with chkpt_object_manager.acquire_buffer(object_id, 1024) as f:
             f.write(b"test_async_replicate_object data")
 
         expected_futures = [concurrent.futures.Future(), concurrent.futures.Future(), concurrent.futures.Future()]

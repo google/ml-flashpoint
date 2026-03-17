@@ -132,6 +132,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
             initial_write_buffer_size_bytes=DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
             use_optimized_save=True,
             use_cached_ckpt_structure=False,
+            use_fully_parallel_wrapper=False,
         )
 
         # 3. Result is correct type and has correct attributes
@@ -346,6 +347,58 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         mock_wrap_trainer.assert_called_once()
         _, kwargs = mock_wrap_trainer.call_args
         assert kwargs["use_cached_ckpt_structure"] is False
+
+    @pytest.mark.parametrize("use_fully_parallel_wrapper", [True, False])
+    def test_use_fully_parallel_wrapper_forwarding(self, mocker, use_fully_parallel_wrapper):
+        """Tests that use_fully_parallel_wrapper is forwarded correctly."""
+        # Given
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.ReplicationManager")
+        mock_wrap_trainer = mocker.patch(
+            "ml_flashpoint.adapter.nemo.wrapper_util.wrap_trainer_checkpoint_io_with_mlflashpoint"
+        )
+        trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.global_rank = 0
+        flashpoint_base_container = "/tmp/test_container"
+        default_auto_resume = nl.AutoResume()
+
+        # When
+        wrap_trainer_and_auto_resume_with_mlflashpoint(
+            trainer,
+            flashpoint_base_container,
+            async_save=True,
+            default_auto_resume=default_auto_resume,
+            use_fully_parallel_wrapper=use_fully_parallel_wrapper,
+        )
+
+        # Then
+        mock_wrap_trainer.assert_called_once()
+        _, kwargs = mock_wrap_trainer.call_args
+        assert kwargs["use_fully_parallel_wrapper"] is use_fully_parallel_wrapper
+
+    def test_use_fully_parallel_wrapper_default_value(self, mocker):
+        """Tests that use_fully_parallel_wrapper defaults to False."""
+        # Given
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.ReplicationManager")
+        mock_wrap_trainer = mocker.patch(
+            "ml_flashpoint.adapter.nemo.wrapper_util.wrap_trainer_checkpoint_io_with_mlflashpoint"
+        )
+        trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.global_rank = 0
+        flashpoint_base_container = "/tmp/test_container"
+        default_auto_resume = nl.AutoResume()
+
+        # When
+        wrap_trainer_and_auto_resume_with_mlflashpoint(
+            trainer,
+            flashpoint_base_container,
+            async_save=True,
+            default_auto_resume=default_auto_resume,
+        )
+
+        # Then
+        mock_wrap_trainer.assert_called_once()
+        _, kwargs = mock_wrap_trainer.call_args
+        assert kwargs["use_fully_parallel_wrapper"] is False
 
 
 class TestWrapTrainerCheckpointIOWithMLFlashpoint:

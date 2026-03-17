@@ -16,9 +16,6 @@ import os
 import shutil
 import threading
 from typing import ClassVar, Optional
-from typing import Optional
-
-from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject
 
 from ml_flashpoint.checkpoint_object_manager.buffer_io import BufferIO
 from ml_flashpoint.checkpoint_object_manager.buffer_metadata import METADATA_SIZE

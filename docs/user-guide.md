@@ -151,8 +151,14 @@ checkpointer = wrap_rl_components_with_mlflashpoint(
     policy=policy,
     # Some tmpfs path for this job like /tmp/mlf/job-12345
     flashpoint_base_container=_get_my_mlf_base_path(),
+checkpointer = wrap_rl_components_with_mlflashpoint(
+    checkpointer=checkpointer,
+    policy=policy,
+    # Some tmpfs path for this job like /tmp/mlf/job-12345
+    flashpoint_base_container=_get_my_mlf_base_path(),
     standard_save_period=1000, # Dictates when standard saves execute
     save_strategy=flashpoint_save_strategy,
+    checkpoint_loader=MLFlashpointCheckpointLoader(...), # Add this line
 )
 
 # 3. Supply the wrapper backwards as if it were the standard checkpointer

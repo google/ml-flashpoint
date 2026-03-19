@@ -173,7 +173,8 @@ def test_mlf_save_period_invokes_mlflashpoint_save(mocker, mlf_checkpoint_manage
     mock_base_checkpointer.init_tmp_checkpoint.assert_not_called()
 
     # Check that os.makedirs was called for the new path
-    expected_path = os.path.join("/test-mlf-checkpoints", f"step-{step}_ckpt")
+    # Check that os.makedirs was called for the new path
+    expected_path = os.path.join("/test-mlf", f"step-{step}_ckpt")
     mock_makedirs.assert_called_with(expected_path, exist_ok=True)
     assert returned_path == expected_path
 

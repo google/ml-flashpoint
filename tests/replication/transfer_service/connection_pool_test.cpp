@@ -47,7 +47,8 @@ class ConnectionPoolTest : public ::testing::Test {
         if (fd == -1) {
           break;
         }
-        close(fd);
+        std::lock_guard<std::mutex> lock(accepted_fds_mutex_);
+        accepted_fds_.push_back(fd);
       }
     });
   }
@@ -56,33 +57,139 @@ class ConnectionPoolTest : public ::testing::Test {
     shutdown(listen_fd_, SHUT_RDWR);
     close(listen_fd_);
     accept_thread_.join();
+    std::lock_guard<std::mutex> lock(accepted_fds_mutex_);
+    for (int fd : accepted_fds_) {
+      close(fd);
+    }
+    accepted_fds_.clear();
   }
 
   int port_ = 0;
   int listen_fd_ = -1;
   std::thread accept_thread_;
+  std::vector<int> accepted_fds_;
+  std::mutex accepted_fds_mutex_;
 };
 
+TEST_F(ConnectionPoolTest, DiscardDeadConnection) {
+  // Given
+  ConnectionPool pool("127.0.0.1", port_, 1);
+  EXPECT_TRUE(pool.Initialize());
+
+  // Wait for the connection to be accepted by the server.
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  // When
+  // Close the connection on the server side to make it stale in the pool.
+  {
+    std::lock_guard<std::mutex> lock(accepted_fds_mutex_);
+    ASSERT_EQ(accepted_fds_.size(), 1);
+    close(accepted_fds_[0]);
+    accepted_fds_.clear();
+  }
+
+  // Then
+  // GetConnection should detect it's dead, discard it, and create a new one.
+  auto conn = pool.GetConnection();
+  EXPECT_TRUE(conn.has_value());
+  EXPECT_TRUE(conn->IsValid());
+
+  // Verify that a new connection was indeed established.
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  std::lock_guard<std::mutex> lock(accepted_fds_mutex_);
+  EXPECT_EQ(accepted_fds_.size(), 1);
+}
+
+TEST_F(ConnectionPoolTest, SetUnusablePreventsReuse) {
+  // Given
+  ConnectionPool pool("127.0.0.1", port_, 1);
+  EXPECT_TRUE(pool.Initialize());
+
+  // When
+  {
+    auto conn = pool.GetConnection();
+    EXPECT_TRUE(conn.has_value());
+    conn->SetUnusable();
+    // Destructor will close fd and not return it to pool.
+  }
+
+  // Then
+  // Next GetConnection must result in a new connection being created.
+  auto conn2 = pool.GetConnection();
+  EXPECT_TRUE(conn2.has_value());
+  
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  std::lock_guard<std::mutex> lock(accepted_fds_mutex_);
+  // We should have 2 fds in accepted_fds_: the first one (now closed) and the new one.
+  EXPECT_EQ(accepted_fds_.size(), 2);
+}
+
+TEST_F(ConnectionPoolTest, VerifyLIFOBehavior) {
+  // Given
+  // Use a pool of size 2 to verify stack behavior.
+  ConnectionPool pool("127.0.0.1", port_, 2);
+  EXPECT_TRUE(pool.Initialize());
+
+  // Acquire both connections.
+  auto connA = pool.GetConnection();
+  auto connB = pool.GetConnection();
+  ASSERT_TRUE(connA.has_value());
+  ASSERT_TRUE(connB.has_value());
+
+  int fdA = connA->fd();
+  int fdB = connB->fd();
+
+  // When
+  // Return them in a specific order: first A, then B.
+  // In a Stack (LIFO), the last one returned (B) should be the first one 
+  // retrieved next.
+  connA.reset(); // Release A
+  connB.reset(); // Release B
+
+  // Then
+  auto connNext1 = pool.GetConnection();
+  ASSERT_TRUE(connNext1.has_value());
+  // Should be B because it was the most recently returned.
+  EXPECT_EQ(connNext1->fd(), fdB);
+
+  auto connNext2 = pool.GetConnection();
+  ASSERT_TRUE(connNext2.has_value());
+  // Should be A.
+  EXPECT_EQ(connNext2->fd(), fdA);
+}
+
 TEST_F(ConnectionPoolTest, Initialize) {
+  // Given
   ConnectionPool pool("127.0.0.1", port_, 5);
+  
+  // When/Then
   EXPECT_TRUE(pool.Initialize());
 }
 
 TEST_F(ConnectionPoolTest, InitializeFailure) {
+  // Given
   // Use a port that is very unlikely to have a listener.
   ConnectionPool pool("127.0.0.1", port_ + 1, 1);
+  
+  // When/Then
   EXPECT_FALSE(pool.Initialize());
 }
 
 TEST_F(ConnectionPoolTest, GetConnection) {
+  // Given
   ConnectionPool pool("127.0.0.1", port_, 1);
   EXPECT_TRUE(pool.Initialize());
+  
+  // When
   auto conn = pool.GetConnection();
+  
+  // Then
   EXPECT_TRUE(conn.has_value());
   EXPECT_TRUE(conn->IsValid());
 }
 
 TEST_F(ConnectionPoolTest, MultipleThreads) {
+  // Given
   const int pool_size = 3;
   const int num_threads = 10;
   const int iterations_per_thread = 5;
@@ -90,6 +197,7 @@ TEST_F(ConnectionPoolTest, MultipleThreads) {
   ConnectionPool pool("127.0.0.1", port_, pool_size);
   EXPECT_TRUE(pool.Initialize());
 
+  // When
   std::vector<std::thread> threads;
   for (int i = 0; i < num_threads; ++i) {
     threads.emplace_back([&pool, iterations_per_thread]() {
@@ -109,6 +217,7 @@ TEST_F(ConnectionPoolTest, MultipleThreads) {
     thread.join();
   }
 
+  // Then
   // After all threads are done, the pool should have all connections back.
   // We can try to get pool_size connections to verify.
   std::vector<ScopedConnection> conns;
@@ -124,29 +233,41 @@ TEST_F(ConnectionPoolTest, MultipleThreads) {
 }
 
 TEST_F(ConnectionPoolTest, ReleaseConnection) {
+  // Given
   ConnectionPool pool("127.0.0.1", port_, 1);
   EXPECT_TRUE(pool.Initialize());
   {
     auto conn = pool.GetConnection();
     EXPECT_TRUE(conn.has_value());
   }
+  
+  // When
   auto conn = pool.GetConnection();
+  
+  // Then
   EXPECT_TRUE(conn.has_value());
 }
 
 TEST_F(ConnectionPoolTest, PoolExhaustion) {
+  // Given
   ConnectionPool pool("127.0.0.1", port_, 1);
   EXPECT_TRUE(pool.Initialize());
   auto conn1 = pool.GetConnection();
   EXPECT_TRUE(conn1.has_value());
+  
+  // When
   auto conn2 = pool.GetConnection(100);
+  
+  // Then
   EXPECT_FALSE(conn2.has_value());
 }
 
 TEST_F(ConnectionPoolTest, GetConnectionInvalidTimeout) {
+  // Given
   ConnectionPool pool("127.0.0.1", port_, 1);
   EXPECT_TRUE(pool.Initialize());
 
+  // When/Then
   // Try to get a connection with a negative timeout, expecting the program to
   // terminate.
   EXPECT_DEATH(pool.GetConnection(-100), "timeout_ms must be positive");
@@ -157,10 +278,11 @@ TEST_F(ConnectionPoolTest, GetConnectionInvalidTimeout) {
 }
 
 TEST_F(ConnectionPoolTest, ScopedConnectionMoveSemantics) {
+  // Given
   ConnectionPool pool("127.0.0.1", port_, 2);
   EXPECT_TRUE(pool.Initialize());
 
-  // Test move constructor
+  // When/Then (Test move constructor)
   {
     auto conn1 = pool.GetConnection();
     EXPECT_TRUE(conn1.has_value());
@@ -172,7 +294,7 @@ TEST_F(ConnectionPoolTest, ScopedConnectionMoveSemantics) {
     EXPECT_FALSE(conn1->IsValid());
   }
 
-  // Test move assignment
+  // When/Then (Test move assignment)
   {
     auto conn3 = pool.GetConnection();
     EXPECT_TRUE(conn3.has_value());
@@ -189,15 +311,19 @@ TEST_F(ConnectionPoolTest, ScopedConnectionMoveSemantics) {
 }
 
 TEST_F(ConnectionPoolTest, ScopedConnectionReleaseInvalidFdNoPool) {
-  // Given an invalid file descriptor and no associated pool
+  // Given 
+  // An invalid file descriptor and no associated pool
   int invalid_fd = -1;
 
-  // When a ScopedConnection is created with an invalid fd and no pool,
+  // When
+  // A ScopedConnection is created with an invalid fd and no pool,
   // and Release() is called (implicitly by destructor or explicitly)
   {
     ScopedConnection conn(invalid_fd, nullptr);
     EXPECT_FALSE(conn.IsValid());
     EXPECT_EQ(conn.fd(), invalid_fd);
+    
+    // Then
     EXPECT_NO_THROW(
         conn.Release());  // Should be safe to call Release on invalid state
   }  // Destructor calls Release() again, should also be safe

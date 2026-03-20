@@ -35,7 +35,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <queue>
+#include <stack>
 #include <string>
 
 namespace ml_flashpoint::replication::transfer_service {
@@ -57,11 +57,17 @@ class ScopedConnection {
 
   int fd() const { return sockfd_; }
   bool IsValid() const { return sockfd_ >= 0; }
+
+  // Marks the connection as unusable (e.g., after a socket error).
+  // This prevents it from being returned to the pool for reuse.
+  void SetUnusable() { reuse_ = false; }
+
   void Release();
 
  private:
   int sockfd_;
   ConnectionPool* pool_;
+  bool reuse_ = true;
 };
 
 // Manages a thread-safe pool of TCP connections to a single peer.
@@ -108,6 +114,9 @@ class ConnectionPool {
   // Releases a connection back to the pool or closes it.
   void ReleaseConnection(int sockfd, bool reuse = true);
 
+  // Checks if a connection is still alive by performing a non-blocking peek.
+  bool IsConnectionAlive(int sockfd);
+
   // Creates a new connection to the peer.
   // Returns the socket file descriptor on a successful connection, or -1 on
   // failure.
@@ -116,7 +125,7 @@ class ConnectionPool {
   std::string peer_host_;
   int peer_port_;
   size_t max_size_;
-  std::queue<int> available_connections_;  // Guarded by mtx_.
+  std::stack<int> available_connections_;  // Guarded by mtx_.
   std::mutex mtx_;  // Protects available_connections_ and stopping_.
   std::condition_variable
       cv_;  // Signaled when a connection is released or the pool is stopping.

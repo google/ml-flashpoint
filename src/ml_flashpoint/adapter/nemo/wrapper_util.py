@@ -77,8 +77,8 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
             in bytes. Defaults to `DEFAULT_INITIAL_BUFFER_SIZE_BYTES`, even if set to None explicitly.
         use_cached_ckpt_structure: Whether to reuse the checkpoint structure (plan) from the previous save.
             Defaults to False.
-        use_fully_parallel_wrapper: Whether to use the fully parallel wrapper for the checkpoint IO.
-            This is intended for checkpoint size equal for all ranks.
+        use_fully_parallel_wrapper: Whether to use the fully parallel wrapper for save and load.
+            This will evenly distribute checkpoint data across all ranks.
             Defaults to False.
 
     Returns:

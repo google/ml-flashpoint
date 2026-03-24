@@ -158,7 +158,7 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         if: always()
         with:
-          name: coverage-reports-${{ matrix.python-version }}
+          name: coverage-reports${{ matrix.python-version == '3.10' && '' || format('-{0}', matrix.python-version) }}
           if-no-files-found: warn # Default, but setting explicitly for awareness as non-PRs won't have pr_number.txt
           path: |
             htmlcov/

@@ -41,7 +41,7 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # ratchet:actions/download-artifact@v7
         continue-on-error: true # Artifact might be missing on very early failures
         with:
-          pattern: coverage-reports-*
+          pattern: coverage-reports*
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
           merge-multiple: true

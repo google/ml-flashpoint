@@ -95,7 +95,7 @@ steps:
     waitFor: ['build-sdist']
 
   # 4. Upload to internal Artifact Registry (AR) for OSS Exit Gate.
-  - name: 'python:3.10'
+  - name: 'python:3.12'
     id: 'upload-to-ar'
     entrypoint: 'bash'
     args:

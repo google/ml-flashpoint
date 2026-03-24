@@ -64,7 +64,7 @@ So reach out by raising an issue if there's a framework you want to be supported
 
 To use ML Flashpoint, the basic requirements for the training environment are:
 
-1. Python 3.10 or later.
+1. Python 3.12 or later.
 1. Linux operating system on the training nodes.
 1. An even number of training nodes, to use the pairwise replication strategy.
     * This is enforced so that the pairwise strategy doesn't put a higher memory burden on one node than the others, and so the general capacity requirements are roughly consistent across nodes.

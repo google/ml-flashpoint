@@ -71,7 +71,7 @@ To set up the development environment, run (at the project root):
 
 ```bash
 # Create and activate a virtual environment (e.g., using venv) in your local env (only needed once, but is safe to rerun)
-python3.10 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 
 # Install the package in editable mode with development dependencies

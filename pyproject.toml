@@ -69,7 +69,12 @@ nemo = [
 ]
 # An extra for users who want to use this library with NeMo RL.
 # Installed via: `pip install ml-flashpoint[nemo-rl]`
-nemo-rl = ["nemo_rl @ git+https://github.com/NVIDIA-NeMo/RL.git@v0.5.0"]
+nemo-rl = [
+    "nemo_rl @ git+https://github.com/NVIDIA-NeMo/RL.git@v0.5.0 ; python_version >= '3.12'",
+    "omegaconf>=2.3.0",
+    "Mako>=1.3.10",
+    "jsonschema>=4.21.0",
+]
 
 # An extra for generating the documentation site.
 # Installed via: `pip install ml-flashpoint[docs]`
@@ -109,9 +114,7 @@ dev-nemo = [
 # Defines a "dev-nemo-rl" extra for NeMo RL development (typically uses Python 3.12+).
 # Installed via: `pip install -e .[dev-nemo-rl]`
 dev-nemo-rl = [
-    "ml-flashpoint[dev-nemo]",
-    # TODO: uncomment below and remove line above when nemo-rl profile is added
-    #"ml-flashpoint[dev-base,nemo-rl]",
+    "ml-flashpoint[dev-base,nemo-rl,docs]",
 ]
 
 # Defines a "dev" extra for setting up a development environment.

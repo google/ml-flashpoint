@@ -173,10 +173,8 @@ def test_mlf_save_period_invokes_mlflashpoint_save(mocker, mlf_checkpoint_manage
     mock_makedirs.assert_called_with(expected_path, exist_ok=True)
     assert returned_path == expected_path
 
-    mock_save_local_aware.assert_not_called() # Interception is gone!
+    mock_save_local_aware.assert_not_called()  # Interception is gone!
     mock_base_checkpointer.finalize_checkpoint.assert_not_called()
-
-
 
 
 def test_get_best_checkpoint_path_delegates(mlf_checkpoint_manager, mock_base_checkpointer):
@@ -320,7 +318,7 @@ def test_get_latest_checkpoint_path_handles_empty_training_info(
     """Test that it defaults step to -1 if load_training_info returns empty dict."""
     # Given
     mock_base_checkpointer.get_latest_checkpoint_path.return_value = "/base/path"
-    mock_base_checkpointer.load_training_info.return_value = {} # Empty dict
+    mock_base_checkpointer.load_training_info.return_value = {}  # Empty dict
 
     mock_mlf_container = mocker.MagicMock()
     mock_mlf_container.data = "/test-mlf/step-150_ckpt"
@@ -331,5 +329,3 @@ def test_get_latest_checkpoint_path_handles_empty_training_info(
 
     # Then
     assert actual_path == "/test-mlf/step-150_ckpt"
-
-

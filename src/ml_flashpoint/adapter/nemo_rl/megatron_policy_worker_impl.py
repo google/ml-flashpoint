@@ -73,7 +73,7 @@ class MLFlashpointMegatronPolicyWorkerImpl(MegatronPolicyWorkerImpl):
         # 3. Initialize Checkpoint Saver
         checkpoint_saver = DefaultMLFlashpointCheckpointSaver(
             global_rank_getter=torch.distributed.get_rank,
-            local_rank_getter=torch.distributed.get_node_local_rank, # Assuming local rank can be determined or mapped
+            local_rank_getter=torch.distributed.get_node_local_rank,  # Assuming local rank can be determined or mapped
             global_barrier_func=torch.distributed.barrier,
             ckpt_obj_manager=ckpt_obj_manager,
             replication_manager=replication_manager,
@@ -146,9 +146,7 @@ class MLFlashpointMegatronPolicyWorkerImpl(MegatronPolicyWorkerImpl):
             _LOGGER.info("[MLF Worker] Scheduled async ML Flashpoint checkpoint save to %s", weights_path)
 
 
-@ray.remote(
-    runtime_env=get_runtime_env_for_policy_worker("megatron_policy_worker")
-)
+@ray.remote(runtime_env=get_runtime_env_for_policy_worker("megatron_policy_worker"))
 class MLFlashpointMegatronPolicyWorker(MLFlashpointMegatronPolicyWorkerImpl):
     """Empty Ray Remote class wrapping the implementation worker.
 
@@ -161,4 +159,5 @@ class MLFlashpointMegatronPolicyWorker(MLFlashpointMegatronPolicyWorkerImpl):
     decorated with `@ray.remote` in:
     https://github.com/NVIDIA-NeMo/RL/blob/29f58809310a621b1b36d9a473528f6d48ada909/nemo_rl/models/policy/workers/megatron_policy_worker.py#L1602-L1603
     """
+
     pass

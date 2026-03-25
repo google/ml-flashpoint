@@ -161,8 +161,6 @@ class MLFlashpointRLCheckpointManager(CheckpointManager):
     def remove_old_checkpoints(self, exclude_latest: bool = True) -> None:
         return self._base_checkpointer.remove_old_checkpoints(exclude_latest)
 
-
         has_hook = hasattr(self.policy, "should_disable_forward_pre_hook")
         if has_hook and getattr(self.policy, "should_disable_forward_pre_hook"):
             self.policy.disable_forward_pre_hook()
-

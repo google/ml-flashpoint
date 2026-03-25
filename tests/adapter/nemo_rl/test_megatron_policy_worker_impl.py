@@ -77,7 +77,7 @@ def test_mlf_worker_save_checkpoint_mlf(mocker, tmp_path):
     mock_save_local = mocker.patch(
         "ml_flashpoint.adapter.nemo_rl.megatron_policy_worker_impl.save_local_aware_megatron_checkpoint"
     )
-    mock_save_local.return_value = mocker.MagicMock() # Return a mock AsyncRequest
+    mock_save_local.return_value = mocker.MagicMock()  # Return a mock AsyncRequest
 
     # Mock model and mcore_state
     worker.model = mocker.MagicMock()
@@ -107,7 +107,7 @@ def test_mlf_worker_save_checkpoint_mlf_none_request(mocker, tmp_path):
     mock_save_local = mocker.patch(
         "ml_flashpoint.adapter.nemo_rl.megatron_policy_worker_impl.save_local_aware_megatron_checkpoint"
     )
-    mock_save_local.return_value = None # No request
+    mock_save_local.return_value = None  # No request
 
     worker.policy = mocker.MagicMock()
     worker.mcore_state = mocker.MagicMock()
@@ -147,5 +147,6 @@ def test_mlf_worker_save_checkpoint_mlf_empty_container_raises(mocker):
 
     # When/Then
     import pytest
+
     with pytest.raises(ValueError, match="flashpoint_base_container must be provided"):
         worker.save_checkpoint(weights_path="/tmp/ckpt")

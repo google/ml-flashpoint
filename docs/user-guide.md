@@ -120,7 +120,7 @@ The NeMo RL framework does not use PyTorch Lightning natively, and instead uses 
 Import the NeMo RL wrapper provided by the ML Flashpoint adapter:
 
 ```python
-from ml_flashpoint.adapter.nemo_rl.wrapper_util import wrap_rl_components_with_mlflashpoint
+from ml_flashpoint.adapter.nemo_rl.wrapper_util_rl import wrap_rl_components_with_mlflashpoint
 from ml_flashpoint.core.checkpoint_loader import MLFlashpointCheckpointLoader
 ```
 

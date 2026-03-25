@@ -15,13 +15,13 @@ import pytest
 
 pytest.importorskip("nemo_rl")
 
-from ml_flashpoint.adapter.nemo_rl.wrapper_util import wrap_rl_components_with_mlflashpoint
+from ml_flashpoint.adapter.nemo_rl.wrapper_util_rl import wrap_rl_components_with_mlflashpoint
 
 
 def test_wrap_rl_components_with_mlflashpoint(mocker):
     """Test that it correctly instantiates MLFlashpointRLCheckpointManager."""
     # Given
-    mock_manager_cls = mocker.patch("ml_flashpoint.adapter.nemo_rl.wrapper_util.MLFlashpointRLCheckpointManager")
+    mock_manager_cls = mocker.patch("ml_flashpoint.adapter.nemo_rl.wrapper_util_rl.MLFlashpointRLCheckpointManager")
     checkpointer = mocker.MagicMock()
     flashpoint_base_container = "/tmp/mlf"
     standard_save_period = 1000

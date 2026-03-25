@@ -71,7 +71,7 @@ def mlf_checkpoint_manager(mocker, mock_base_checkpointer, mock_save_strategy, m
 def test_wrap_rl_components_with_mlflashpoint(mocker, mock_base_checkpointer, mock_save_strategy):
     """Test the wrap_rl_components_with_mlflashpoint utility."""
     from ml_flashpoint.adapter.nemo_rl.checkpoint_manager import MLFlashpointRLCheckpointManager
-    from ml_flashpoint.adapter.nemo_rl.wrapper_util import wrap_rl_components_with_mlflashpoint
+    from ml_flashpoint.adapter.nemo_rl.wrapper_util_rl import wrap_rl_components_with_mlflashpoint
 
     # Given
     policy = MockPolicy(mocker)

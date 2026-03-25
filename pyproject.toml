@@ -56,7 +56,7 @@ dependencies = [
 
 # An extra for users who want to use this library with just PyTorch.
 # Installed via: `pip install ml-flashpoint[pytorch]`
-pytorch = ["torch==2.8.0"]
+pytorch = ["torch>=2.8.0"]
 # An extra for users who want to use this library with its Megatron-LM adapter.
 # Installed via: `pip install ml-flashpoint[megatron]`
 megatron = ["megatron_core==0.13.1"]

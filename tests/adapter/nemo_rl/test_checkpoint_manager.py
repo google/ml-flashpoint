@@ -17,6 +17,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+pytest.importorskip("nemo_rl")
+
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId
 
 

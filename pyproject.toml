@@ -37,7 +37,7 @@ classifiers = [
 ]
 
 # Specifies the minimum version of Python required to install and run this package.
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 
 # A list of core runtime dependencies. These packages will ALWAYS be installed
 # when a user runs `pip install ml-flashpoint`.
@@ -207,6 +207,8 @@ exclude = [
 [tool.pytest.ini_options]
 norecursedirs = [
     ".git",
+    ".gemini",
+    "temp_nemo_rl_repo",
     "build/**/_deps",
     ".gemini",
     ".worktrees",
@@ -214,6 +216,7 @@ norecursedirs = [
 markers = [
     "e2e: marks tests as end-to-end",
     "smoke: quick subset of tests",
+    "nemo_rl: marks tests for NeMo RL adapter",
 ]
 
 # ===================================================================

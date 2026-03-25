@@ -13,6 +13,10 @@
 # limitations under the License.
 import os
 
+import pytest
+
+pytest.importorskip("nemo_rl")
+
 from ml_flashpoint.adapter.nemo_rl.megatron_policy_worker_impl import MLFlashpointMegatronPolicyWorkerImpl
 
 

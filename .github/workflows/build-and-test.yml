@@ -64,7 +64,11 @@ jobs:
         run: |
           # Run all tests with coverage (Python and C++)
           echo -e "\n##### Running Python tests with coverage #####"
-          coverage run --source=src/ml_flashpoint --branch -m pytest -v -s
+          if [ "${{ matrix.python-version }}" == "3.12" ]; then
+            coverage run --source=src/ml_flashpoint --branch -m pytest -v -s
+          else
+            coverage run --source=src/ml_flashpoint --branch -m pytest -v -s -m "not nemo_rl"
+          fi
 
       - name: Check Python test coverage
         run: |

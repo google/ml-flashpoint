@@ -57,10 +57,8 @@ def mock_checkpoint_loader(mocker):
 def mlf_checkpoint_manager(mocker, mock_base_checkpointer, mock_save_strategy, mock_checkpoint_loader):
     from ml_flashpoint.adapter.nemo_rl.checkpoint_manager import MLFlashpointRLCheckpointManager
 
-    policy = MockPolicy(mocker)
     manager = MLFlashpointRLCheckpointManager(
         base_checkpointer=mock_base_checkpointer,
-        policy=policy,
         flashpoint_base_container="/test-mlf",
         standard_save_period=50,
         save_strategy=mock_save_strategy,
@@ -143,14 +141,11 @@ def test_standard_save_period_delegates_to_base_checkpointer(mocker, mlf_checkpo
 
     # When
     returned_path = mlf_checkpoint_manager.init_tmp_checkpoint(step, {})
-    mlf_checkpoint_manager.policy.save_checkpoint(weights_path="fake/path", optimizer_path="fake/opt")
     mlf_checkpoint_manager.finalize_checkpoint(returned_path)
 
     # Then
     mock_base_checkpointer.init_tmp_checkpoint.assert_called_once_with(step, {}, None)
     assert returned_path == "/tmp/fake_dir/tmp_step_100"
-    assert mlf_checkpoint_manager.policy.save_checkpoint_called is True
-    assert mlf_checkpoint_manager.policy.last_weights_path == "fake/path"
     mock_save_local_aware.assert_not_called()
     mock_base_checkpointer.finalize_checkpoint.assert_called_once_with(returned_path)
 
@@ -166,103 +161,20 @@ def test_mlf_save_period_invokes_mlflashpoint_save(mocker, mlf_checkpoint_manage
 
     # When
     returned_path = mlf_checkpoint_manager.init_tmp_checkpoint(step, {})
-    mlf_checkpoint_manager.policy.save_checkpoint(weights_path=returned_path, optimizer_path="fake/opt")
     mlf_checkpoint_manager.finalize_checkpoint(returned_path)
 
     # Then
     mock_base_checkpointer.init_tmp_checkpoint.assert_not_called()
 
     # Check that os.makedirs was called for the new path
-    # Check that os.makedirs was called for the new path
     expected_path = os.path.join("/test-mlf", f"step-{step}_ckpt")
     mock_makedirs.assert_called_with(expected_path, exist_ok=True)
     assert returned_path == expected_path
 
-    # Check that original save wasn't called
-    assert mlf_checkpoint_manager.policy.save_checkpoint_called is False
-
-    # Check intercepted save called ML Flashpoint's saving utility
-    mock_save_local_aware.assert_called_once()
-
-    # Verify the checkpoint dictionary structure passed into MLF saver
-    called_kwargs = mock_save_local_aware.call_args[1]
-    checkpoint_dict = called_kwargs["checkpoint"]
-
-    assert "model" in checkpoint_dict
-    assert "state" in checkpoint_dict
-    assert "optimizer" in checkpoint_dict
-    assert "opt_param_scheduler" in checkpoint_dict
-    assert called_kwargs["checkpoint_dir"] == expected_path
-
+    mock_save_local_aware.assert_not_called() # Interception is gone!
     mock_base_checkpointer.finalize_checkpoint.assert_not_called()
 
 
-def test_mlf_save_toggles_eval_mode(mocker, mlf_checkpoint_manager):
-    """Test that model is toggled to eval mode during save, and brought back to train."""
-    mocker.patch("ml_flashpoint.adapter.nemo_rl.checkpoint_manager.save_local_aware_megatron_checkpoint")
-    mocker.patch("os.makedirs")
-    # Given
-    step = 50
-    returned_path = mlf_checkpoint_manager.init_tmp_checkpoint(step, {})
-
-    # Set model to NOT train initially to trigger the eval toggle block
-    mlf_checkpoint_manager.policy.model.training = False
-
-    def mock_eval():
-        mlf_checkpoint_manager.policy.model.training = False
-
-    def mock_train():
-        mlf_checkpoint_manager.policy.model.training = True
-
-    mlf_checkpoint_manager.policy.model.eval = mocker.MagicMock(side_effect=mock_eval)
-    mlf_checkpoint_manager.policy.model.train = mocker.MagicMock(side_effect=mock_train)
-
-    # When
-    mlf_checkpoint_manager.policy.save_checkpoint(weights_path=returned_path)
-
-    # Then
-    mlf_checkpoint_manager.policy.model.eval.assert_called_once()
-    mlf_checkpoint_manager.policy.model.train.assert_called_once()
-    # model was restored to True
-    assert mlf_checkpoint_manager.policy.model.training is True
-
-
-def test_mlf_save_does_not_toggle_eval_if_already_training(mocker, mlf_checkpoint_manager):
-    """Test that model eval/train are NOT called if model is already in training mode."""
-    mocker.patch("ml_flashpoint.adapter.nemo_rl.checkpoint_manager.save_local_aware_megatron_checkpoint")
-    # Given
-    mlf_checkpoint_manager._current_save_mode = "mlf"
-    mlf_checkpoint_manager.policy.model.training = True
-    mlf_checkpoint_manager.policy.model.eval = mocker.MagicMock()
-    mlf_checkpoint_manager.policy.model.train = mocker.MagicMock()
-
-    # When
-    mlf_checkpoint_manager.policy.save_checkpoint(weights_path="/tmp/path")
-
-    # Then
-    mlf_checkpoint_manager.policy.model.eval.assert_not_called()
-    mlf_checkpoint_manager.policy.model.train.assert_not_called()
-    assert mlf_checkpoint_manager.policy.model.training is True
-
-
-def test_mlf_save_handles_positional_arguments(mocker, mlf_checkpoint_manager):
-    """Test that save_checkpoint handles weights_path and optimizer_path as positional args."""
-    mock_save_local_aware = mocker.patch(
-        "ml_flashpoint.adapter.nemo_rl.checkpoint_manager.save_local_aware_megatron_checkpoint"
-    )
-    # Given
-    mlf_checkpoint_manager._current_save_mode = "mlf"
-    weights_path = "/tmp/weights"
-    optimizer_path = "/tmp/opt"
-
-    # When
-    mlf_checkpoint_manager.policy.save_checkpoint(weights_path, optimizer_path)
-
-    # Then
-    mock_save_local_aware.assert_called_once()
-    called_kwargs = mock_save_local_aware.call_args[1]
-    assert called_kwargs["checkpoint_dir"] == weights_path
-    assert "optimizer" in called_kwargs["checkpoint"]
 
 
 def test_get_best_checkpoint_path_delegates(mlf_checkpoint_manager, mock_base_checkpointer):
@@ -381,54 +293,41 @@ def test_remove_old_checkpoints_delegates(mlf_checkpoint_manager, mock_base_chec
     mock_base_checkpointer.remove_old_checkpoints.assert_called_once_with(exclude_latest)
 
 
-def test_save_checkpoint_raises_error_if_weights_path_missing(mlf_checkpoint_manager):
-    """Test that save_checkpoint raises ValueError if weights_path is missing."""
+def test_get_latest_checkpoint_path_handles_load_training_info_error(
+    mocker, mlf_checkpoint_manager, mock_base_checkpointer, mock_checkpoint_loader
+):
+    """Test that it falls back to MLF path if load_training_info raises an exception."""
     # Given
-    mlf_checkpoint_manager._current_save_mode = "mlf"
+    mock_base_checkpointer.get_latest_checkpoint_path.return_value = "/base/path"
+    mock_base_checkpointer.load_training_info.side_effect = Exception("Corrupted meta")
 
-    # When/Then
-    with pytest.raises(ValueError, match="weights_path must be provided to save_checkpoint."):
-        mlf_checkpoint_manager.policy.save_checkpoint()
-
-
-def test_save_checkpoint_handles_missing_optional_policy_attributes(mocker, mlf_checkpoint_manager):
-    """Test that save_checkpoint handles cases where policy is missing optional attributes."""
-    mock_save_local_aware = mocker.patch(
-        "ml_flashpoint.adapter.nemo_rl.checkpoint_manager.save_local_aware_megatron_checkpoint"
-    )
-    # Given
-    mlf_checkpoint_manager._current_save_mode = "mlf"
-    del mlf_checkpoint_manager.policy.optimizer
-    del mlf_checkpoint_manager.policy.scheduler
-    del mlf_checkpoint_manager.policy.checkpointing_context
-    del mlf_checkpoint_manager.policy.mcore_state.train_state
+    mock_mlf_container = mocker.MagicMock()
+    mock_mlf_container.data = "/test-mlf/step-150_ckpt"
+    mock_checkpoint_loader.get_latest_complete_checkpoint.return_value = mock_mlf_container
 
     # When
-    mlf_checkpoint_manager.policy.save_checkpoint(weights_path="/tmp/path")
+    actual_path = mlf_checkpoint_manager.get_latest_checkpoint_path()
 
     # Then
-    mock_save_local_aware.assert_called_once()
-    called_kwargs = mock_save_local_aware.call_args[1]
-    checkpoint_dict = called_kwargs["checkpoint"]
-
-    assert "optimizer" not in checkpoint_dict
-    assert "opt_param_scheduler" not in checkpoint_dict
-    assert "checkpointing_context" not in checkpoint_dict
-    assert "num_floating_point_operations_so_far" not in checkpoint_dict
+    assert actual_path == "/test-mlf/step-150_ckpt"
 
 
-def test_save_checkpoint_disables_forward_pre_hook_if_requested(mocker, mlf_checkpoint_manager):
-    """Test that save_checkpoint calls disable/enable_forward_pre_hook if requested."""
-    mocker.patch("ml_flashpoint.adapter.nemo_rl.checkpoint_manager.save_local_aware_megatron_checkpoint")
+def test_get_latest_checkpoint_path_handles_empty_training_info(
+    mocker, mlf_checkpoint_manager, mock_base_checkpointer, mock_checkpoint_loader
+):
+    """Test that it defaults step to -1 if load_training_info returns empty dict."""
     # Given
-    mlf_checkpoint_manager._current_save_mode = "mlf"
-    mlf_checkpoint_manager.policy.should_disable_forward_pre_hook = True
-    mlf_checkpoint_manager.policy.disable_forward_pre_hook = mocker.MagicMock()
-    mlf_checkpoint_manager.policy.enable_forward_pre_hook = mocker.MagicMock()
+    mock_base_checkpointer.get_latest_checkpoint_path.return_value = "/base/path"
+    mock_base_checkpointer.load_training_info.return_value = {} # Empty dict
+
+    mock_mlf_container = mocker.MagicMock()
+    mock_mlf_container.data = "/test-mlf/step-150_ckpt"
+    mock_checkpoint_loader.get_latest_complete_checkpoint.return_value = mock_mlf_container
 
     # When
-    mlf_checkpoint_manager.policy.save_checkpoint(weights_path="/tmp/path")
+    actual_path = mlf_checkpoint_manager.get_latest_checkpoint_path()
 
     # Then
-    mlf_checkpoint_manager.policy.disable_forward_pre_hook.assert_called_once()
-    mlf_checkpoint_manager.policy.enable_forward_pre_hook.assert_called_once()
+    assert actual_path == "/test-mlf/step-150_ckpt"
+
+

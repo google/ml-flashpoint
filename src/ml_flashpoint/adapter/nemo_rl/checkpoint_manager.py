@@ -19,7 +19,6 @@ from nemo_rl.utils.checkpoint import CheckpointManager
 from typing_extensions import override
 
 from ml_flashpoint.adapter.megatron.save_strategies import MLFlashpointMegatronAsyncSaveStrategy
-from ml_flashpoint.adapter.megatron.save_utils import save_local_aware_megatron_checkpoint
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId
 from ml_flashpoint.core.checkpoint_loader import MLFlashpointCheckpointLoader
 
@@ -42,7 +41,6 @@ class MLFlashpointRLCheckpointManager(CheckpointManager):
     def __init__(
         self,
         base_checkpointer: CheckpointManager,
-        policy: Any,
         flashpoint_base_container: str,
         standard_save_period: int,
         save_strategy: MLFlashpointMegatronAsyncSaveStrategy,
@@ -59,7 +57,6 @@ class MLFlashpointRLCheckpointManager(CheckpointManager):
             checkpoint_loader: The MLFlashpointCheckpointLoader for resolving latest MLF saves.
         """
         self._base_checkpointer = base_checkpointer
-        self.policy = policy
         self.flashpoint_base_container = CheckpointContainerId(flashpoint_base_container)
         self.standard_save_period = standard_save_period
         self.save_strategy = save_strategy
@@ -67,15 +64,6 @@ class MLFlashpointRLCheckpointManager(CheckpointManager):
 
         # Track the active save mode ("std" or "mlf")
         self._current_save_mode: Optional[str] = None
-
-        # Monkey-patch the policy's save_checkpoint method
-        self._original_save_checkpoint = policy.save_checkpoint
-
-        # Need to bind the interception method to the manager context while keeping policy self
-        def _intercepted_save_checkpoint_wrapper(*args, **kwargs):
-            return self._intercepted_save_checkpoint(*args, **kwargs)
-
-        policy.save_checkpoint = _intercepted_save_checkpoint_wrapper
 
     def __getattr__(self, name: str) -> Any:
         """Dynamically delegate missing attributes to the base checkpointer.
@@ -173,63 +161,8 @@ class MLFlashpointRLCheckpointManager(CheckpointManager):
     def remove_old_checkpoints(self, exclude_latest: bool = True) -> None:
         return self._base_checkpointer.remove_old_checkpoints(exclude_latest)
 
-    def _intercepted_save_checkpoint(
-        self,
-        *args,
-        **kwargs,
-    ):
-        """Replaces the policy's native save_checkpoint logic during an MLF save."""
-        if self._current_save_mode == "std":
-            return self._original_save_checkpoint(*args, **kwargs)
-
-        # Extract paths
-        weights_path = kwargs.get("weights_path")
-        if weights_path is None and len(args) > 0:
-            weights_path = args[0]
-
-        optimizer_path = kwargs.get("optimizer_path")
-        if optimizer_path is None and len(args) > 1:
-            optimizer_path = args[1]
-
-        if not weights_path:
-            raise ValueError("weights_path must be provided to save_checkpoint.")
-
-        # Ensure model is in eval mode for consistent saving, mimicking original logic
-        is_training = self.policy.model.training
-        if not is_training:
-            self.policy.model.eval()
 
         has_hook = hasattr(self.policy, "should_disable_forward_pre_hook")
         if has_hook and getattr(self.policy, "should_disable_forward_pre_hook"):
             self.policy.disable_forward_pre_hook()
 
-        # Build checkpoint dict matching Megatron Core dist_checkpointing save format
-        checkpoint_dict = {
-            "model": [self.policy.model],
-            "state": self.policy.mcore_state,
-        }
-
-        if optimizer_path is not None:
-            if hasattr(self.policy, "optimizer") and self.policy.optimizer is not None:
-                checkpoint_dict["optimizer"] = self.policy.optimizer
-            if hasattr(self.policy, "scheduler") and self.policy.scheduler is not None:
-                checkpoint_dict["opt_param_scheduler"] = self.policy.scheduler
-
-        # Optional metadata that Megatron may capture
-        if hasattr(self.policy.mcore_state, "train_state"):
-            checkpoint_dict["num_floating_point_operations_so_far"] = (
-                self.policy.mcore_state.train_state.floating_point_operations_so_far
-            )
-        if hasattr(self.policy, "checkpointing_context"):
-            checkpoint_dict["checkpointing_context"] = self.policy.checkpointing_context
-
-        save_local_aware_megatron_checkpoint(
-            checkpoint=checkpoint_dict, checkpoint_dir=weights_path, save_strategy=self.save_strategy, async_save=True
-        )
-
-        has_hook = hasattr(self.policy, "should_disable_forward_pre_hook")
-        if has_hook and getattr(self.policy, "should_disable_forward_pre_hook"):
-            self.policy.enable_forward_pre_hook()
-
-        if not is_training:
-            self.policy.model.train()

@@ -148,17 +148,11 @@ checkpointer = CheckpointManager(
 flashpoint_save_strategy = MLFlashpointMegatronAsyncSaveStrategy(...)
 checkpointer = wrap_rl_components_with_mlflashpoint(
     checkpointer=checkpointer,
-    policy=policy,
-    # Some tmpfs path for this job like /tmp/mlf/job-12345
-    flashpoint_base_container=_get_my_mlf_base_path(),
-checkpointer = wrap_rl_components_with_mlflashpoint(
-    checkpointer=checkpointer,
-    policy=policy,
     # Some tmpfs path for this job like /tmp/mlf/job-12345
     flashpoint_base_container=_get_my_mlf_base_path(),
     standard_save_period=1000, # Dictates when standard saves execute
     save_strategy=flashpoint_save_strategy,
-    checkpoint_loader=MLFlashpointCheckpointLoader(...), # Add this line
+    checkpoint_loader=MLFlashpointCheckpointLoader(...),
 )
 
 # 3. Supply the wrapper backwards as if it were the standard checkpointer
@@ -174,6 +168,31 @@ async_grpo_train(
 
 1. **Standard `save_period` override:** You must coordinate the standard save properties. The `save_period` configured inside your NeMo RL configurations (typically in the YAML config under `checkpointing: save_period: ...` or [see an example here](https://github.com/NVIDIA-NeMo/RL/blob/main/examples/configs/grpo_math_1B.yaml)) should now be set aggressively low (e.g. `1` or `10`), dictating how frequently *ML Flashpoint* triggers.
 1. `standard_save_period` dictates how frequently your standard long-term persistence will actually run instead. For instance, configuring NeMo RL YAML `save_period: 10` and injecting `standard_save_period=1000` via our wrapper means ML Flashpoint saves every 10 steps, and standard checkpoints save every 1000 steps.
+
+#### NeMo RL Configuration (Worker Side)
+
+When using the custom worker extension (`MLFlashpointMegatronPolicyWorker`), it reads configuration from `self.cfg` (which is the `PolicyConfig` TypedDict passed during initialization).
+
+You can define the `ml_flashpoint` configuration block in your recipe or config file. It should be a dictionary nested within the policy configuration.
+
+##### Configuration Schema
+
+| Field | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `enabled` | `bool` | No (default `True`) | Enable/disable ML Flashpoint on the worker. |
+| `base_container` | `str` | **Yes** | The base directory (typically in `tmpfs`) for ML Flashpoint checkpoints. |
+| `write_thread_count` | `int` | No (default `1`) | Number of threads for asynchronous writing. |
+| `buffer_size_bytes` | `int` | No (default `16 GB`) | Size of the shared memory buffers in bytes. |
+
+Example configuration in a YAML or dict:
+
+```yaml
+policy:
+  ml_flashpoint:
+    # enabled: true # default
+    base_container: "/tmp/mlf-checkpoints/job-12345"
+    # buffer_size_bytes: 17179869184 # default (16 GB)
+```
 
 ### Megatron-LM
 

@@ -24,7 +24,6 @@ _LOGGER = get_logger(__name__)
 
 def wrap_rl_components_with_mlflashpoint(
     checkpointer: Any,
-    policy: Any,
     flashpoint_base_container: str,
     standard_save_period: int,
     save_strategy: MLFlashpointMegatronAsyncSaveStrategy,
@@ -39,7 +38,6 @@ def wrap_rl_components_with_mlflashpoint(
 
     Args:
         checkpointer: The original NeMo/RL CheckpointManager.
-        policy: The NeMo/RL policy worker (e.g., MegatronPolicyWorker).
         flashpoint_base_container: Base namespace string for ML Flashpoint saves.
         standard_save_period: The step frequency for taking standard permanent saves.
         checkpoint_loader: The MLFlashpointCheckpointLoader for resolving latest MLF saves.
@@ -55,7 +53,6 @@ def wrap_rl_components_with_mlflashpoint(
 
     return MLFlashpointRLCheckpointManager(
         base_checkpointer=checkpointer,
-        policy=policy,
         flashpoint_base_container=flashpoint_base_container,
         standard_save_period=standard_save_period,
         save_strategy=save_strategy,

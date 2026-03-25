@@ -334,10 +334,13 @@ def print_total_throughput_stats(mode, throughput_stats):
     if all_throughput:
         total_avg = np.mean(all_throughput)
         print(f"Total Cluster-Wide Average {mode} Throughput Across Steps: {total_avg:.4f} GB/s")
-    
+
     if len(all_throughput) > 2:
         avg_after_2 = np.mean(all_throughput[2:])
-        print(f"Average {mode} Throughput Excluding first two {mode}s (to focus on buffer pooling efficiency): {avg_after_2:.4f} GB/s")
+        print(
+            f"Average {mode} Throughput Excluding first two {mode}s "
+            f"(to focus on buffer pooling efficiency): {avg_after_2:.4f} GB/s"
+        )
 
 
 def print_per_node_throughput_stats(mode, raw_records, ranks_per_node):
@@ -364,11 +367,11 @@ def print_per_node_throughput_stats(mode, raw_records, ranks_per_node):
             throughputs = node_averages[node_id]
             total_avg = np.mean(throughputs)
             output = f"Node {node_id}: {total_avg:.4f} GB/s (Total Average)"
-            
+
             if len(throughputs) > 2:
                 avg_after_2 = np.mean(throughputs[2:])
                 output += f" | {avg_after_2:.4f} GB/s (Excl. first two {mode}s, focusing on buffer pooling efficiency)"
-            
+
             print(output)
     print()
 

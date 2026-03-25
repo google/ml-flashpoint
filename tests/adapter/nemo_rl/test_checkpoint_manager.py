@@ -95,9 +95,6 @@ def test_wrap_rl_components_with_mlflashpoint(mocker, mock_base_checkpointer, mo
     assert manager.save_strategy == mock_save_strategy
 
 
-
-
-
 def test_getattr_delegation_to_base_checkpointer(mlf_checkpoint_manager, mock_base_checkpointer):
     """Test that attributes not found on manager are delegated to base checkpointer."""
     # Given
@@ -153,8 +150,7 @@ def test_mlf_save_period_invokes_mlflashpoint_save(mocker, mlf_checkpoint_manage
 
     # Check that os.makedirs was called for the new path
     expected_path_id = CheckpointContainerId.create_child(
-        mlf_checkpoint_manager.flashpoint_base_container,
-        CheckpointContainerId.format_version_container(step)
+        mlf_checkpoint_manager.flashpoint_base_container, CheckpointContainerId.format_version_container(step)
     )
     expected_path = str(expected_path_id)
     mock_makedirs.assert_called_with(expected_path, exist_ok=True)

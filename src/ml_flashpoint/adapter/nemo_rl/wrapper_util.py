@@ -51,6 +51,9 @@ def wrap_rl_components_with_mlflashpoint(
         f"Standard save config period: {standard_save_period}."
     )
 
+    if save_strategy is None:
+        raise ValueError("save_strategy must not be None")
+
     return MLFlashpointRLCheckpointManager(
         base_checkpointer=checkpointer,
         flashpoint_base_container=flashpoint_base_container,

@@ -121,6 +121,7 @@ Import the NeMo RL wrapper provided by the ML Flashpoint adapter:
 
 ```python
 from ml_flashpoint.adapter.nemo_rl.wrapper_util import wrap_rl_components_with_mlflashpoint
+from ml_flashpoint.core.checkpoint_loader import MLFlashpointCheckpointLoader
 ```
 
 Additionally, you will need to instantiate your preferred save strategy to tell the manager how to commit ML Flashpoint blobs:

@@ -46,3 +46,19 @@ def test_wrap_rl_components_with_mlflashpoint(mocker):
         checkpoint_loader=checkpoint_loader,
     )
     assert actual_wrapped == mock_manager_cls.return_value
+
+
+def test_wrap_rl_components_raises_if_strategy_missing(mocker):
+    """Test that it raises ValueError if save_strategy is missing."""
+    # Given
+    checkpointer = mocker.MagicMock()
+
+    # When/Then
+    with pytest.raises(ValueError, match="save_strategy must not be None"):
+        wrap_rl_components_with_mlflashpoint(
+            checkpointer=checkpointer,
+            flashpoint_base_container="/tmp/mlf",
+            standard_save_period=1000,
+            save_strategy=None,
+            checkpoint_loader=mocker.MagicMock(),
+        )

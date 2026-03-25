@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 from unittest.mock import MagicMock
 
 import pytest
@@ -96,23 +95,7 @@ def test_wrap_rl_components_with_mlflashpoint(mocker, mock_base_checkpointer, mo
     assert manager.save_strategy == mock_save_strategy
 
 
-def test_wrap_rl_components_raises_if_strategy_missing(mocker, mock_base_checkpointer):
-    """Test that wrap_rl_components_with_mlflashpoint raises error if save_strategy is missing."""
-    from ml_flashpoint.adapter.nemo_rl.wrapper_util import wrap_rl_components_with_mlflashpoint
 
-    # Given
-    policy = MockPolicy(mocker)
-
-    # When/Then
-    with pytest.raises(ValueError, match="save_strategy must be provided."):
-        wrap_rl_components_with_mlflashpoint(
-            checkpointer=mock_base_checkpointer,
-            policy=policy,
-            flashpoint_base_container="/tmp",
-            standard_save_period=100,
-            save_strategy=None,
-            checkpoint_loader=mock_checkpoint_loader,
-        )
 
 
 def test_getattr_delegation_to_base_checkpointer(mlf_checkpoint_manager, mock_base_checkpointer):
@@ -169,7 +152,11 @@ def test_mlf_save_period_invokes_mlflashpoint_save(mocker, mlf_checkpoint_manage
     mock_base_checkpointer.init_tmp_checkpoint.assert_not_called()
 
     # Check that os.makedirs was called for the new path
-    expected_path = os.path.join("/test-mlf", f"step-{step}_ckpt")
+    expected_path_id = CheckpointContainerId.create_child(
+        mlf_checkpoint_manager.flashpoint_base_container,
+        CheckpointContainerId.format_version_container(step)
+    )
+    expected_path = str(expected_path_id)
     mock_makedirs.assert_called_with(expected_path, exist_ok=True)
     assert returned_path == expected_path
 

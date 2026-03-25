@@ -331,9 +331,9 @@ def print_total_throughput_stats(mode, throughput_stats):
         s = throughput_stats[step]
         print(f"{step:<8} | {s['total_gb']:<15.2f} | {s['duration']:<10.3f} | {s['throughput']:<20.4f}")
 
-    if len(all_throughput) > 1:
-        avg = np.mean(all_throughput[1:])
-        print(f"Cluster-Wide Average {mode} Throughput Across Steps (Excluding first {mode}): {avg:.4f} GB/s\n")
+    if len(all_throughput) > 2:
+        avg = np.mean(all_throughput[2:])
+        print(f"Cluster-Wide Average {mode} Throughput Across Steps (Excluding first two {mode}s): {avg:.4f} GB/s\n")
     elif all_throughput:
         print(f"Cluster-Wide Average {mode} Throughput Across Steps: {np.mean(all_throughput):.4f} GB/s\n")
 
@@ -354,11 +354,11 @@ def print_per_node_throughput_stats(mode, raw_records, ranks_per_node):
             print(
                 f"{step:<8} | {node_id:<6} | {s['total_gb']:<15.2f} | {s['duration']:<10.3f} | {s['throughput']:<20.4f}"
             )
-            if len(sorted_steps) > 1 and step != sorted_steps[0]:
+            if len(sorted_steps) > 2 and step not in sorted_steps[:2]:
                 node_averages[node_id].append(s["throughput"])
 
     if node_averages:
-        print(f"\nPer-Node Average {mode} Throughput Across Steps (Excluding first {mode}):")
+        print(f"\nPer-Node Average {mode} Throughput Across Steps (Excluding first two {mode}s):")
         for node_id in sorted(node_averages.keys()):
             print(f"Node {node_id}: {np.mean(node_averages[node_id]):.4f} GB/s")
     print()

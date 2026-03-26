@@ -97,13 +97,13 @@ dev-base = [
     "ruff==0.12.11",
 ]
 
-# Defines a "dev-nemo" extra for NeMo 2.0 development (typically Python 3.10).
+# Defines a "dev-nemo" extra for NeMo 2.0 development (typically uses Python 3.10+).
 # Installed via: `pip install -e .[dev-nemo]`
 dev-nemo = [
     "ml-flashpoint[dev-base,pytorch,megatron,nemo,docs]",
 ]
 
-# Defines a "dev-nemo-rl" extra for NeMo RL development (typically Python 3.12).
+# Defines a "dev-nemo-rl" extra for NeMo RL development (typically uses Python 3.12+).
 # Installed via: `pip install -e .[dev-nemo-rl]`
 dev-nemo-rl = [
     "ml-flashpoint[dev-nemo]",

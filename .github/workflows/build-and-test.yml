@@ -25,8 +25,13 @@ jobs:
     # Use larger machine with more disk space
     runs-on: ubuntu-24.04-32core
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12"]
+        include:
+          - python-version: "3.10"
+            profile: "dev-nemo"
+          - python-version: "3.12"
+            profile: "dev-nemo-rl"
     env:
       PYTHON_FAIL_UNDER: 90
       CPP_FAIL_UNDER: 80
@@ -51,7 +56,7 @@ jobs:
           df -h
           # Install python dependencies (with coverage enabled)
           echo -e "\n##### Running pip install #####"
-          pip install -e '.[dev]' --config-settings=cmake.args="-DENABLE_COVERAGE=ON"
+          pip install -e '.[${{ matrix.profile }}]' --config-settings=cmake.args="-DENABLE_COVERAGE=ON"
 
       - run: df -h
 

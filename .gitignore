@@ -60,6 +60,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.gemini/
+.worktrees/
 
 # IDEs
 .idea/

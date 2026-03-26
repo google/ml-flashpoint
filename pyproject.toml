@@ -106,7 +106,9 @@ dev-nemo = [
 # Defines a "dev-nemo-rl" extra for NeMo RL development (typically Python 3.12).
 # Installed via: `pip install -e .[dev-nemo-rl]`
 dev-nemo-rl = [
-    "ml-flashpoint[dev-base,nemo-rl]",
+    "ml-flashpoint[dev-nemo]",
+    # TODO: uncomment below and remove line above when nemo-rl profile is added
+    #"ml-flashpoint[dev-base,nemo-rl]",
 ]
 
 # Defines a "dev" extra for setting up a development environment.

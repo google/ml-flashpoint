@@ -34,12 +34,6 @@ jobs:
             test-target: "."
             test-filter: "-m 'not nemo_rl'"
             coverage-filter: "--omit='src/ml_flashpoint/adapter/nemo_rl/*'"
-          - python-version: "3.12"
-            profile: "dev-nemo-rl"
-            python-fail-under: 90
-            test-target: "tests/adapter/nemo_rl"
-            test-filter: ""
-            coverage-filter: "--include='src/ml_flashpoint/adapter/nemo_rl/*'"
     env:
       PYTHON_FAIL_UNDER: ${{ matrix.python-fail-under }}
       CPP_FAIL_UNDER: 80
@@ -62,16 +56,6 @@ jobs:
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
           df -h
-
-          # Manual installation of nemo_rl for 3.12 to fix subpackage discovery and submodule issues
-          if [ "${{ matrix.python-version }}" == "3.12" ]; then
-            echo -e "\n##### Installing NeMo RL from source in editable mode #####"
-            # We use an editable install because the nemo_rl v0.5.0 pyproject.toml misses subpackages
-            # in its 'packages' list, which causes a standard install to be truncated.
-            git clone --recursive --branch v0.5.0 https://github.com/NVIDIA-NeMo/RL.git nemo_rl_src
-            pip install -e ./nemo_rl_src
-          fi
-
           # Install python dependencies (with coverage enabled)
           echo -e "\n##### Running pip install #####"
           pip install -e '.[${{ matrix.profile }}]' --config-settings=cmake.args="-DENABLE_COVERAGE=ON"
@@ -182,9 +166,8 @@ jobs:
         if: always()
         with:
           # Use 'coverage-reports' for 3.10 to maintain compatibility with the post-coverage workflow on main.
-          # Other versions get a unique suffix to avoid upload conflicts in the matrix.
-          name: ${{ matrix.python-version == '3.10' && 'coverage-reports' || format('coverage-reports-{0}', matrix.python-version) }}
-          if-no-files-found: warn # Default, but setting explicitly for awareness as non-PRs won't have pr_number.txt
+          name: coverage-reports
+          if-no-files-found: warn
           path: |
             htmlcov/
             python-coverage.xml
@@ -192,6 +175,77 @@ jobs:
             python-code-coverage-results.md
             cpp-code-coverage-results.md
             pr_number.txt
+
+  build-nemo-rl:
+    runs-on: ubuntu-24.04-32core
+    container:
+      image: nvcr.io/nvidia/nemo-rl:v0.5.0
+      options: --user root
+    env:
+      PYTHON_FAIL_UNDER: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          # The container already has nemo_rl and its complex dependencies installed.
+          # We just need to install ml-flashpoint.
+          pip install --upgrade pip
+          echo -e "\n##### Running pip install #####"
+          pip install -e '.[dev-nemo-rl]' --config-settings=cmake.args="-DENABLE_COVERAGE=ON"
+
+      - name: Test with pytest with coverage enabled
+        run: |
+          echo -e "\n##### Running Python tests with coverage #####"
+          # Run only NeMo RL adapter tests
+          coverage run --source=src/ml_flashpoint --branch -m pytest -v -s tests/adapter/nemo_rl
+
+      - name: Check Python test coverage
+        run: |
+          echo -e "\n##### Generating Python coverage XML #####"
+          # Focus coverage on the NeMo RL adapter
+          coverage xml -o python-coverage-nemo-rl.xml --include='src/ml_flashpoint/adapter/nemo_rl/*'
+          echo -e "\n##### Verifying NeMo RL Python coverage thresholds #####"
+          coverage report --fail-under=${{ env.PYTHON_FAIL_UNDER }} --include='src/ml_flashpoint/adapter/nemo_rl/*'
+
+      - name: Python Coverage Summary
+        uses: irongut/CodeCoverageSummary@51cc3a756ddcd398d447c044c02cb6aa83fdae95 # ratchet:irongut/CodeCoverageSummary@v1.3.0
+        if: always()
+        with:
+          filename: python-coverage-nemo-rl.xml
+          badge: true
+          fail_below_min: true
+          format: markdown
+          hide_branch_rate: false
+          hide_complexity: true
+          indicators: true
+          output: both
+          thresholds: '${{ env.PYTHON_FAIL_UNDER }} 95'
+
+      - name: Add Python Coverage Title
+        if: always()
+        run: |
+          if [ -f code-coverage-results.md ]; then
+            echo '### NeMo RL Python Code Coverage Summary' | cat - code-coverage-results.md > temp && mv temp python-code-coverage-results.md
+          fi
+
+      - name: Add Python Coverage PR Comment
+        uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # ratchet:marocchino/sticky-pull-request-comment@v2
+        if: false # TODO remove once new workflow confirmed to work
+        with:
+          recreate: true
+          path: python-code-coverage-results.md
+
+      - name: Archive NeMo RL coverage results
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        if: always()
+        with:
+          name: coverage-reports-nemo-rl
+          path: |
+            python-coverage-nemo-rl.xml
+            python-code-coverage-results.md
 
   lint-code:
     runs-on: ubuntu-latest

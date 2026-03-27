@@ -65,9 +65,12 @@ jobs:
           # Run all tests with coverage (Python and C++)
           echo -e "\n##### Running Python tests with coverage #####"
           if [ "${{ matrix.python-version }}" == "3.12" ]; then
+            # Run ALL tests on 3.12
             coverage run --source=src/ml_flashpoint --branch -m pytest -v -s
           else
-            coverage run --source=src/ml_flashpoint --branch -m pytest -v -s -m "not nemo_rl"
+            # Run everything EXCEPT nemo_rl tests on 3.10
+            # Also omit nemo_rl from coverage on 3.10 to maintain accurate threshold
+            coverage run --source=src/ml_flashpoint --branch --omit="src/ml_flashpoint/adapter/nemo_rl/*" -m pytest -v -s -m "not nemo_rl"
           fi
 
       - name: Check Python test coverage

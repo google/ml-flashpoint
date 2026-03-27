@@ -212,7 +212,6 @@ exclude = [
 norecursedirs = [
     ".git",
     ".gemini",
-    "temp_nemo_rl_repo",
     "build/**/_deps",
     ".gemini",
     ".worktrees",

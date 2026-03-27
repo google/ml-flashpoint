@@ -201,6 +201,31 @@ class TestReadMetadata:
                 object_name="invalid_metadata.pt",
             )
 
+    def test_read_metadata_rejects_malicious_pickle(self, checkpoint_directory):
+        """Security test: malicious pickle payloads must not execute arbitrary code (CWE-502).
+
+        An attacker who controls a peer node or shared checkpoint storage could craft a
+        malicious .metadata file. The restricted unpickler must block deserialization
+        of unsafe classes (e.g., exec, os.system) while allowing valid Metadata.
+        """
+        metadata_path = Path(checkpoint_directory) / ".metadata"
+
+        class MaliciousPayload:
+            def __reduce__(self):
+                return (exec, ("open('pwned.txt', 'w').write('pwned')",))
+
+        with open(metadata_path, "wb") as f:
+            pickle.dump(MaliciousPayload(), f)
+
+        with pytest.raises(pickle.UnpicklingError, match="Unsafe deserialization blocked"):
+            self.loader.read_metadata(
+                CheckpointContainerId(checkpoint_directory),
+                object_name=".metadata",
+            )
+
+        # Ensure no code execution occurred
+        assert not Path("pwned.txt").exists(), "Malicious pickle must not execute arbitrary code"
+
 
 class TestReadTensor:
     @pytest.fixture

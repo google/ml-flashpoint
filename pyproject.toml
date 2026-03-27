@@ -175,6 +175,11 @@ lint.select = ["E", "F", "W", "I"]
 # Add the format pseudo-linter
 lint.extend-select = ["RUF100"]
 
+exclude = [
+    ".gemini",
+    ".worktrees",
+]
+
 # ===================================================================
 # Tool-specific Configuration for pytest
 # ===================================================================
@@ -182,6 +187,8 @@ lint.extend-select = ["RUF100"]
 norecursedirs = [
     ".git",
     "build/**/_deps",
+    ".gemini",
+    ".worktrees",
 ]
 markers = [
     "e2e: marks tests as end-to-end",

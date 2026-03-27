@@ -161,6 +161,13 @@ def parse_log_file(log_file):
             ),
             "load_checkpoint_took",
         ),
+        (
+            re.compile(
+                r"\[NeMo D .*? (nemo_logging):\d+ rank:(\d+)\] "
+                r"ModelCheckpoint\.on_train_batch_end took ([\d.eE+-]+)s"
+            ),
+            "on_train_batch_end",
+        ),
     ]
 
     data = defaultdict(lambda: defaultdict(list))

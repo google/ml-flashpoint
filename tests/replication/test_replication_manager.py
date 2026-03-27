@@ -16,12 +16,17 @@ from concurrent.futures import Future
 
 import pytest
 
-from ml_flashpoint.replication.replication_manager import ReplicationManager, ReplicationRetryConfig
+from ml_flashpoint.replication.replication_manager import (
+    PairwiseReplicationStrategy,
+    ReplicationManager,
+    ReplicationRetryConfig,
+)
 
 
 @pytest.fixture
 def replication_manager(mocker):
     """Provides a ReplicationManager instance with mocked dependencies."""
+    mocker.patch("ml_flashpoint.core.utils.get_num_of_nodes", return_value=2)
     manager = ReplicationManager()
     manager._transfer_service = mocker.MagicMock()
     manager._repl_strategy = mocker.MagicMock()
@@ -338,3 +343,49 @@ def test_sync_bulk_retrieve_invalid_rank(replication_manager):
 
     # Then
     assert result is False
+
+
+def test_pairwise_strategy_single_node_initialization(mocker):
+    """Tests that PairwiseReplicationStrategy successfully initializes for a single node without raising an error."""
+    # Given
+    mocker.patch("ml_flashpoint.core.utils.get_num_of_nodes", return_value=1)
+    # Simulate a single node with 2 processes (GPUs)
+    addresses = ["127.0.0.1:8000", "127.0.0.1:8001"]
+
+    # When
+    strategy = PairwiseReplicationStrategy(replication_service_addresses=addresses, processes_per_node=2)
+
+    # Then
+    assert getattr(strategy, "_disable_replication", False) is True
+
+
+def test_pairwise_strategy_single_node_get_destination(mocker):
+    """Tests that get_destination_addresses returns an empty list when running on a single node."""
+    # Given
+    mocker.patch("ml_flashpoint.core.utils.get_num_of_nodes", return_value=1)
+    addresses = ["127.0.0.1:8000"]
+    strategy = PairwiseReplicationStrategy(replication_service_addresses=addresses, processes_per_node=1)
+
+    # When
+    destinations = strategy.get_destination_addresses(global_rank=0)
+
+    # Then
+    assert destinations == []
+
+
+def test_sync_bulk_retrieve_single_node_skips(replication_manager, mocker):
+    """Tests that sync_bulk_retrieve immediately returns False in a single-node environment."""
+    # Given
+    mocker.patch("ml_flashpoint.core.utils.get_num_of_nodes", return_value=1)
+    mocker.patch.object(replication_manager, "_async_retrieve")
+
+    obj_ids = ["obj1", "obj2"]
+    container_ids = []
+
+    # When
+    result = replication_manager.sync_bulk_retrieve(0, obj_ids, container_ids)
+
+    # Then
+    assert result is False
+    # Ensure that no network retrieval attempts were made
+    replication_manager._async_retrieve.assert_not_called()

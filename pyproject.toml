@@ -79,13 +79,10 @@ docs = [
     #"zensical==0.0.11",
 ]
 
-# Defines a "dev" extra for setting up a development environment.
-# Installed via: `pip install -e .[dev]`
-dev = [
+# Defines a base set of development dependencies shared across all profiles.
+dev-base = [
     # A more advanced assertion framework.
     "assertpy==1.1",
-    # Adds the optional pytorch dependency set to the development environment.
-    "ml-flashpoint[pytorch,megatron,nemo,docs]",
     # Our testing framework.
     "pytest==8.4.1",
     # A plugin for pytest that generates code coverage reports for Python.
@@ -98,6 +95,27 @@ dev = [
     "pytest-mock==3.15.0",
     # A fast Python linter and code formatter.
     "ruff==0.12.11",
+]
+
+# Defines a "dev-nemo" extra for NeMo 2.0 development (typically uses Python 3.10+).
+# Installed via: `pip install -e .[dev-nemo]`
+dev-nemo = [
+    "ml-flashpoint[dev-base,pytorch,megatron,nemo,docs]",
+]
+
+# Defines a "dev-nemo-rl" extra for NeMo RL development (typically uses Python 3.12+).
+# Installed via: `pip install -e .[dev-nemo-rl]`
+dev-nemo-rl = [
+    "ml-flashpoint[dev-nemo]",
+    # TODO: uncomment below and remove line above when nemo-rl profile is added
+    #"ml-flashpoint[dev-base,nemo-rl]",
+]
+
+# Defines a "dev" extra for setting up a development environment.
+# Aliased to dev-nemo to retain existing behavior.
+# Installed via: `pip install -e .[dev]`
+dev = [
+    "ml-flashpoint[dev-nemo]",
 ]
 
 

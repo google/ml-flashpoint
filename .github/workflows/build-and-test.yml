@@ -25,8 +25,13 @@ jobs:
     # Use larger machine with more disk space
     runs-on: ubuntu-24.04-32core
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12"]
+        include:
+          - python-version: "3.10"
+            profile: "dev-nemo"
+          - python-version: "3.12"
+            profile: "dev-nemo-rl"
     env:
       PYTHON_FAIL_UNDER: 90
       CPP_FAIL_UNDER: 80
@@ -51,7 +56,7 @@ jobs:
           df -h
           # Install python dependencies (with coverage enabled)
           echo -e "\n##### Running pip install #####"
-          pip install -e '.[dev]' --config-settings=cmake.args="-DENABLE_COVERAGE=ON"
+          pip install -e '.[${{ matrix.profile }}]' --config-settings=cmake.args="-DENABLE_COVERAGE=ON"
 
       - run: df -h
 
@@ -214,3 +219,20 @@ jobs:
         shell: 'bash'
         run: |
           go run github.com/google/addlicense@v1.1.1 -check -s=only .
+
+  # Add a gatekeeper job to act as the (main) required check, which in turn depends on all other required jobs.
+  # This makes the required check management in GitHub settings tractable, as we don't have to tweak the settings everytime
+  # a job name changes or a matrix option is modified.
+  ci-success:
+    runs-on: ubuntu-latest
+    if: always()
+    # Specify all top-level jobs that are required to pass.
+    needs: [build, lint-code, lint-license]
+    steps:
+      - name: Check overall status
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "One or more dependent jobs failed or were cancelled."
+            exit 1
+          fi
+          echo "All required jobs passed!"

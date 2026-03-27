@@ -26,7 +26,6 @@ from ml_flashpoint.replication.replication_manager import (
 @pytest.fixture
 def replication_manager(mocker):
     """Provides a ReplicationManager instance with mocked dependencies."""
-    mocker.patch("ml_flashpoint.core.utils.get_num_of_nodes", return_value=2)
     manager = ReplicationManager()
     manager._transfer_service = mocker.MagicMock()
     manager._repl_strategy = mocker.MagicMock()
@@ -373,19 +372,29 @@ def test_pairwise_strategy_single_node_get_destination(mocker):
     assert destinations == []
 
 
-def test_sync_bulk_retrieve_single_node_skips(replication_manager, mocker):
-    """Tests that sync_bulk_retrieve immediately returns False in a single-node environment."""
+def test_async_replicate_single_node_skips(replication_manager, mocker):
+    """Tests that async_replicate does nothing and returns empty futures in a single-node environment."""
     # Given
     mocker.patch("ml_flashpoint.core.utils.get_num_of_nodes", return_value=1)
-    mocker.patch.object(replication_manager, "_async_retrieve")
+    addresses = ["127.0.0.1:8000"]
+    # Initialize the strategy with 1 node
+    strategy = PairwiseReplicationStrategy(replication_service_addresses=addresses, processes_per_node=1)
+    replication_manager._repl_strategy = strategy
 
-    obj_ids = ["obj1", "obj2"]
-    container_ids = []
+    mocker.patch("torch.distributed.get_rank", return_value=0)
+
+    buffer_object = mocker.MagicMock()
+    buffer_object.get_id.return_value = "test_single_node_obj"
+    buffer_io = mocker.MagicMock(buffer_obj=buffer_object)
 
     # When
-    result = replication_manager.sync_bulk_retrieve(0, obj_ids, container_ids)
+    result_futures = replication_manager.async_replicate(buffer_io)
 
     # Then
-    assert result is False
-    # Ensure that no network retrieval attempts were made
-    replication_manager._async_retrieve.assert_not_called()
+    assert result_futures == []
+    # Ensure transfer service is NOT called
+    replication_manager._transfer_service.async_put.assert_not_called()
+    # Ensure the buffer is closed properly
+    replication_manager._checkpoint_object_manager.close_buffer.assert_called_once_with(
+        buffer_io, skip_close_if_symlink=True
+    )

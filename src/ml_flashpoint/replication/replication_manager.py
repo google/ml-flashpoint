@@ -448,9 +448,6 @@ class ReplicationManager:
         Returns:
             `True` if the bulk retrieval was successful, `False` otherwise.
         """
-        if utils.get_num_of_nodes() == 1:
-            _LOGGER.info("Single node detected; skipping bulk retrieve.")
-            return False
 
         if self._retry_config is None:
             _LOGGER.error("ReplicationManager is not initialized. Cannot retrieve.")

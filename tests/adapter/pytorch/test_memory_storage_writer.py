@@ -77,10 +77,10 @@ class TestMemoryStorageWriter:
         assert writer._main_process_torchmp_manager_future is mp_manager_future
         assert writer._write_events_per_checkpoint_id is None
         assert writer._write_results_per_checkpoint_id is None
-        assert writer._thread_count == 1
+        assert writer._files_per_rank == 1
 
     @pytest.mark.parametrize(
-        "thread_count, expected_thread_count",
+        "files_per_rank, expected_files_per_rank",
         [
             (5, 5),
             (1, 1),
@@ -89,16 +89,16 @@ class TestMemoryStorageWriter:
             (-10, 1),
         ],
     )
-    def test_init_thread_count(self, mocker, mp_manager_future, thread_count, expected_thread_count):
-        """Tests that the __init__ method sets the _thread_count attribute correctly."""
+    def test_init_files_per_rank(self, mocker, mp_manager_future, files_per_rank, expected_files_per_rank):
+        """Tests that the __init__ method sets the _files_per_rank attribute correctly."""
         # Given
         mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
         # When
         writer = MemoryStorageWriter(
-            checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future, thread_count=thread_count
+            checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future, files_per_rank=files_per_rank
         )
         # Then
-        assert writer._thread_count == expected_thread_count
+        assert writer._files_per_rank == expected_files_per_rank
 
     def test_validate_checkpoint_id(self):
         """Tests the validate_checkpoint_id class method."""
@@ -515,15 +515,15 @@ class TestMemoryStorageWriter:
             )
             assert actual_buckets == expected_buckets
 
-        @pytest.mark.parametrize("thread_count", [1, 4, 8])
-        def test_prepare_write_data_buckets_with_thread_count(self, mocker, mp_manager_future, thread_count):
-            """Tests that prepare_write_data_buckets calls the saver with the specified thread_count."""
+        @pytest.mark.parametrize("files_per_rank", [1, 4, 8])
+        def test_prepare_write_data_buckets_with_files_per_rank(self, mocker, mp_manager_future, files_per_rank):
+            """Tests that prepare_write_data_buckets calls the saver with the specified files_per_rank."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
             writer = MemoryStorageWriter(
-                checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future, thread_count=thread_count
+                checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future, files_per_rank=files_per_rank
             )
-            checkpoint_id = CheckpointContainerId("/test_checkpoint_with_thread_count")
+            checkpoint_id = CheckpointContainerId("/test_checkpoint_with_files_per_rank")
             plan = SavePlan(items=[], storage_data=_StorageDataContext(prefix="__0_"))
             planner = mocker.MagicMock()
             expected_buckets = _create_rich_object_write_buckets(checkpoint_id)
@@ -535,7 +535,7 @@ class TestMemoryStorageWriter:
 
             # Then
             mock_saver.prepare_write_data.assert_called_once_with(
-                checkpoint_id, plan.items, planner, plan.storage_data.prefix, bucket_count=thread_count
+                checkpoint_id, plan.items, planner, plan.storage_data.prefix, bucket_count=files_per_rank
             )
             assert actual_buckets == expected_buckets
 
@@ -637,21 +637,23 @@ class TestMemoryStorageWriter:
 
             # Then
             mock_saver.write_data.assert_called_once_with(
-                checkpoint_id, write_buckets=staged_write_buckets, thread_count=1, replicate_after_write=False
+                checkpoint_id, write_buckets=staged_write_buckets, files_per_rank=1, replicate_after_write=False
             )
             assert writer._write_events_per_checkpoint_id[checkpoint_id].is_set()
             assert result_future.wait() == expected_write_results
 
-        @pytest.mark.parametrize("thread_count", [1, 4, 8])
-        def test_write_staged_data_buckets_with_explicit_thread_count(self, mocker, mp_manager_future, thread_count):
+        @pytest.mark.parametrize("files_per_rank", [1, 4, 8])
+        def test_write_staged_data_buckets_with_explicit_files_per_rank(
+            self, mocker, mp_manager_future, files_per_rank
+        ):
             """Tests that write_staged_data_buckets calls checkpoint_saver.write_data with the specified
-            thread_count."""
+            files_per_rank."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
             writer = MemoryStorageWriter(
-                checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future, thread_count=thread_count
+                checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future, files_per_rank=files_per_rank
             )
-            checkpoint_id = CheckpointContainerId("/test_checkpoint_explicit_thread_count")
+            checkpoint_id = CheckpointContainerId("/test_checkpoint_explicit_files_per_rank")
             writer.reset(checkpoint_id.data)
             staged_write_buckets = _create_rich_object_write_buckets(checkpoint_id)
             expected_write_results = [
@@ -673,7 +675,7 @@ class TestMemoryStorageWriter:
             mock_saver.write_data.assert_called_once_with(
                 checkpoint_id,
                 write_buckets=staged_write_buckets,
-                thread_count=thread_count,
+                files_per_rank=files_per_rank,
                 replicate_after_write=False,
             )
             assert writer._write_events_per_checkpoint_id[checkpoint_id].is_set()
@@ -699,7 +701,7 @@ class TestMemoryStorageWriter:
 
             # Then
             mock_saver.write_data.assert_called_once_with(
-                checkpoint_id, write_buckets=staged_write_buckets, thread_count=1, replicate_after_write=False
+                checkpoint_id, write_buckets=staged_write_buckets, files_per_rank=1, replicate_after_write=False
             )
             assert not writer._write_events_per_checkpoint_id[
                 checkpoint_id
@@ -1157,7 +1159,7 @@ class TestMemoryStorageWriter:
             writer._checkpoint_saver.write_data.assert_called_once_with(
                 checkpoint_id,
                 write_buckets=writer._checkpoint_saver.prepare_write_data.return_value,
-                thread_count=1,
+                files_per_rank=1,
                 replicate_after_write=True,
             )
 

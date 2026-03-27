@@ -63,11 +63,13 @@ jobs:
           sudo rm -rf /var/lib/apt/lists/*
           df -h
 
-          # Manual installation of nemo_rl for 3.12
+          # Manual installation of nemo_rl for 3.12 to fix subpackage discovery and submodule issues
           if [ "${{ matrix.python-version }}" == "3.12" ]; then
-            echo -e "\n##### Installing NeMo RL from source #####"
+            echo -e "\n##### Installing NeMo RL from source in editable mode #####"
+            # We use an editable install because the nemo_rl v0.5.0 pyproject.toml misses subpackages
+            # in its 'packages' list, which causes a standard install to be truncated.
             git clone --recursive --branch v0.5.0 https://github.com/NVIDIA-NeMo/RL.git nemo_rl_src
-            pip install ./nemo_rl_src
+            pip install -e ./nemo_rl_src
           fi
 
           # Install python dependencies (with coverage enabled)

@@ -50,12 +50,9 @@ jobs:
             run-cpp-coverage: false
             # Use a login shell to ensure container environment profiles are correctly loaded.
             shell: "bash -l {0}"
-            # NeMo RL components and their dependencies need to be in PYTHONPATH.
-            pythonpath: "/opt/nemo-rl/3rdparty/Megatron-LM-workspace/Megatron-LM/:/opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src/:/opt/nemo-rl/3rdparty/Automodel-workspace/Automodel/"
     env:
       PYTHON_FAIL_UNDER: 90
       CPP_FAIL_UNDER: 80
-      PYTHONPATH: ${{ matrix.pythonpath }}${{ matrix.pythonpath && ':' }}$PYTHONPATH
     permissions:
       contents: read # Required for actions/checkout
     defaults:
@@ -83,12 +80,24 @@ jobs:
           fi
           # Install missing dependencies if in NeMo RL container
           if [ -n "${{ matrix.container }}" ]; then
+            # Install known missing dependencies
             pip install nvidia-modelopt
+            
+            # Install 3rdparty components as editable packages
+            # This is more robust than PYTHONPATH as it handles namespace packages and dependencies.
+            pip install -e /opt/nemo-rl/3rdparty/Megatron-LM-workspace/Megatron-LM/
+            pip install -e /opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/
+            pip install -e /opt/nemo-rl/3rdparty/Automodel-workspace/Automodel/
           fi
           df -h
           # Install python dependencies (with coverage enabled)
           echo -e "\n##### Running pip install #####"
           pip install -e '.[${{ matrix.profile }}]' --config-settings=cmake.args="-DENABLE_COVERAGE=ON"
+          
+          # Verify installation
+          if [ -n "${{ matrix.container }}" ]; then
+            pip list
+          fi
 
       - run: df -h
 

@@ -50,9 +50,12 @@ jobs:
             run-cpp-coverage: false
             # Use a login shell to ensure container environment profiles are correctly loaded.
             shell: "bash -l {0}"
+            # Megatron-LM repository needs to be in PYTHONPATH for nemo_rl to work correctly.
+            pythonpath: "/opt/nemo-rl/3rdparty/Megatron-LM-workspace/Megatron-LM/"
     env:
       PYTHON_FAIL_UNDER: 90
       CPP_FAIL_UNDER: 80
+      PYTHONPATH: ${{ matrix.pythonpath }}${{ matrix.pythonpath && ':' }}$PYTHONPATH
     permissions:
       contents: read # Required for actions/checkout
     defaults:
@@ -79,6 +82,8 @@ jobs:
           env | sort
           # Search for megatron to see where it is
           find /opt -name "megatron" -type d -maxdepth 4 2>/dev/null | head -n 20 || true
+          # Check for .pth files in site-packages
+          find /opt -name "*.pth" 2>/dev/null || true
 
       - name: Install dependencies
         run: |

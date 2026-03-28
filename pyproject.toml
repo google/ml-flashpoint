@@ -56,7 +56,7 @@ dependencies = [
 
 # An extra for users who want to use this library with just PyTorch.
 # Installed via: `pip install ml-flashpoint[pytorch]`
-pytorch = ["torch==2.8.0"]
+pytorch = ["torch>=2.8.0"]
 # An extra for users who want to use this library with its Megatron-LM adapter.
 # Installed via: `pip install ml-flashpoint[megatron]`
 megatron = ["megatron_core==0.13.1"]
@@ -67,6 +67,13 @@ nemo = [
     "ml_flashpoint[pytorch]",
     "nemo_toolkit[all]==2.4.0",
 ]
+# An extra for users who want to use this library with NeMo RL.
+# This is kept empty because the NeMo RL environment (including its complex dependencies
+# like PyTorch and Megatron-Core) is provided by the base container image in CI.
+# This prevents pip from attempting to resolve or update these dependencies, which
+# can cause version conflicts and break the environment.
+# Installed via: `pip install ml-flashpoint[nemo-rl]`
+nemo-rl = []
 
 # An extra for generating the documentation site.
 # Installed via: `pip install ml-flashpoint[docs]`
@@ -106,9 +113,7 @@ dev-nemo = [
 # Defines a "dev-nemo-rl" extra for NeMo RL development (typically uses Python 3.12+).
 # Installed via: `pip install -e .[dev-nemo-rl]`
 dev-nemo-rl = [
-    "ml-flashpoint[dev-nemo]",
-    # TODO: uncomment below and remove line above when nemo-rl profile is added
-    #"ml-flashpoint[dev-base,nemo-rl]",
+    "ml-flashpoint[dev-base,nemo-rl,docs]",
 ]
 
 # Defines a "dev" extra for setting up a development environment.
@@ -204,6 +209,7 @@ exclude = [
 [tool.pytest.ini_options]
 norecursedirs = [
     ".git",
+    ".gemini",
     "build/**/_deps",
     ".gemini",
     ".worktrees",
@@ -211,6 +217,7 @@ norecursedirs = [
 markers = [
     "e2e: marks tests as end-to-end",
     "smoke: quick subset of tests",
+    "nemo_rl: marks tests for NeMo RL adapter",
 ]
 
 # ===================================================================

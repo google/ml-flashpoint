@@ -79,15 +79,12 @@ jobs:
           echo "Python Path: $PYTHONPATH"
           which python
           python --version
-          # Search for modelopt
-          find /opt -name "modelopt" -type d 2>/dev/null | head -n 10 || true
-          # Search for requirements files
-          find /opt/nemo-rl -name "requirements*.txt" 2>/dev/null || true
-          # List 3rdparty dirs
-          ls -R /opt/nemo-rl/3rdparty 2>/dev/null | grep ":$" | head -n 20 || true
-          # List site-packages content
-          python -c "import site; print('\n'.join(site.getsitepackages()))"
-          ls $(python -c "import site; print(site.getsitepackages()[0])") | grep -E "megatron|nemo|modelopt" || true
+          # Broad search for modelopt
+          find / -name "*modelopt*" -type d 2>/dev/null | head -n 20 || true
+          # Check all installed packages
+          pip list
+          # Check for any other potentially missing Megatron components
+          ls -R /opt/nemo-rl/3rdparty 2>/dev/null | grep ":$" || true
 
       - name: Install dependencies
         run: |

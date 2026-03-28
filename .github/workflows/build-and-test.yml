@@ -69,6 +69,16 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - run: df -h
+      
+      - name: Debug Environment
+        run: |
+          echo "Current Path: $PATH"
+          echo "Python Path: $PYTHONPATH"
+          which python
+          python --version
+          env | sort
+          # Search for megatron to see where it is
+          find /opt -name "megatron" -type d -maxdepth 4 2>/dev/null | head -n 20 || true
 
       - name: Install dependencies
         run: |

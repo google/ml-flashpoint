@@ -50,8 +50,8 @@ jobs:
             run-cpp-coverage: false
             # Use a login shell to ensure container environment profiles are correctly loaded.
             shell: "bash -l {0}"
-            # Megatron-LM and Megatron-Bridge repositories need to be in PYTHONPATH for nemo_rl to work correctly.
-            pythonpath: "/opt/nemo-rl/3rdparty/Megatron-LM-workspace/Megatron-LM/:/opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src/"
+            # NeMo RL components and their dependencies need to be in PYTHONPATH.
+            pythonpath: "/opt/nemo-rl/3rdparty/Megatron-LM-workspace/Megatron-LM/:/opt/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src/:/opt/nemo-rl/3rdparty/Automodel-workspace/Automodel/"
     env:
       PYTHON_FAIL_UNDER: 90
       CPP_FAIL_UNDER: 80
@@ -72,23 +72,19 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - run: df -h
-      
-      - name: Debug Environment
-        run: |
-          echo "Current Path: $PATH"
-          echo "Python Path: $PYTHONPATH"
-          which python
-          python --version
-          # Broad search for modelopt
-          find / -name "*modelopt*" -type d 2>/dev/null | head -n 20 || true
-          # Check all installed packages
-          pip list
-          # Check for any other potentially missing Megatron components
-          ls -R /opt/nemo-rl/3rdparty 2>/dev/null | grep ":$" || true
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          # Clean up apt cache to save space (only on host)
+          if [ -z "${{ matrix.container }}" ]; then
+            sudo apt-get clean
+            sudo rm -rf /var/lib/apt/lists/*
+          fi
+          # Install missing dependencies if in NeMo RL container
+          if [ -n "${{ matrix.container }}" ]; then
+            pip install nvidia-modelopt
+          fi
           df -h
           # Install python dependencies (with coverage enabled)
           echo -e "\n##### Running pip install #####"

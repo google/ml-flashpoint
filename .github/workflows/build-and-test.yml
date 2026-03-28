@@ -79,11 +79,13 @@ jobs:
           echo "Python Path: $PYTHONPATH"
           which python
           python --version
-          env | sort
-          # Search for megatron to see where it is
-          find /opt -name "megatron" -type d -maxdepth 4 2>/dev/null | head -n 20 || true
-          # Check for .pth files in site-packages
-          find /opt -name "*.pth" 2>/dev/null || true
+          # Search for bridge.py and AutoBridge
+          grep -r "class AutoBridge" /opt 2>/dev/null | head -n 5 || true
+          find /opt -name "bridge.py" 2>/dev/null | head -n 10 || true
+          find /opt -name "megatron" -type d 2>/dev/null | head -n 10 || true
+          # List site-packages
+          python -c "import site; print(site.getsitepackages())"
+          pip list | grep megatron || true
 
       - name: Install dependencies
         run: |

@@ -73,6 +73,7 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
         self.every_n_steps = every_n_steps
         self.skip_every_n_steps = skip_every_n_steps if skip_every_n_steps is not None else 0
         self._enabled = enabled
+        self.replication_manager = None
         self._validate()
 
     def _validate(self):
@@ -151,3 +152,13 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
             ckpt_options,
         )
         trainer.save_checkpoint(ckpt_version_container.data, storage_options={ML_FLASHPOINT_OPTS_KEY: ckpt_options})
+
+    @override
+    def on_train_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        if self.replication_manager is not None:
+            _LOGGER.info("Training ended. Shutting down Replication Manager...")
+            self.replication_manager.shutdown()
+
+            if trainer.local_rank == 0:
+                _LOGGER.info("Rank 0: Performing final checkpoint cleanup...")
+                trainer.strategy.checkpoint_io.remove_checkpoint(self.base_container.data)

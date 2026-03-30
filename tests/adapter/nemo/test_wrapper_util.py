@@ -878,6 +878,36 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         assert isinstance(trainer.strategy.checkpoint_io, MLFlashpointCheckpointIO)
         assert trainer.strategy.checkpoint_io.fallback_checkpoint_io is original_checkpoint_io
 
+    def test_replication_manager_injected_into_callbacks(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
+        """Tests that the ReplicationManager is injected into all MLFlashpointCheckpointCallback instances."""
+        # Given
+        trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        mock_mlf_callback1 = mocker.MagicMock(spec=MLFlashpointCheckpointCallback)
+        mock_mlf_callback2 = mocker.MagicMock(spec=MLFlashpointCheckpointCallback)
+        trainer.callbacks = [
+            mocker.MagicMock(),
+            mock_mlf_callback1,
+            mock_mlf_callback2,
+        ]
+        trainer.strategy = mocker.MagicMock(spec=nl_strategies.MegatronStrategy)
+        original_checkpoint_io = mocker.MagicMock(spec=MegatronCheckpointIO)
+        trainer.strategy.checkpoint_io = original_checkpoint_io
+        base_container = "/test_base_container"
+
+        # When
+        wrap_trainer_checkpoint_io_with_mlflashpoint(
+            trainer,
+            base_container,
+            mock_ckpt_obj_manager,
+            replication_manager=mock_replication_manager,
+            async_save=True,
+            checkpoint_loader=mocker.MagicMock(spec=DefaultMLFlashpointCheckpointLoader),
+        )
+
+        # Then
+        assert mock_mlf_callback1.replication_manager is mock_replication_manager
+        assert mock_mlf_callback2.replication_manager is mock_replication_manager
+
     def test_invalid_config_with_mlf_async_wrapper_and_async_save_false(
         self, mocker, mock_ckpt_obj_manager, mock_replication_manager
     ):

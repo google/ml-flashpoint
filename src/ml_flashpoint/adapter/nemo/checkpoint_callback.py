@@ -154,11 +154,23 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
         trainer.save_checkpoint(ckpt_version_container.data, storage_options={ML_FLASHPOINT_OPTS_KEY: ckpt_options})
 
     @override
+    @log_execution_time(logger=_LOGGER, name="on_train_end", level=logging.INFO)
     def on_train_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        _LOGGER.info("Training ended. Synchronizing and finalizing checkpoints...")
+
+        # 1. Wait for async checkpoint saves to finish locally
+        checkpoint_io = getattr(trainer.strategy, "checkpoint_io", None)
+        if hasattr(checkpoint_io, "maybe_finalize_save_checkpoint"):
+            checkpoint_io.maybe_finalize_save_checkpoint(blocking=True)
+
+        # 2. Synchronize all ranks to ensure background writes are done everywhere before deletion
+        if hasattr(trainer.strategy, "barrier"):
+            trainer.strategy.barrier("mlf_cleanup_barrier")
+
         if self.replication_manager is not None:
             _LOGGER.info("Training ended. Shutting down Replication Manager...")
             self.replication_manager.shutdown()
 
-            if trainer.local_rank == 0:
-                _LOGGER.info("Rank 0: Performing final checkpoint cleanup...")
-                trainer.strategy.checkpoint_io.remove_checkpoint(self.base_container.data)
+        if trainer.local_rank == 0:
+            _LOGGER.info("Local rank 0: Performing final checkpoint cleanup...")
+            trainer.strategy.checkpoint_io.remove_checkpoint(self.base_container.data)

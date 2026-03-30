@@ -352,3 +352,67 @@ def test_on_train_batch_end_when_enabled(mocker):
     # Then
     # Should save
     trainer.save_checkpoint.assert_called_once()
+
+
+def test_on_train_end_cleans_up_on_rank_zero(mocker):
+    # Given
+    trainer = mocker.MagicMock(spec=pl.Trainer)
+    trainer.local_rank = 0
+    checkpoint_io = mocker.MagicMock()
+    trainer.strategy.checkpoint_io = checkpoint_io
+
+    pl_module = mocker.MagicMock(spec=pl.LightningModule)
+
+    base_container = CheckpointContainerId("/test/base")
+    callback = MLFlashpointCheckpointCallback(checkpoint_base_container=base_container, every_n_steps=1)
+    callback.replication_manager = mocker.MagicMock()
+
+    # When
+    callback.on_train_end(trainer, pl_module)
+
+    # Then
+    callback.replication_manager.shutdown.assert_called_once()
+    checkpoint_io.remove_checkpoint.assert_called_once_with(base_container.data)
+
+
+def test_on_train_end_skips_cleanup_on_non_zero_rank(mocker):
+    # Given
+    trainer = mocker.MagicMock(spec=pl.Trainer)
+    trainer.local_rank = 1
+    checkpoint_io = mocker.MagicMock()
+    trainer.strategy.checkpoint_io = checkpoint_io
+
+    pl_module = mocker.MagicMock(spec=pl.LightningModule)
+
+    base_container = CheckpointContainerId("/test/base")
+    callback = MLFlashpointCheckpointCallback(checkpoint_base_container=base_container, every_n_steps=1)
+    callback.replication_manager = mocker.MagicMock()
+
+    # When
+    callback.on_train_end(trainer, pl_module)
+
+    # Then
+    callback.replication_manager.shutdown.assert_called_once()
+    checkpoint_io.remove_checkpoint.assert_not_called()
+
+
+def test_on_train_end_no_replication_manager_skips_shutdown(mocker):
+    # Given
+    trainer = mocker.MagicMock(spec=pl.Trainer)
+    trainer.local_rank = 0
+    checkpoint_io = mocker.MagicMock()
+    trainer.strategy.checkpoint_io = checkpoint_io
+
+    pl_module = mocker.MagicMock(spec=pl.LightningModule)
+
+    base_container = CheckpointContainerId("/test/base")
+    callback = MLFlashpointCheckpointCallback(checkpoint_base_container=base_container, every_n_steps=1)
+    # self.replication_manager is inherently None initialized in __init__
+
+    # When
+    callback.on_train_end(trainer, pl_module)
+
+    # Then
+    # replication_manager doesn't crash since it's None and checked.
+    # still cleans up on rank 0
+    checkpoint_io.remove_checkpoint.assert_called_once_with(base_container.data)

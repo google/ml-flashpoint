@@ -93,8 +93,8 @@ auto_resume = wrap_trainer_and_auto_resume_with_mlflashpoint(
     # write_thread_count=1, # Optional, defaults to 1
     # initial_write_buffer_size_bytes=DESIRED_NUM_BYTES, # Optional, defaults to 16 GB
     # use_optimized_save=True, # Optional, defaults to True. Uses the optimized save method to reduce write time.
-    # use_cached_ckpt_structure=True, # Optional, defaults to False. Caches the checkpoint structure after identifying 2 consecutive save plan structures that are equal.
-    # use_fully_parallel_wrapper=False, # Optional, defaults to True. Uses the fully parallel wrapper for save and load.
+    # use_cached_ckpt_structure=False, # Optional, defaults to False. Caches the checkpoint structure after identifying 2 consecutive save plan structures that are equal.
+    # use_fully_parallel_wrapper=True, # Optional, defaults to True. Uses the fully parallel wrapper for save and load.
 )
 ```
 

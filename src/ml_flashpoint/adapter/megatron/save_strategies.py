@@ -107,6 +107,11 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         self._validated_cache_reuse: bool = False
         self._use_cached_ckpt_structure: bool = use_cached_ckpt_structure
 
+    @property
+    def thread_count(self) -> int:
+        """Returns the number of threads used by the storage writer."""
+        return self._storage_writer._thread_count
+
     @override
     def can_handle_sharded_objects(self) -> bool:
         # Not currently used, but in case it is, ensure this strategy is used for ShardedObjects as well.
@@ -139,7 +144,7 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         # 1b. Re-initialize the StorageWriter to use a new instance per save to avoid hangs from shared state.
         self._storage_writer = MemoryStorageWriter(
             checkpoint_saver=self._checkpoint_saver,
-            mp_manager=self._storage_writer._main_process_torchmp_manager,
+            mp_manager_future=self._storage_writer._main_process_torchmp_manager_future,
             thread_count=self._storage_writer._thread_count,
         )
         # 1c. Reset the StorageWriter for this checkpoint version.

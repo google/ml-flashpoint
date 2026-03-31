@@ -41,6 +41,7 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # ratchet:actions/download-artifact@v7
         continue-on-error: true # Artifact might be missing on very early failures
         with:
+          # Only use the coverage data from the default (3.10) build that was uploaded as "coverage-reports"
           name: coverage-reports
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}

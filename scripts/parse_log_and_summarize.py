@@ -331,11 +331,16 @@ def print_total_throughput_stats(mode, throughput_stats):
         s = throughput_stats[step]
         print(f"{step:<8} | {s['total_gb']:<15.2f} | {s['duration']:<10.3f} | {s['throughput']:<20.4f}")
 
-    if len(all_throughput) > 1:
-        avg = np.mean(all_throughput[1:])
-        print(f"Cluster-Wide Average {mode} Throughput Across Steps (Excluding first {mode}): {avg:.4f} GB/s\n")
-    elif all_throughput:
-        print(f"Cluster-Wide Average {mode} Throughput Across Steps: {np.mean(all_throughput):.4f} GB/s\n")
+    if all_throughput:
+        total_avg = np.mean(all_throughput)
+        print(f"Total Cluster-Wide Average {mode} Throughput Across Steps: {total_avg:.4f} GB/s")
+
+    if len(all_throughput) > 2:
+        avg_after_2 = np.mean(all_throughput[2:])
+        print(
+            f"Average {mode} Throughput Excluding first two {mode}s "
+            f"(to focus on buffer pooling efficiency): {avg_after_2:.4f} GB/s"
+        )
 
 
 def print_per_node_throughput_stats(mode, raw_records, ranks_per_node):
@@ -354,13 +359,20 @@ def print_per_node_throughput_stats(mode, raw_records, ranks_per_node):
             print(
                 f"{step:<8} | {node_id:<6} | {s['total_gb']:<15.2f} | {s['duration']:<10.3f} | {s['throughput']:<20.4f}"
             )
-            if len(sorted_steps) > 1 and step != sorted_steps[0]:
-                node_averages[node_id].append(s["throughput"])
+            node_averages[node_id].append(s["throughput"])
 
     if node_averages:
-        print(f"\nPer-Node Average {mode} Throughput Across Steps (Excluding first {mode}):")
+        print(f"\nPer-Node Average {mode} Throughput Across Steps:")
         for node_id in sorted(node_averages.keys()):
-            print(f"Node {node_id}: {np.mean(node_averages[node_id]):.4f} GB/s")
+            throughputs = node_averages[node_id]
+            total_avg = np.mean(throughputs)
+            output = f"Node {node_id}: {total_avg:.4f} GB/s (Total Average)"
+
+            if len(throughputs) > 2:
+                avg_after_2 = np.mean(throughputs[2:])
+                output += f" | {avg_after_2:.4f} GB/s (Excl. first two {mode}s, focusing on buffer pooling efficiency)"
+
+            print(output)
     print()
 
 

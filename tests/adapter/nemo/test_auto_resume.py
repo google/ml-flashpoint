@@ -64,6 +64,11 @@ class TestMLFlashpointAutoResume:
         checkpoint_loader = DefaultMLFlashpointCheckpointLoader(
             checkpoint_object_manager=chkpt_obj_manager,
             replication_manager=replication_manager,
+            global_rank_getter=lambda: 0,
+            local_rank_getter=lambda: 0,
+            broadcast_object_list_func=lambda *args, **kwargs: None,
+            all_gather_object_func=lambda *args, **kwargs: None,
+            world_size_getter=lambda: 1,
         )
         base_container = CheckpointContainerId("/tmp/ml_flashpoint_checkpoints")
 
@@ -83,6 +88,11 @@ class TestMLFlashpointAutoResume:
         checkpoint_loader = DefaultMLFlashpointCheckpointLoader(
             checkpoint_object_manager=CheckpointObjectManager(),
             replication_manager=ReplicationManager(),
+            global_rank_getter=lambda: 0,
+            local_rank_getter=lambda: 0,
+            broadcast_object_list_func=lambda *args, **kwargs: None,
+            all_gather_object_func=lambda *args, **kwargs: None,
+            world_size_getter=lambda: 1,
         )
         base_container = CheckpointContainerId("/tmp/ml_flashpoint_checkpoints")
 
@@ -103,6 +113,11 @@ class TestMLFlashpointAutoResume:
         checkpoint_loader = DefaultMLFlashpointCheckpointLoader(
             checkpoint_object_manager=CheckpointObjectManager(),
             replication_manager=ReplicationManager(),
+            global_rank_getter=lambda: 0,
+            local_rank_getter=lambda: 0,
+            broadcast_object_list_func=lambda *args, **kwargs: None,
+            all_gather_object_func=lambda *args, **kwargs: None,
+            world_size_getter=lambda: 1,
         )
         base_container = CheckpointContainerId("/tmp/ml_flashpoint_checkpoints")
 
@@ -122,7 +137,13 @@ class TestMLFlashpointAutoResume:
         """Tests that init respects the passed parameters for resume flags."""
         # Arrange
         checkpoint_loader = DefaultMLFlashpointCheckpointLoader(
-            checkpoint_object_manager=CheckpointObjectManager(), replication_manager=ReplicationManager()
+            checkpoint_object_manager=CheckpointObjectManager(),
+            replication_manager=ReplicationManager(),
+            global_rank_getter=lambda: 0,
+            local_rank_getter=lambda: 0,
+            broadcast_object_list_func=lambda *args, **kwargs: None,
+            all_gather_object_func=lambda *args, **kwargs: None,
+            world_size_getter=lambda: 1,
         )
         base_container = CheckpointContainerId("/tmp/ml_flashpoint_checkpoints")
 
@@ -142,7 +163,13 @@ class TestMLFlashpointAutoResume:
         """Tests that kwargs (like restore_config) are passed to the superclass."""
         # Arrange
         checkpoint_loader = DefaultMLFlashpointCheckpointLoader(
-            checkpoint_object_manager=CheckpointObjectManager(), replication_manager=ReplicationManager()
+            checkpoint_object_manager=CheckpointObjectManager(),
+            replication_manager=ReplicationManager(),
+            global_rank_getter=lambda: 0,
+            local_rank_getter=lambda: 0,
+            broadcast_object_list_func=lambda *args, **kwargs: None,
+            all_gather_object_func=lambda *args, **kwargs: None,
+            world_size_getter=lambda: 1,
         )
         base_container = CheckpointContainerId("/tmp/ml_flashpoint_checkpoints")
         restore_config = RestoreConfig(path="nemo://some-model")

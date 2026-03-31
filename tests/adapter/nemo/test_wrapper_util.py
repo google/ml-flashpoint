@@ -17,6 +17,10 @@
 import dataclasses
 
 import pytest
+from megatron.core.dist_checkpointing.strategies.fully_parallel import (
+    FullyParallelLoadStrategyWrapper,
+    FullyParallelSaveStrategyWrapper,
+)
 from nemo import lightning as nl
 from nemo.lightning.io.pl import MegatronCheckpointIO
 from nemo.lightning.pytorch import strategies as nl_strategies
@@ -35,12 +39,20 @@ from ml_flashpoint.adapter.nemo.wrapper_util import (
 )
 from ml_flashpoint.adapter.pytorch.memory_storage_writer import MemoryStorageWriter
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
+from ml_flashpoint.core.buffer_pool import BufferPoolConfig
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId
 from ml_flashpoint.core.checkpoint_loader import DefaultMLFlashpointCheckpointLoader
 from ml_flashpoint.core.checkpoint_saver import (
     DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
 )
 from ml_flashpoint.replication.replication_manager import ReplicationManager
+
+
+class MockMLFlashpointCheckpointIO(MLFlashpointCheckpointIO):
+    trainer = None
+    save_strategy = None
+    fallback_checkpoint_io = None
+    flashpoint_base_dir = "/tmp/mock_base_dir"
 
 
 class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
@@ -54,7 +66,15 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
     def mock_replication_manager(self, mocker):
         return mocker.MagicMock(spec=ReplicationManager)
 
-    def test_successful_wrap_and_resume_creation(self, mocker):
+    @pytest.fixture
+    def mock_ckpt_obj_manager_cls(self, mocker):
+        # Patch the CheckpointObjectManager class imported in wrapper_util.py
+        cls_mock = mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.CheckpointObjectManager")
+        # Ensure it returns a MagicMock instance when called
+        cls_mock.return_value = mocker.MagicMock(spec=CheckpointObjectManager)
+        return cls_mock
+
+    def test_successful_wrap_and_resume_creation(self, mocker, mock_ckpt_obj_manager_cls):
         """Tests the successful creation of MLFlashpointAutoResume and wrapping."""
         # Given
         # Mock the heavy components
@@ -67,6 +87,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
 
         # Inputs
         trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.global_rank = 0
         flashpoint_base_container = "/tmp/test_container"
         async_save = True
 
@@ -83,13 +104,20 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         )
 
         # Then
-        # 1. ReplicationManager initialized
         mock_replication_manager_cls.assert_called_once()
         mock_replication_manager_instance.initialize.assert_called_once()
+
+        mock_ckpt_obj_manager_cls.assert_called_once()
+        call_args = mock_ckpt_obj_manager_cls.call_args
+        assert "pool_config" in call_args.kwargs
+        pool_config = call_args.kwargs["pool_config"]
+        assert isinstance(pool_config, BufferPoolConfig)
+        assert pool_config.pool_dir_path == f"{flashpoint_base_container}/buffer_pool"
+
         # Capture the ckpt_obj_manager passed to initialize
         _, kwargs_init = mock_replication_manager_instance.initialize.call_args
         ckpt_obj_manager = kwargs_init["checkpoint_object_manager"]
-        assert isinstance(ckpt_obj_manager, CheckpointObjectManager)
+        assert ckpt_obj_manager == mock_ckpt_obj_manager_cls.return_value
 
         # 2. wrap_trainer_checkpoint_io_with_mlflashpoint called
         mock_wrap_trainer.assert_called_once_with(
@@ -104,6 +132,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
             initial_write_buffer_size_bytes=DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
             use_optimized_save=True,
             use_cached_ckpt_structure=False,
+            use_fully_parallel_wrapper=False,
         )
 
         # 3. Result is correct type and has correct attributes
@@ -121,6 +150,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.ReplicationManager")
         mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.wrap_trainer_checkpoint_io_with_mlflashpoint")
         trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.global_rank = 0
         flashpoint_base_container = "/tmp/test_container"
 
         # When
@@ -158,7 +188,10 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.ReplicationManager")
         mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.wrap_trainer_checkpoint_io_with_mlflashpoint")
 
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.wrap_trainer_checkpoint_io_with_mlflashpoint")
+
         trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.global_rank = 0
         default_auto_resume = nl.AutoResume()
 
         # When
@@ -176,6 +209,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         [
             ({}, DEFAULT_INITIAL_BUFFER_SIZE_BYTES),
             ({"initial_write_buffer_size_bytes": 12345}, 12345),
+            ({"initial_write_buffer_size_bytes": None}, DEFAULT_INITIAL_BUFFER_SIZE_BYTES),
         ],
     )
     def test_initial_save_buffer_size_forwarding(
@@ -184,6 +218,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         """Tests that the initial_save_buffer_size_bytes is forwarded correctly."""
         # Given
         trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.global_rank = 0
         trainer.callbacks = [mocker.MagicMock(spec=MLFlashpointCheckpointCallback)]
         trainer.strategy = mocker.MagicMock(spec=nl_strategies.MegatronStrategy)
         original_checkpoint_io = mocker.MagicMock(spec=MegatronCheckpointIO)
@@ -229,6 +264,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         """Tests that the write_thread_count is forwarded correctly."""
         # Given
         trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.global_rank = 0
         trainer.callbacks = [mocker.MagicMock(spec=MLFlashpointCheckpointCallback)]
         trainer.strategy = mocker.MagicMock(spec=nl_strategies.MegatronStrategy)
         original_checkpoint_io = mocker.MagicMock(spec=MegatronCheckpointIO)
@@ -269,6 +305,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         )
 
         trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.global_rank = 0
         flashpoint_base_container = "/tmp/test_container"
         default_auto_resume = nl.AutoResume()
 
@@ -294,6 +331,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
             "ml_flashpoint.adapter.nemo.wrapper_util.wrap_trainer_checkpoint_io_with_mlflashpoint"
         )
         trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.global_rank = 0
         flashpoint_base_container = "/tmp/test_container"
         default_auto_resume = nl.AutoResume()
 
@@ -309,6 +347,58 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         mock_wrap_trainer.assert_called_once()
         _, kwargs = mock_wrap_trainer.call_args
         assert kwargs["use_cached_ckpt_structure"] is False
+
+    @pytest.mark.parametrize("use_fully_parallel_wrapper", [True, False])
+    def test_use_fully_parallel_wrapper_forwarding(self, mocker, use_fully_parallel_wrapper):
+        """Tests that use_fully_parallel_wrapper is forwarded correctly."""
+        # Given
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.ReplicationManager")
+        mock_wrap_trainer = mocker.patch(
+            "ml_flashpoint.adapter.nemo.wrapper_util.wrap_trainer_checkpoint_io_with_mlflashpoint"
+        )
+        trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.global_rank = 0
+        flashpoint_base_container = "/tmp/test_container"
+        default_auto_resume = nl.AutoResume()
+
+        # When
+        wrap_trainer_and_auto_resume_with_mlflashpoint(
+            trainer,
+            flashpoint_base_container,
+            async_save=True,
+            default_auto_resume=default_auto_resume,
+            use_fully_parallel_wrapper=use_fully_parallel_wrapper,
+        )
+
+        # Then
+        mock_wrap_trainer.assert_called_once()
+        _, kwargs = mock_wrap_trainer.call_args
+        assert kwargs["use_fully_parallel_wrapper"] is use_fully_parallel_wrapper
+
+    def test_use_fully_parallel_wrapper_default_value(self, mocker):
+        """Tests that use_fully_parallel_wrapper defaults to False."""
+        # Given
+        mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.ReplicationManager")
+        mock_wrap_trainer = mocker.patch(
+            "ml_flashpoint.adapter.nemo.wrapper_util.wrap_trainer_checkpoint_io_with_mlflashpoint"
+        )
+        trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.global_rank = 0
+        flashpoint_base_container = "/tmp/test_container"
+        default_auto_resume = nl.AutoResume()
+
+        # When
+        wrap_trainer_and_auto_resume_with_mlflashpoint(
+            trainer,
+            flashpoint_base_container,
+            async_save=True,
+            default_auto_resume=default_auto_resume,
+        )
+
+        # Then
+        mock_wrap_trainer.assert_called_once()
+        _, kwargs = mock_wrap_trainer.call_args
+        assert kwargs["use_fully_parallel_wrapper"] is False
 
 
 class TestWrapTrainerCheckpointIOWithMLFlashpoint:
@@ -514,6 +604,76 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         assert trainer.strategy.checkpoint_io.fallback_checkpoint_io is original_checkpoint_io
         assert trainer.strategy.checkpoint_io.async_save is True
 
+    def test_fully_parallel_wrapper_enabled(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
+        """Tests that FullyParallel wrappers are applied when flag=True."""
+
+        # Given
+        trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.callbacks = [mocker.MagicMock(spec=MLFlashpointCheckpointCallback)]
+        trainer.strategy = mocker.MagicMock(spec=nl_strategies.MegatronStrategy)
+        original_checkpoint_io = mocker.MagicMock(spec=MegatronCheckpointIO)
+        trainer.strategy.checkpoint_io = original_checkpoint_io
+        base_container = "/test_base_container"
+
+        # When
+        wrap_trainer_checkpoint_io_with_mlflashpoint(
+            trainer,
+            base_container,
+            mock_ckpt_obj_manager,
+            mock_replication_manager,
+            async_save=True,
+            checkpoint_loader=mocker.MagicMock(spec=DefaultMLFlashpointCheckpointLoader),
+            use_fully_parallel_wrapper=True,  # 🔥 enable it
+        )
+
+        # Then
+        wrapped_io = trainer.strategy.checkpoint_io
+        assert isinstance(wrapped_io, MLFlashpointCheckpointIO)
+
+        assert isinstance(
+            wrapped_io.save_strategy,
+            FullyParallelSaveStrategyWrapper,
+        )
+        assert isinstance(
+            wrapped_io.load_strategy,
+            FullyParallelLoadStrategyWrapper,
+        )
+
+    def test_fully_parallel_wrapper_disabled_by_default(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
+        """Tests that FullyParallel wrappers are NOT applied when flag=False."""
+
+        # Given
+        trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.callbacks = [mocker.MagicMock(spec=MLFlashpointCheckpointCallback)]
+        trainer.strategy = mocker.MagicMock(spec=nl_strategies.MegatronStrategy)
+        original_checkpoint_io = mocker.MagicMock(spec=MegatronCheckpointIO)
+        trainer.strategy.checkpoint_io = original_checkpoint_io
+        base_container = "/test_base_container"
+
+        # When
+        wrap_trainer_checkpoint_io_with_mlflashpoint(
+            trainer,
+            base_container,
+            mock_ckpt_obj_manager,
+            mock_replication_manager,
+            async_save=True,
+            checkpoint_loader=mocker.MagicMock(spec=DefaultMLFlashpointCheckpointLoader),
+            use_fully_parallel_wrapper=False,  # default behavior
+        )
+
+        # Then
+        wrapped_io = trainer.strategy.checkpoint_io
+        assert isinstance(wrapped_io, MLFlashpointCheckpointIO)
+
+        assert not isinstance(
+            wrapped_io.save_strategy,
+            FullyParallelSaveStrategyWrapper,
+        )
+        assert not isinstance(
+            wrapped_io.load_strategy,
+            FullyParallelLoadStrategyWrapper,
+        )
+
     def test_successful_wrapping_with_async_wrapper(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
         """Tests successful wrapping when an async wrapper is present."""
         # Given
@@ -591,6 +751,12 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         inner_megatron_io = mocker.MagicMock(spec=MegatronCheckpointIO)
         mlf_io = mocker.MagicMock(spec=MLFlashpointCheckpointIO)
         mlf_io.fallback_checkpoint_io = inner_megatron_io
+        mlf_io.flashpoint_base_dir = "/tmp/mock_base_container"
+        mlf_io.trainer = mocker.MagicMock()
+        mlf_io.trainer.global_rank = 0
+        mlf_io.save_strategy = mocker.MagicMock()
+        mlf_io.save_strategy._storage_writer._thread_count = 1
+        mlf_io.chkpt_obj_manager = mock_ckpt_obj_manager
         original_async_wrapped_mlf_io = MLFlashpointAsyncFinalizableCheckpointIO(mlf_io)
 
         trainer.strategy.checkpoint_io = original_async_wrapped_mlf_io
@@ -724,6 +890,12 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
 
         # Create an already-wrapped MLFlashpointCheckpointIO
         mlf_io = mocker.MagicMock(spec=MLFlashpointCheckpointIO)
+        mlf_io.flashpoint_base_dir = "/tmp/mock_base_container"
+        mlf_io.trainer = mocker.MagicMock()
+        mlf_io.trainer.global_rank = 0
+        mlf_io.save_strategy = mocker.MagicMock()
+        mlf_io.save_strategy._storage_writer._thread_count = 1
+        mlf_io.chkpt_obj_manager = mock_ckpt_obj_manager
         original_async_wrapped_mlf_io = MLFlashpointAsyncFinalizableCheckpointIO(mlf_io)
         trainer.strategy.checkpoint_io = original_async_wrapped_mlf_io
 
@@ -743,6 +915,7 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         [
             ({}, DEFAULT_INITIAL_BUFFER_SIZE_BYTES),
             ({"initial_write_buffer_size_bytes": 12345}, 12345),
+            ({"initial_write_buffer_size_bytes": None}, DEFAULT_INITIAL_BUFFER_SIZE_BYTES),
         ],
     )
     def test_initial_save_buffer_size_forwarding(
@@ -751,6 +924,7 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         """Tests that the initial_save_buffer_size_bytes is forwarded correctly."""
         # Given
         trainer = mocker.MagicMock(spec=nl_trainer.Trainer)
+        trainer.global_rank = 0
         trainer.callbacks = [mocker.MagicMock(spec=MLFlashpointCheckpointCallback)]
         trainer.strategy = mocker.MagicMock(spec=nl_strategies.MegatronStrategy)
         original_checkpoint_io = mocker.MagicMock(spec=MegatronCheckpointIO)
@@ -896,7 +1070,7 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         # Verify the exact Manager instance was passed to MemoryStorageWriter
         spy_memory_storage_writer_init.assert_called_once()
         _, kwargs = spy_memory_storage_writer_init.call_args
-        assert kwargs["mp_manager"] is mock_manager_instance
+        assert kwargs["mp_manager_future"].result() is mock_manager_instance
 
     @pytest.mark.parametrize("always_save_context, expected_value", [(True, True), (False, False)])
     def test_always_save_context_forwarding(
@@ -936,6 +1110,7 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         trainer.strategy = mocker.MagicMock(spec=nl_strategies.MegatronStrategy)
         original_checkpoint_io = mocker.MagicMock(spec=MegatronCheckpointIO)
         trainer.strategy.checkpoint_io = original_checkpoint_io
+        trainer.global_rank = 0
 
         # Patch DefaultMLFlashpointCheckpointSaver to check args
         mock_saver_cls = mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.DefaultMLFlashpointCheckpointSaver")

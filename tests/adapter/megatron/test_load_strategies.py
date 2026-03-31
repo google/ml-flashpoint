@@ -276,6 +276,11 @@ def test_load_metadata_with_default_loader(checkpoint_directory, mocker):
     loader = DefaultMLFlashpointCheckpointLoader(
         checkpoint_object_manager=CheckpointObjectManager(),
         replication_manager=mock_replication_manager,
+        global_rank_getter=lambda: 0,
+        local_rank_getter=lambda: 0,
+        broadcast_object_list_func=lambda *args, **kwargs: None,
+        all_gather_object_func=lambda *args, **kwargs: None,
+        world_size_getter=lambda: 1,
     )
     strategy = MLFlashpointMegatronLoadStrategy(checkpoint_loader=loader, replication_manager=mock_replication_manager)
 

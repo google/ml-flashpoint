@@ -22,10 +22,9 @@ import re
 import struct
 from collections import defaultdict
 from pathlib import Path
-from typing import IO, List, Optional, Set, Tuple, TypeVar, cast
+from typing import IO, Callable, List, Optional, Set, Tuple, TypeVar, cast
 
 import torch
-import torch.distributed as dist
 from torch.distributed._shard._utils import narrow_tensor_by_index
 from torch.distributed.checkpoint import Metadata
 from torch.distributed.checkpoint.filesystem import _StorageInfo
@@ -185,6 +184,12 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         self,
         checkpoint_object_manager: CheckpointObjectManager,
         replication_manager: ReplicationManager,
+        *,
+        global_rank_getter: Callable[[], int],
+        local_rank_getter: Callable[[], int],
+        broadcast_object_list_func: Callable[..., None],
+        all_gather_object_func: Callable[..., None],
+        world_size_getter: Callable[[], int],
     ):
         """Initializes the DefaultMLFlashpointCheckpointLoader.
 
@@ -193,9 +198,21 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
                 reading data.
             replication_manager: The replication manager to use for retrieving
                 missing checkpoint objects from peer nodes.
+            global_rank_getter: A callable that returns the global rank.
+            local_rank_getter: A callable that returns the node-local rank.
+            broadcast_object_list_func: A callable with the same signature as
+                ``torch.distributed.broadcast_object_list``.
+            all_gather_object_func: A callable with the same signature as
+                ``torch.distributed.all_gather_object``.
+            world_size_getter: A callable that returns the world size.
         """
         self._checkpoint_object_manager = checkpoint_object_manager
         self._replication_manager = replication_manager
+        self._global_rank_getter = global_rank_getter
+        self._local_rank_getter = local_rank_getter
+        self._broadcast_object_list_func = broadcast_object_list_func
+        self._all_gather_object_func = all_gather_object_func
+        self._world_size_getter = world_size_getter
         # Cache for available objects: CheckpointContainerId -> dict[object_path, list[rank]]
         self._available_objects_cache: dict[CheckpointContainerId, dict[str, List[int]]] = {}
 
@@ -394,8 +411,7 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
             else continue to the next candidate checkpoint
             - return the checkpoint container id of the latest complete checkpoint
         """
-        # TODO: use global_rank_getter and local_rank_getter.
-        rank = dist.get_rank()
+        rank = self._global_rank_getter()
         _LOGGER.debug(
             "Rank %s: Getting latest complete checkpoint for '%s'",
             rank,
@@ -439,7 +455,7 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
                 retrieval_plan = self._compute_retrieval_plan(checkpoint, available_objects_by_rank)
             # Broadcast the retrieval plan to all ranks.
             plan_container = [retrieval_plan]
-            dist.broadcast_object_list(plan_container, src=planner_rank)
+            self._broadcast_object_list_func(plan_container, src=planner_rank)
             retrieval_plan = plan_container[0]
 
             if retrieval_plan is None:
@@ -508,7 +524,7 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
 
         objects_needed_by_local_rank_0.update(self._get_extra_needed_objects(checkpoint, available_objects_by_rank))
 
-        world_size = dist.get_world_size()
+        world_size = self._world_size_getter()
         num_nodes = get_num_of_nodes()
         ranks_per_node = world_size // num_nodes
 
@@ -564,8 +580,8 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
 
         # Scan locally only on the first rank of each node
         base_path = Path(checkpoint_base_container.data)
-        rank = dist.get_rank()
-        local_rank = dist.get_node_local_rank()
+        rank = self._global_rank_getter()
+        local_rank = self._local_rank_getter()
 
         local_candidate_ckpt_ids = []
 
@@ -589,8 +605,8 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         else:
             _LOGGER.debug("Rank %s: Base path '%s' is not a directory or does not exist.", rank, base_path)
 
-        all_checkpoint_container_path_lists = [None for _ in range(dist.get_world_size())]
-        dist.all_gather_object(all_checkpoint_container_path_lists, local_candidate_ckpt_ids)
+        all_checkpoint_container_path_lists = [None for _ in range(self._world_size_getter())]
+        self._all_gather_object_func(all_checkpoint_container_path_lists, local_candidate_ckpt_ids)
         _LOGGER.debug(
             "Rank %s: Gathered checkpoint container paths from all ranks: '%s'",
             rank,
@@ -646,8 +662,8 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
 
             local_objects.extend(self._get_extra_local_objects(container_path))
 
-        all_objects_by_rank_paths = [None for _ in range(dist.get_world_size())]
-        dist.all_gather_object(all_objects_by_rank_paths, local_objects)
+        all_objects_by_rank_paths = [None for _ in range(self._world_size_getter())]
+        self._all_gather_object_func(all_objects_by_rank_paths, local_objects)
 
         result = {}
         object_locations = defaultdict(list)
@@ -677,7 +693,7 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
                             If empty for this rank, no retrieval is needed.
         """
 
-        rank = dist.get_rank()
+        rank = self._global_rank_getter()
         all_success = True
 
         # Only proceed with retrieval if we have items to retrieve
@@ -713,8 +729,8 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
 
         # Gather success status from all ranks
         _LOGGER.debug("Gathering success status from all ranks")
-        all_success_list = [None for _ in range(dist.get_world_size())]
-        dist.all_gather_object(all_success_list, all_success)
+        all_success_list = [None for _ in range(self._world_size_getter())]
+        self._all_gather_object_func(all_success_list, all_success)
         _LOGGER.debug("All success list: '%s'", all_success_list)
         return all(all_success_list)
 

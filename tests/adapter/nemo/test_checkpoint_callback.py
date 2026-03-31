@@ -245,6 +245,31 @@ def test_invalid_skip_every_n_steps_init(invalid_skip_every_n_steps):
         )
 
 
+@pytest.mark.parametrize(
+    "skip_every_n_steps, expected_value",
+    [
+        (None, 0),
+        (0, 0),
+        (5, 5),
+        (10, 10),
+    ],
+)
+def test_init_skip_every_n_steps(skip_every_n_steps, expected_value):
+    """Tests that skip_every_n_steps is correctly set upon initialization."""
+    # Given
+    base_container = CheckpointContainerId("/test")
+
+    # When
+    callback = MLFlashpointCheckpointCallback(
+        checkpoint_base_container=base_container,
+        every_n_steps=1,
+        skip_every_n_steps=skip_every_n_steps,
+    )
+
+    # Then
+    assert callback.skip_every_n_steps == expected_value
+
+
 def test_init_defaults_enabled_to_true():
     # Given
     base_container = CheckpointContainerId("/test")

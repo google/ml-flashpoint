@@ -60,6 +60,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.gemini/
+.worktrees/
 
 # IDEs
 .idea/
@@ -75,3 +77,6 @@ CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 cmake-build-debug/
+
+# Linters
+.ruff_cache

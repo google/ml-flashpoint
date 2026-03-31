@@ -39,8 +39,8 @@ from ml_flashpoint.core.tensor_header import TensorHeader
 from ml_flashpoint.core.utils import get_accelerator_count, log_execution_time
 from ml_flashpoint.replication.replication_manager import ReplicationManager
 
-DEFAULT_INITIAL_BUFFER_SIZE_BYTES = 16 * 1000 * 1000 * 1000
-"""The default initial buffer size in bytes - 16 GB."""
+DEFAULT_INITIAL_BUFFER_SIZE_BYTES = 16 * 1024 * 1024 * 1024
+"""The default initial buffer size in bytes - 16 GiB."""
 
 _DEFAULT_OBJ_NAME_SUFFIX = ".distcp"
 
@@ -654,10 +654,9 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
                 # Example: we may recover from step 6, while step 7/8 may be there but unfinished or not selected
                 # for some reason, so when we come here to write checkpoints for them, we want to overwrite whatever
                 # exists instead of failing.
-                with self._chkpt_obj_manager.create_buffer(
+                with self._chkpt_obj_manager.acquire_buffer(
                     full_object_id,
                     self._initial_buffer_size_bytes,
-                    overwrite=True,
                 ) as buffer_io_writer:
                     # Set the format signature
                     if use_optimized_write:

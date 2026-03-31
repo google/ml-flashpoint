@@ -36,10 +36,6 @@ from ml_flashpoint.core.checkpoint_saver import (
 _EXPECTED_RESET_ERROR_MSG = re.escape("MemoryStorageWriter has not been reset. Call reset() before using this method.")
 
 
-class DummySaver:
-    pass
-
-
 def _return_zero():
     return 0
 
@@ -63,22 +59,24 @@ class TestMemoryStorageWriter:
 
     @pytest.fixture(scope="class")
     # Takes 0.01s to create and to shut down the Manager; class scope reduces overall test time by ~1s.
-    def mp_manager(self):
+    def mp_manager_future(self):
         mp_manager = torch_mp.Manager()
-        yield mp_manager
+        future = concurrent.futures.Future()
+        future.set_result(mp_manager)
+        yield future
         mp_manager.shutdown()
 
-    def test_init(self, mocker, mp_manager):
+    def test_init(self, mocker, mp_manager_future):
         """Tests that the __init__ method sets the _checkpoint_saver attribute correctly."""
         # Given
         mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
         # When
-        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
         # Then
         assert writer._checkpoint_saver is mock_saver
-        assert writer._main_process_torchmp_manager is mp_manager
-        assert type(writer._write_events_per_checkpoint_id).__name__ == "DictProxy"
-        assert len(writer._write_events_per_checkpoint_id) == 0
+        assert writer._main_process_torchmp_manager_future is mp_manager_future
+        assert writer._write_events_per_checkpoint_id is None
+        assert writer._write_results_per_checkpoint_id is None
         assert writer._thread_count == 1
 
     @pytest.mark.parametrize(
@@ -91,12 +89,14 @@ class TestMemoryStorageWriter:
             (-10, 1),
         ],
     )
-    def test_init_thread_count(self, mocker, mp_manager, thread_count, expected_thread_count):
+    def test_init_thread_count(self, mocker, mp_manager_future, thread_count, expected_thread_count):
         """Tests that the __init__ method sets the _thread_count attribute correctly."""
         # Given
         mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
         # When
-        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager, thread_count=thread_count)
+        writer = MemoryStorageWriter(
+            checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future, thread_count=thread_count
+        )
         # Then
         assert writer._thread_count == expected_thread_count
 
@@ -111,11 +111,11 @@ class TestMemoryStorageWriter:
         assert MemoryStorageWriter.validate_checkpoint_id(123) is False  # Non-string
         assert MemoryStorageWriter.validate_checkpoint_id(None) is False  # None value
 
-    def test_reset_valid_id(self, mocker, mp_manager):
+    def test_reset_valid_id(self, mocker, mp_manager_future):
         """Tests that the reset method initializes container_id and save_id."""
         # Given
         mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
         checkpoint_id = "/test_checkpoint"
         expected_save_id_prefix = "memwritersave"
 
@@ -140,31 +140,96 @@ class TestMemoryStorageWriter:
         assert len(writer._current_save_id) > len(expected_save_id_prefix)
         assert writer._current_save_id != old_save_id
 
-    def test_reset_invalid_id(self, mocker, mp_manager):
+    def test_reset_invalid_id(self, mocker, mp_manager_future):
         """Tests that reset raises ValueError for an invalid checkpoint ID."""
         # Given
         mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
         invalid_checkpoint_id = "invalid/id"
 
         # When/Then
         with pytest.raises(ValueError, match="A CheckpointContainerId must begin with '/'"):
             writer.reset(invalid_checkpoint_id)
 
-    def test_current_checkpoint_id_initial(self, mocker, mp_manager):
+    def test_reset_initializes_shared_fields(self, mocker, mp_manager_future):
+        """Tests that the reset method initializes the shared fields."""
+        # Given
+        mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
+        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
+        checkpoint_id = "/test_checkpoint"
+
+        assert writer._write_events_per_checkpoint_id is None
+        assert writer._write_results_per_checkpoint_id is None
+
+        # When
+        writer.reset(checkpoint_id)
+
+        # Then
+        assert type(writer._write_events_per_checkpoint_id).__name__ == "DictProxy"
+        assert len(writer._write_events_per_checkpoint_id) == 0
+
+        assert type(writer._write_results_per_checkpoint_id).__name__ == "DictProxy"
+        assert len(writer._write_results_per_checkpoint_id) == 0
+
+    @pytest.mark.parametrize(
+        "is_events_none, is_future_not_none, expect_init",
+        [
+            (True, True, True),  # Scenario 1 (T/T): Initialize fields
+            (True, False, False),  # Scenario 2 (T/F): Skip (future missing)
+            (False, True, False),  # Scenario 3 (F/T): Skip (already initialized)
+            (False, False, False),  # Scenario 4 (F/F): Skip
+        ],
+    )
+    def test_reset_shared_fields_conditional_logic(
+        self, mocker, mp_manager_future, is_events_none, is_future_not_none, expect_init
+    ):
+        """Tests the 4 scenarios for lazy initialization of shared fields in reset."""
+        # Given
+        mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
+        # Choose whether to pass the real future or None
+        init_future = mp_manager_future if is_future_not_none else None
+        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=init_future)
+
+        if not is_events_none:
+            # Manually simulate already-initialized state (e.g. from a previous call)
+            manager = mp_manager_future.result()
+            writer._write_events_per_checkpoint_id = manager.dict()
+            writer._write_results_per_checkpoint_id = manager.dict()
+
+        # If a future exists, spy on its .result() method to check for access
+        spy_result = mocker.spy(init_future, "result") if is_future_not_none else None
+
+        # When
+        writer.reset("/test_checkpoint")
+
+        # Then
+        if expect_init:
+            assert writer._write_events_per_checkpoint_id is not None
+            assert writer._write_results_per_checkpoint_id is not None
+            spy_result.assert_called_once()
+        else:
+            if is_events_none:
+                assert writer._write_events_per_checkpoint_id is None
+            else:
+                assert writer._write_events_per_checkpoint_id is not None
+
+            if spy_result:
+                spy_result.assert_not_called()
+
+    def test_current_checkpoint_id_initial(self, mocker, mp_manager_future):
         """Tests that current_checkpoint_id is None initially."""
         # Given
         mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
 
         # When/Then
         assert writer.current_checkpoint_id is None
 
-    def test_current_checkpoint_id_after_reset(self, mocker, mp_manager):
+    def test_current_checkpoint_id_after_reset(self, mocker, mp_manager_future):
         """Tests current_checkpoint_id after one call to reset."""
         # Given
         mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
         checkpoint_id = CheckpointContainerId("/test_checkpoint1")
 
         # When
@@ -174,11 +239,11 @@ class TestMemoryStorageWriter:
         assert isinstance(writer.current_checkpoint_id, CheckpointContainerId)
         assert writer.current_checkpoint_id == checkpoint_id
 
-    def test_current_checkpoint_id_after_multiple_resets(self, mocker, mp_manager):
+    def test_current_checkpoint_id_after_multiple_resets(self, mocker, mp_manager_future):
         """Tests current_checkpoint_id after multiple calls to reset."""
         # Given
         mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
         checkpoint_id1 = CheckpointContainerId("/test_checkpoint1")
         writer.reset(checkpoint_id1.data)
 
@@ -190,12 +255,12 @@ class TestMemoryStorageWriter:
         assert isinstance(writer.current_checkpoint_id, CheckpointContainerId)
         assert writer.current_checkpoint_id == checkpoint_id2
 
-    def test_path_property(self, mocker, mp_manager):
+    def test_path_property(self, mocker, mp_manager_future):
         """Tests that the path property returns the correct container_id data."""
         # Given
 
         mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
         checkpoint_id = "/test_checkpoint_path"
 
         # When
@@ -204,20 +269,20 @@ class TestMemoryStorageWriter:
         # Then
         assert writer.path == checkpoint_id
 
-    def test_path_before_reset(self, mocker, mp_manager):
+    def test_path_before_reset(self, mocker, mp_manager_future):
         """Tests accessing path property before reset."""
         # Given
         mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
 
         # When/Then
         assert writer.path is None
 
-    def test_storage_meta_returns_correct_values(self, mocker, mp_manager):
+    def test_storage_meta_returns_correct_values(self, mocker, mp_manager_future):
         """Tests that the storage_meta method returns the correct StorageMeta object."""
         # Given
         mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
         checkpoint_id = "/test_checkpoint_meta"
         writer.reset(checkpoint_id)
 
@@ -229,20 +294,20 @@ class TestMemoryStorageWriter:
             checkpoint_id=checkpoint_id, save_id=writer._current_save_id
         )
 
-    def test_storage_meta_before_reset_raises_error(self, mocker, mp_manager):
+    def test_storage_meta_before_reset_raises_error(self, mocker, mp_manager_future):
         """Tests calling storage_meta before reset."""
         # Given
         mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
         # When/Then
         with pytest.raises(ValueError, match=_EXPECTED_RESET_ERROR_MSG):
             writer.storage_meta()
 
-    def test_set_up_storage_writer(self, mocker, mp_manager):
+    def test_set_up_storage_writer(self, mocker, mp_manager_future):
         """Tests that the set_up_storage_writer method runs without error."""
         # Given
         mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
 
         # When/Then
         try:
@@ -252,11 +317,11 @@ class TestMemoryStorageWriter:
             pytest.fail(f"set_up_storage_writer raised an exception: {e}")
 
     class TestPrepareLocalPlan:
-        def test_prepare_local_plan(self, mocker, mp_manager):
+        def test_prepare_local_plan(self, mocker, mp_manager_future):
             """Tests that prepare_local_plan calls initialize_checkpoint and returns the plan."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = "/test_checkpoint_prepare_local"
             writer.reset(checkpoint_id)
             item1 = WriteItem(index=torchdistmeta.MetadataIndex("a"), type=WriteItemType.TENSOR)
@@ -270,11 +335,11 @@ class TestMemoryStorageWriter:
             mock_saver.initialize_checkpoint.assert_called_once_with(writer._current_checkpoint_id)
             assert actual_returned_plan is expected_plan
 
-        def test_prepare_local_plan_exception(self, mocker, mp_manager):
+        def test_prepare_local_plan_exception(self, mocker, mp_manager_future):
             """Tests that exceptions from initialize_checkpoint propagate."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = "/test_checkpoint_prepare_local_exc"
             writer.reset(checkpoint_id)
             item1 = WriteItem(index=torchdistmeta.MetadataIndex("a"), type=WriteItemType.TENSOR)
@@ -287,11 +352,11 @@ class TestMemoryStorageWriter:
                 writer.prepare_local_plan(plan)
             mock_saver.initialize_checkpoint.assert_called_once_with(writer._current_checkpoint_id)
 
-        def test_prepare_local_plan_before_reset(self, mocker, mp_manager):
+        def test_prepare_local_plan_before_reset(self, mocker, mp_manager_future):
             """Tests calling prepare_local_plan before reset."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             item1 = WriteItem(index=torchdistmeta.MetadataIndex("a"), type=WriteItemType.TENSOR)
             item2 = WriteItem(index=torchdistmeta.MetadataIndex("b"), type=WriteItemType.BYTE_IO)
             plan = SavePlan(items=[item1, item2])
@@ -300,11 +365,11 @@ class TestMemoryStorageWriter:
                 writer.prepare_local_plan(plan)
 
     class TestPrepareGlobalPlan:
-        def test_prepare_global_plan(self, mocker, mp_manager):
+        def test_prepare_global_plan(self, mocker, mp_manager_future):
             """Tests that prepare_global_plan adds the correct storage_data prefix to plans."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             item1 = WriteItem(index=torchdistmeta.MetadataIndex("a"), type=WriteItemType.TENSOR)
             item2 = WriteItem(index=torchdistmeta.MetadataIndex("b"), type=WriteItemType.TENSOR)
             plan1 = SavePlan(items=[item1])
@@ -325,10 +390,10 @@ class TestMemoryStorageWriter:
             assert actual_new_plans[1].items == [item2]
 
     class TestStage:
-        def test_stage_cpu_tensor(self, mocker, mp_manager):
+        def test_stage_cpu_tensor(self, mocker, mp_manager_future):
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             state_dict = {"a": torch.tensor([1, 2, 3], device="cpu")}
 
             # When
@@ -338,12 +403,12 @@ class TestMemoryStorageWriter:
             assert staged_dict["a"].device == torch.device("cpu")
             assert torch.equal(staged_dict["a"], state_dict["a"])
 
-        def test_stage_cuda_tensor(self, mocker, mp_manager):
+        def test_stage_cuda_tensor(self, mocker, mp_manager_future):
             if not torch.cuda.is_available():
                 pytest.skip("CUDA not available")
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             state_dict = {"a": torch.tensor([1, 2, 3], device="cuda")}
 
             # When
@@ -353,10 +418,10 @@ class TestMemoryStorageWriter:
             assert actual_staged_dict["a"].device == torch.device("cpu")
             assert torch.equal(actual_staged_dict["a"], state_dict["a"].cpu())
 
-        def test_stage_mixed(self, mocker, mp_manager):
+        def test_stage_mixed(self, mocker, mp_manager_future):
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             state_dict = {
                 "a": torch.tensor([1, 2, 3], device="cpu"),
                 "b": "a string",
@@ -377,10 +442,10 @@ class TestMemoryStorageWriter:
                 assert actual_staged_dict["d"].device == torch.device("cpu")
                 assert torch.equal(actual_staged_dict["d"], state_dict["d"].cpu())
 
-        def test_stage_moves_all_to_cpu(self, mocker, mp_manager):
+        def test_stage_moves_all_to_cpu(self, mocker, mp_manager_future):
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
 
             mock_empty_like = mocker.patch("torch.empty_like")
 
@@ -426,11 +491,11 @@ class TestMemoryStorageWriter:
             assert torch.equal(actual_staged_dict["cpu_tensor"], test_tensor_cpu)
 
     class TestPrepareWriteDataBuckets:
-        def test_prepare_write_data_buckets(self, mocker, mp_manager):
+        def test_prepare_write_data_buckets(self, mocker, mp_manager_future):
             """Tests that prepare_write_data_buckets initializes an event and calls the saver."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             expected_default_bucket_count = 1
             checkpoint_id = CheckpointContainerId("/test_checkpoint")
             plan = SavePlan(items=[], storage_data=_StorageDataContext(prefix="__0_"))
@@ -439,6 +504,7 @@ class TestMemoryStorageWriter:
             mock_saver.prepare_write_data.return_value = expected_buckets
 
             # When
+            writer.reset(checkpoint_id.data)
             actual_buckets = writer.prepare_write_data_buckets(checkpoint_id, plan, planner)
 
             # Then
@@ -450,11 +516,13 @@ class TestMemoryStorageWriter:
             assert actual_buckets == expected_buckets
 
         @pytest.mark.parametrize("thread_count", [1, 4, 8])
-        def test_prepare_write_data_buckets_with_thread_count(self, mocker, mp_manager, thread_count):
+        def test_prepare_write_data_buckets_with_thread_count(self, mocker, mp_manager_future, thread_count):
             """Tests that prepare_write_data_buckets calls the saver with the specified thread_count."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager, thread_count=thread_count)
+            writer = MemoryStorageWriter(
+                checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future, thread_count=thread_count
+            )
             checkpoint_id = CheckpointContainerId("/test_checkpoint_with_thread_count")
             plan = SavePlan(items=[], storage_data=_StorageDataContext(prefix="__0_"))
             planner = mocker.MagicMock()
@@ -462,6 +530,7 @@ class TestMemoryStorageWriter:
             mock_saver.prepare_write_data.return_value = expected_buckets
 
             # When
+            writer.reset(checkpoint_id.data)
             actual_buckets = writer.prepare_write_data_buckets(checkpoint_id, plan, planner)
 
             # Then
@@ -543,11 +612,11 @@ class TestMemoryStorageWriter:
             mock_cuda_synchronize.assert_not_called()
 
     class TestWriteStagedDataBuckets:
-        def test_write_staged_data_buckets(self, mocker, mp_manager):
+        def test_write_staged_data_buckets(self, mocker, mp_manager_future):
             """Tests that write_staged_data_buckets calls checkpoint_saver.write_data and sets the event."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = CheckpointContainerId("/test_checkpoint")
             writer.reset(checkpoint_id.data)
             staged_write_buckets = _create_rich_object_write_buckets(checkpoint_id)
@@ -574,12 +643,14 @@ class TestMemoryStorageWriter:
             assert result_future.wait() == expected_write_results
 
         @pytest.mark.parametrize("thread_count", [1, 4, 8])
-        def test_write_staged_data_buckets_with_explicit_thread_count(self, mocker, mp_manager, thread_count):
+        def test_write_staged_data_buckets_with_explicit_thread_count(self, mocker, mp_manager_future, thread_count):
             """Tests that write_staged_data_buckets calls checkpoint_saver.write_data with the specified
             thread_count."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager, thread_count=thread_count)
+            writer = MemoryStorageWriter(
+                checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future, thread_count=thread_count
+            )
             checkpoint_id = CheckpointContainerId("/test_checkpoint_explicit_thread_count")
             writer.reset(checkpoint_id.data)
             staged_write_buckets = _create_rich_object_write_buckets(checkpoint_id)
@@ -608,11 +679,11 @@ class TestMemoryStorageWriter:
             assert writer._write_events_per_checkpoint_id[checkpoint_id].is_set()
             assert result_future.wait() == expected_write_results
 
-        def test_write_staged_data_buckets_saver_exception(self, mocker, mp_manager):
+        def test_write_staged_data_buckets_saver_exception(self, mocker, mp_manager_future):
             """Tests that exceptions from checkpoint_saver.write_data are propagated and event is NOT set."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = CheckpointContainerId("/test_checkpoint")
             writer.reset(checkpoint_id.data)
             staged_write_buckets = _create_rich_object_write_buckets(checkpoint_id)
@@ -634,11 +705,11 @@ class TestMemoryStorageWriter:
                 checkpoint_id
             ].is_set()  # Event should NOT be set on failure
 
-        def test_write_staged_data_buckets_in_separate_process(self, mocker, mp_manager):
+        def test_write_staged_data_buckets_in_separate_process(self, mocker, mp_manager_future):
             """Tests that write_staged_data_buckets in a separate process correctly updates the shared results."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = CheckpointContainerId("/test_write_staged_multiprocess")
             writer.reset(checkpoint_id.data)
 
@@ -677,11 +748,11 @@ class TestMemoryStorageWriter:
     class TestWriteData:
         """Tests for the write_data function."""
 
-        def test_write_data_calls_dependencies_correctly(self, mocker, mp_manager):
+        def test_write_data_calls_dependencies_correctly(self, mocker, mp_manager_future):
             """Tests that write_data calls its dependencies in the correct order."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = CheckpointContainerId("/test_checkpoint_write_data")
             writer.reset(checkpoint_id.data)
             item1 = WriteItem(index=torchdistmeta.MetadataIndex("a"), type=WriteItemType.TENSOR)
@@ -709,12 +780,12 @@ class TestMemoryStorageWriter:
             )
             assert result_future.wait() == expected_results
 
-        def test_write_data_enforces_replication(self, mocker, mp_manager):
+        def test_write_data_enforces_replication(self, mocker, mp_manager_future):
             """Tests that write_data explicitly sets replicate_after_write=True when calling
             write_staged_data_buckets."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = CheckpointContainerId("/test_checkpoint_write_data_repl")
             writer.reset(checkpoint_id.data)
             item = WriteItem(index=torchdistmeta.MetadataIndex("a"), type=WriteItemType.TENSOR)
@@ -733,11 +804,11 @@ class TestMemoryStorageWriter:
             # Then
             mock_write_staged.assert_called_once_with(checkpoint_id, buckets, replicate_after_write=True)
 
-        def test_write_data_missing_prefix(self, mocker, mp_manager):
+        def test_write_data_missing_prefix(self, mocker, mp_manager_future):
             """Tests that write_data raises ValueError if storage_data is not set correctly."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = CheckpointContainerId("/test_checkpoint_write_data_fail")
             writer.reset(checkpoint_id.data)
 
@@ -753,11 +824,11 @@ class TestMemoryStorageWriter:
                 writer.write_data(plan, planner)
             mock_saver.write_data.assert_not_called()
 
-        def test_write_data_empty_prefix(self, mocker, mp_manager):
+        def test_write_data_empty_prefix(self, mocker, mp_manager_future):
             """Tests that write_data raises ValueError if storage_data.prefix is empty."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = CheckpointContainerId("/test_checkpoint_write_data_fail_empty")
             writer.reset(checkpoint_id.data)
 
@@ -774,23 +845,23 @@ class TestMemoryStorageWriter:
                 writer.write_data(plan, planner)
             mock_saver.write_data.assert_not_called()
 
-        def test_write_data_before_reset(self, mocker, mp_manager):
+        def test_write_data_before_reset(self, mocker, mp_manager_future):
             """Tests calling write_data before reset."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
 
             # When/Then
             with pytest.raises(ValueError, match=_EXPECTED_RESET_ERROR_MSG):
                 writer.write_data(mocker.MagicMock(), mocker.MagicMock())
 
-        def test_write_data_in_separate_process(self, mocker, mp_manager):
+        def test_write_data_in_separate_process(self, mocker, mp_manager_future):
             """
             Tests that write_data in a separate process correctly updates the shared results.
             """
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = CheckpointContainerId("/test_write_data_multiprocess")
             writer.reset(checkpoint_id.data)
 
@@ -816,11 +887,11 @@ class TestMemoryStorageWriter:
             assert writer.get_write_results(checkpoint_id) == expected_results
 
     class TestFinish:
-        def test_finish_success(self, mocker, mp_manager):
+        def test_finish_success(self, mocker, mp_manager_future):
             """Tests that finish correctly populates metadata and calls write_metadata."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = "/test_checkpoint_finish"
             writer.reset(checkpoint_id)
 
@@ -843,11 +914,11 @@ class TestMemoryStorageWriter:
             assert metadata.storage_meta == expected_storage_meta
             mock_saver.write_metadata.assert_called_once_with(writer._current_checkpoint_id, metadata)
 
-        def test_finish_empty_results(self, mocker, mp_manager):
+        def test_finish_empty_results(self, mocker, mp_manager_future):
             """Tests finish with an empty results list."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = "/test_checkpoint_finish_empty"
             writer.reset(checkpoint_id)
 
@@ -865,11 +936,11 @@ class TestMemoryStorageWriter:
             assert metadata.storage_meta == expected_storage_meta
             mock_saver.write_metadata.assert_called_once_with(writer._current_checkpoint_id, metadata)
 
-        def test_finish_results_with_empty_list(self, mocker, mp_manager):
+        def test_finish_results_with_empty_list(self, mocker, mp_manager_future):
             """Tests finish with results containing empty inner lists."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = "/test_checkpoint_finish_inner_empty"
             writer.reset(checkpoint_id)
 
@@ -888,11 +959,11 @@ class TestMemoryStorageWriter:
             assert metadata.storage_meta == expected_storage_meta
             mock_saver.write_metadata.assert_called_once_with(writer._current_checkpoint_id, metadata)
 
-        def test_finish_write_metadata_exception(self, mocker, mp_manager):
+        def test_finish_write_metadata_exception(self, mocker, mp_manager_future):
             """Tests that exceptions from write_metadata propagate in finish."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = "/test_checkpoint_finish_exc"
             writer.reset(checkpoint_id)
 
@@ -905,21 +976,21 @@ class TestMemoryStorageWriter:
                 writer.finish(metadata, results)
             mock_saver.write_metadata.assert_called_once_with(writer._current_checkpoint_id, metadata)
 
-        def test_finish_before_reset(self, mocker, mp_manager):
+        def test_finish_before_reset(self, mocker, mp_manager_future):
             """Tests calling finish before reset."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             # When/Then
             with pytest.raises(ValueError, match=_EXPECTED_RESET_ERROR_MSG):
                 writer.finish(TestMemoryStorageWriter._create_metadata(), [])
 
     class TestFinishCheckpoint:
-        def test_finish_checkpoint_success(self, mocker, mp_manager):
+        def test_finish_checkpoint_success(self, mocker, mp_manager_future):
             """Tests that finish_checkpoint correctly populates metadata and calls write_metadata."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = CheckpointContainerId("/test_checkpoint_finish")
             writer.reset(checkpoint_id.data)
             writer._write_results_per_checkpoint_id[checkpoint_id] = [
@@ -946,11 +1017,11 @@ class TestMemoryStorageWriter:
             mock_saver.write_metadata.assert_called_once_with(checkpoint_id, metadata)
             assert checkpoint_id not in writer._write_results_per_checkpoint_id
 
-        def test_finish_checkpoint_empty_results(self, mocker, mp_manager):
+        def test_finish_checkpoint_empty_results(self, mocker, mp_manager_future):
             """Tests finish_checkpoint with an empty results list."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = CheckpointContainerId("/test_checkpoint_finish_empty")
             writer.reset(checkpoint_id.data)
 
@@ -969,11 +1040,11 @@ class TestMemoryStorageWriter:
             mock_saver.write_metadata.assert_called_once_with(checkpoint_id, metadata)
             assert checkpoint_id not in writer._write_results_per_checkpoint_id
 
-        def test_finish_checkpoint_results_with_none_list(self, mocker, mp_manager):
+        def test_finish_checkpoint_results_with_none_list(self, mocker, mp_manager_future):
             """Tests finish_checkpoint with results containing None inner lists, expecting a RuntimeError."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = CheckpointContainerId("/test_checkpoint_finish_inner_none")
             writer.reset(checkpoint_id.data)
             writer._write_results_per_checkpoint_id[checkpoint_id] = []
@@ -988,11 +1059,11 @@ class TestMemoryStorageWriter:
             mock_saver.write_metadata.assert_not_called()  # Should not be called if an error occurs earlier
             assert checkpoint_id in writer._write_results_per_checkpoint_id  # Should not be cleared on failure
 
-        def test_finish_checkpoint_write_metadata_exception(self, mocker, mp_manager):
+        def test_finish_checkpoint_write_metadata_exception(self, mocker, mp_manager_future):
             """Tests that exceptions from write_metadata propagate in finish_checkpoint."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             checkpoint_id = CheckpointContainerId("/test_checkpoint_finish_exc")
             writer.reset(checkpoint_id.data)
             writer._write_results_per_checkpoint_id[checkpoint_id] = [
@@ -1011,24 +1082,27 @@ class TestMemoryStorageWriter:
 
     class TestWriteResultsPerCheckpointId:
         @pytest.fixture
-        def writer(self, mocker, mp_manager):
+        def writer(self, mocker, mp_manager_future):
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            return MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            return MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
 
         def test_init(self, writer):
             """Tests that _write_results_per_checkpoint_id is initialized and empty."""
             # Given/When/Then
-            assert len(writer._write_results_per_checkpoint_id) == 0
+            assert writer._write_results_per_checkpoint_id is None
 
         def test_reset_does_not_clear(self, writer):
             """Tests that reset() does NOT clear _write_results_per_checkpoint_id."""
             # Given
             checkpoint_id1 = CheckpointContainerId("/test_checkpoint1")
             # Use a real WriteResult as Mocks are not pickleable by the Manager
+            writer.reset(checkpoint_id1.data)
             wr = WriteResult(index=torchdistmeta.MetadataIndex("a"), size_in_bytes=10, storage_data="data_a")
             writer._write_results_per_checkpoint_id[checkpoint_id1] = [wr]
             # Manually initialize the event for checkpoint_id1, as prepare_write_data_buckets is not called
-            writer._write_events_per_checkpoint_id[checkpoint_id1] = writer._main_process_torchmp_manager.Event()
+            writer._write_events_per_checkpoint_id[checkpoint_id1] = (
+                writer._main_process_torchmp_manager_future.result().Event()
+            )
             writer._write_events_per_checkpoint_id[checkpoint_id1].set()
             checkpoint_id2 = CheckpointContainerId("/test_checkpoint2")
 
@@ -1177,14 +1251,18 @@ class TestMemoryStorageWriter:
             """Tests that get_write_results returns correct results for a given ID, isolated from other IDs."""
             # Given
             checkpoint_id = CheckpointContainerId("/test_get_results")
+            writer.reset(checkpoint_id.data)
             expected_wr1 = WriteResult(index=torchdistmeta.MetadataIndex("a"), size_in_bytes=10, storage_data="data_a")
             expected_wr2 = WriteResult(index=torchdistmeta.MetadataIndex("b"), size_in_bytes=20, storage_data="data_b")
             writer._write_results_per_checkpoint_id[checkpoint_id] = [expected_wr1, expected_wr2]
-            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._main_process_torchmp_manager.Event()
+            writer._write_events_per_checkpoint_id[checkpoint_id] = (
+                writer._main_process_torchmp_manager_future.result().Event()
+            )
             writer._write_events_per_checkpoint_id[checkpoint_id].set()
 
             # Add another checkpoint ID to ensure isolation
             other_checkpoint_id = CheckpointContainerId("/test_get_results_other")
+            writer.reset(other_checkpoint_id.data)
             other_expected_wr1 = WriteResult(
                 index=torchdistmeta.MetadataIndex("c"), size_in_bytes=30, storage_data="data_c"
             )
@@ -1192,7 +1270,9 @@ class TestMemoryStorageWriter:
                 index=torchdistmeta.MetadataIndex("d"), size_in_bytes=40, storage_data="data_d"
             )
             writer._write_results_per_checkpoint_id[other_checkpoint_id] = [other_expected_wr1, other_expected_wr2]
-            writer._write_events_per_checkpoint_id[other_checkpoint_id] = writer._main_process_torchmp_manager.Event()
+            writer._write_events_per_checkpoint_id[other_checkpoint_id] = (
+                writer._main_process_torchmp_manager_future.result().Event()
+            )
             writer._write_events_per_checkpoint_id[other_checkpoint_id].set()
 
             # When
@@ -1206,6 +1286,7 @@ class TestMemoryStorageWriter:
         def test_get_write_results_not_found(self, writer):
             """Tests get_write_results raises KeyError if ID not found."""
             # Given/When/Then
+            writer.reset("/non_existent_id")
             with pytest.raises(KeyError):
                 writer.get_write_results(CheckpointContainerId("/non_existent_id"))
 
@@ -1213,14 +1294,18 @@ class TestMemoryStorageWriter:
             """Tests that get_write_results returns combined results from the dict, isolated from other IDs."""
             # Given
             checkpoint_id = CheckpointContainerId("/test_get_multiple")
+            writer.reset(checkpoint_id.data)
             expected_wr1 = WriteResult(index=torchdistmeta.MetadataIndex("a"), size_in_bytes=10, storage_data="data_a")
             expected_wr2 = WriteResult(index=torchdistmeta.MetadataIndex("b"), size_in_bytes=20, storage_data="data_b")
             writer._write_results_per_checkpoint_id[checkpoint_id] = [expected_wr1, expected_wr2]
-            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._main_process_torchmp_manager.Event()
+            writer._write_events_per_checkpoint_id[checkpoint_id] = (
+                writer._main_process_torchmp_manager_future.result().Event()
+            )
             writer._write_events_per_checkpoint_id[checkpoint_id].set()
 
             # Add another checkpoint ID to ensure isolation
             other_checkpoint_id = CheckpointContainerId("/test_get_multiple_other")
+            writer.reset(other_checkpoint_id.data)
             other_expected_wr1 = WriteResult(
                 index=torchdistmeta.MetadataIndex("c"), size_in_bytes=30, storage_data="data_c"
             )
@@ -1228,7 +1313,9 @@ class TestMemoryStorageWriter:
                 index=torchdistmeta.MetadataIndex("d"), size_in_bytes=40, storage_data="data_d"
             )
             writer._write_results_per_checkpoint_id[other_checkpoint_id] = [other_expected_wr1, other_expected_wr2]
-            writer._write_events_per_checkpoint_id[other_checkpoint_id] = writer._main_process_torchmp_manager.Event()
+            writer._write_events_per_checkpoint_id[other_checkpoint_id] = (
+                writer._main_process_torchmp_manager_future.result().Event()
+            )
             writer._write_events_per_checkpoint_id[other_checkpoint_id].set()
 
             # When
@@ -1243,9 +1330,12 @@ class TestMemoryStorageWriter:
             """Tests that get_write_results returns a copy of the internal list, isolated from other IDs."""
             # Given
             checkpoint_id = CheckpointContainerId("/test_get_copy")
+            writer.reset(checkpoint_id.data)
             expected_wr1 = WriteResult(index=torchdistmeta.MetadataIndex("a"), size_in_bytes=10, storage_data="data_a")
             writer._write_results_per_checkpoint_id[checkpoint_id] = [expected_wr1]
-            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._main_process_torchmp_manager.Event()
+            writer._write_events_per_checkpoint_id[checkpoint_id] = (
+                writer._main_process_torchmp_manager_future.result().Event()
+            )
             writer._write_events_per_checkpoint_id[checkpoint_id].set()
 
             # When
@@ -1308,7 +1398,9 @@ class TestMemoryStorageWriter:
             writer.reset(checkpoint_id.data)
             wr1 = WriteResult(index=torchdistmeta.MetadataIndex("a"), size_in_bytes=10, storage_data="data_a")
             writer._write_results_per_checkpoint_id[checkpoint_id] = [wr1]
-            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._main_process_torchmp_manager.Event()
+            writer._write_events_per_checkpoint_id[checkpoint_id] = (
+                writer._main_process_torchmp_manager_future.result().Event()
+            )
             writer._write_events_per_checkpoint_id[checkpoint_id].set()
             metadata = TestMemoryStorageWriter._create_metadata()
 
@@ -1348,11 +1440,11 @@ class TestMemoryStorageWriter:
             assert p.exitcode == 0
             assert writer.get_write_results(checkpoint_id) == write_results
 
-        def test_replicate_written_objects(self, mocker, mp_manager):
+        def test_replicate_written_objects(self, mocker, mp_manager_future):
             """Tests that replicate_written_objects calls async_replicate_object for each ID and returns futures."""
             # Given
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
             object_ids = {
                 CheckpointObjectId.from_container(CheckpointContainerId("/c1"), "obj1"),
                 CheckpointObjectId.from_container(CheckpointContainerId("/c1"), "obj2"),
@@ -1392,15 +1484,17 @@ class TestMemoryStorageWriter:
 
     class TestGetWriteResults:
         @pytest.fixture(scope="class")
-        def mp_manager(self):
+        def mp_manager_future(self):
             mp_manager = torch_mp.Manager()
-            yield mp_manager
+            future = concurrent.futures.Future()
+            future.set_result(mp_manager)
+            yield future
             mp_manager.shutdown()
 
         @pytest.fixture
-        def writer(self, mocker, mp_manager):
+        def writer(self, mocker, mp_manager_future):
             mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
-            return MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager=mp_manager)
+            return MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
 
         def test_get_write_results_waits_for_event_happy_path(self, writer):
             """
@@ -1425,7 +1519,9 @@ class TestMemoryStorageWriter:
                 writer._write_events_per_checkpoint_id[checkpoint_id].set()
 
             # Manually initialize the event
-            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._main_process_torchmp_manager.Event()
+            writer._write_events_per_checkpoint_id[checkpoint_id] = (
+                writer._main_process_torchmp_manager_future.result().Event()
+            )
 
             # When
             setter_thread = threading.Thread(target=set_event_and_results)
@@ -1449,7 +1545,9 @@ class TestMemoryStorageWriter:
 
             # Do NOT call write_staged_data_buckets, so the event is never set.
             # The event for this checkpoint_id will be initialized but never set.
-            writer._write_events_per_checkpoint_id[checkpoint_id] = writer._main_process_torchmp_manager.Event()
+            writer._write_events_per_checkpoint_id[checkpoint_id] = (
+                writer._main_process_torchmp_manager_future.result().Event()
+            )
 
             # When/Then
             with pytest.raises(
@@ -1465,7 +1563,7 @@ class TestMemoryStorageWriter:
             writer._checkpoint_saver.write_data.assert_not_called()
 
     class TestPickling:
-        def test_pickling_excludes_mp_manager(self, mp_manager, mocker):
+        def test_pickling_excludes_mp_manager(self, mp_manager_future, mocker):
             """Tests that pickling excludes the _mp_manager attribute."""
             # Given
             import pickle
@@ -1481,14 +1579,14 @@ class TestMemoryStorageWriter:
                 ckpt_obj_manager=dummy_object_manager,
                 replication_manager=dummy_replication_manager,
             )
-            writer = MemoryStorageWriter(checkpoint_saver=saver, mp_manager=mp_manager)
+            writer = MemoryStorageWriter(checkpoint_saver=saver, mp_manager_future=mp_manager_future)
 
             # When
             pickled = pickle.dumps(writer)
             unpickled = pickle.loads(pickled)
 
             # Then
-            assert unpickled._main_process_torchmp_manager is None
+            assert unpickled._main_process_torchmp_manager_future is None
             assert unpickled._checkpoint_saver is not None
             assert isinstance(unpickled._checkpoint_saver, DefaultMLFlashpointCheckpointSaver)
             # Verify specific attributes of the saver to ensure it was pickled correctly

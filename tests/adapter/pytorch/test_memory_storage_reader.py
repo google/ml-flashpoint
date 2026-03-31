@@ -49,7 +49,15 @@ class TestMemoryStorageReader:
             yield tmpdir
 
     def test_initialization_sets_fields_correctly(self):
-        test_checkpoint_loader = DefaultMLFlashpointCheckpointLoader(CheckpointObjectManager(), ReplicationManager())
+        test_checkpoint_loader = DefaultMLFlashpointCheckpointLoader(
+            CheckpointObjectManager(),
+            ReplicationManager(),
+            global_rank_getter=lambda: 0,
+            local_rank_getter=lambda: 0,
+            broadcast_object_list_func=lambda *args, **kwargs: None,
+            all_gather_object_func=lambda *args, **kwargs: None,
+            world_size_getter=lambda: 1,
+        )
         reader = MemoryStorageReader("/some/test/path", checkpoint_loader=test_checkpoint_loader)
 
         assert reader._path == "/some/test/path"
@@ -182,7 +190,15 @@ class TestMemoryStorageReader:
     def test_read_data_with_actual_loader(self, checkpoint_directory, mocker: MockerFixture):
         # Arrange
         chkpt_object_manager = CheckpointObjectManager()
-        loader = DefaultMLFlashpointCheckpointLoader(chkpt_object_manager, ReplicationManager())
+        loader = DefaultMLFlashpointCheckpointLoader(
+            chkpt_object_manager,
+            ReplicationManager(),
+            global_rank_getter=lambda: 0,
+            local_rank_getter=lambda: 0,
+            broadcast_object_list_func=lambda *args, **kwargs: None,
+            all_gather_object_func=lambda *args, **kwargs: None,
+            world_size_getter=lambda: 1,
+        )
         reader = MemoryStorageReader(path=checkpoint_directory, checkpoint_loader=loader)
 
         # Create a dummy checkpoint file
@@ -190,7 +206,7 @@ class TestMemoryStorageReader:
         chkpt_obj_id = CheckpointObjectId(str(file_path))
         tensor_to_save = torch.randn(2, 3)
         buffer_size = tensor_to_save.nbytes * 100  # Create enough extra room for storing the serialized form
-        with chkpt_object_manager.create_buffer(chkpt_obj_id, buffer_size=buffer_size) as buffer:
+        with chkpt_object_manager.acquire_buffer(chkpt_obj_id, buffer_size=buffer_size) as buffer:
             torch.save(tensor_to_save, buffer)
             tensor_data_size = buffer.tell()
 
@@ -237,7 +253,15 @@ class TestMemoryStorageReader:
     def test_reset(self, checkpoint_directory, mocker: MockerFixture):
         # Arrange
         initial_path = "/initial/path"
-        loader = DefaultMLFlashpointCheckpointLoader(CheckpointObjectManager(), ReplicationManager())
+        loader = DefaultMLFlashpointCheckpointLoader(
+            CheckpointObjectManager(),
+            ReplicationManager(),
+            global_rank_getter=lambda: 0,
+            local_rank_getter=lambda: 0,
+            broadcast_object_list_func=lambda *args, **kwargs: None,
+            all_gather_object_func=lambda *args, **kwargs: None,
+            world_size_getter=lambda: 1,
+        )
         reader = MemoryStorageReader(path=initial_path, checkpoint_loader=loader)
         new_checkpoint_id = "/new/path"
         mock_generate_hfid = mocker.patch(
@@ -315,7 +339,15 @@ class TestMemoryStorageReader:
 
     def test_set_up_storage_reader_success(self, checkpoint_directory, mocker: MockerFixture):
         # Arrange
-        loader = DefaultMLFlashpointCheckpointLoader(CheckpointObjectManager(), ReplicationManager())
+        loader = DefaultMLFlashpointCheckpointLoader(
+            CheckpointObjectManager(),
+            ReplicationManager(),
+            global_rank_getter=lambda: 0,
+            local_rank_getter=lambda: 0,
+            broadcast_object_list_func=lambda *args, **kwargs: None,
+            all_gather_object_func=lambda *args, **kwargs: None,
+            world_size_getter=lambda: 1,
+        )
         reader = MemoryStorageReader(path=checkpoint_directory, checkpoint_loader=loader)
         storage_data = {
             MetadataIndex("0"): _StorageInfo(relative_path="file1.pt", offset=0, length=100),
@@ -330,7 +362,15 @@ class TestMemoryStorageReader:
 
     def test_set_up_storage_reader_no_storage_data(self, checkpoint_directory, mocker: MockerFixture):
         # Arrange
-        loader = DefaultMLFlashpointCheckpointLoader(CheckpointObjectManager(), ReplicationManager())
+        loader = DefaultMLFlashpointCheckpointLoader(
+            CheckpointObjectManager(),
+            ReplicationManager(),
+            global_rank_getter=lambda: 0,
+            local_rank_getter=lambda: 0,
+            broadcast_object_list_func=lambda *args, **kwargs: None,
+            all_gather_object_func=lambda *args, **kwargs: None,
+            world_size_getter=lambda: 1,
+        )
         reader = MemoryStorageReader(path=checkpoint_directory, checkpoint_loader=loader)
         metadata = Metadata(state_dict_metadata={}, storage_data=None)
 

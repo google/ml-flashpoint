@@ -150,6 +150,11 @@ class TestReadMetadata:
         self.loader = DefaultMLFlashpointCheckpointLoader(
             checkpoint_object_manager=chkpt_object_manager,
             replication_manager=mock_replication_manager,
+            global_rank_getter=lambda: 0,
+            local_rank_getter=lambda: 0,
+            broadcast_object_list_func=mocker.MagicMock(),
+            all_gather_object_func=mocker.MagicMock(),
+            world_size_getter=lambda: 1,
         )
 
     def test_read_metadata_success(self, checkpoint_directory):
@@ -233,6 +238,11 @@ class TestReadTensor:
         self.loader = DefaultMLFlashpointCheckpointLoader(
             checkpoint_object_manager=chkpt_object_manager,
             replication_manager=mock_replication_manager,
+            global_rank_getter=lambda: 0,
+            local_rank_getter=lambda: 0,
+            broadcast_object_list_func=mocker.MagicMock(),
+            all_gather_object_func=mocker.MagicMock(),
+            world_size_getter=lambda: 1,
         )
 
     def test_read_tensor_1d_slice(self):
@@ -431,6 +441,11 @@ class TestReadData:
         self.loader = DefaultMLFlashpointCheckpointLoader(
             checkpoint_object_manager=chkpt_object_manager,
             replication_manager=mock_replication_manager,
+            global_rank_getter=lambda: 0,
+            local_rank_getter=lambda: 0,
+            broadcast_object_list_func=mocker.MagicMock(),
+            all_gather_object_func=mocker.MagicMock(),
+            world_size_getter=lambda: 1,
         )
 
     def test_read_data_file_not_found(self, mocker: MockerFixture) -> None:
@@ -558,7 +573,7 @@ class TestReadData:
     ) -> None:
         stream, storage_data, stream_size = checkpoint_file
         checkpoint_obj_id = CheckpointObjectId(str(Path(checkpoint_directory) / "checkpoint.data"))
-        with chkpt_object_manager.create_buffer(checkpoint_obj_id, buffer_size=stream_size) as f:
+        with chkpt_object_manager.acquire_buffer(checkpoint_obj_id, buffer_size=stream_size) as f:
             f.write(stream.read())
         stream.seek(0)
 
@@ -607,7 +622,7 @@ class TestReadData:
         # Arrange
         stream, storage_data, stream_size = checkpoint_file
         checkpoint_obj_id = CheckpointObjectId(str(Path(checkpoint_directory) / "checkpoint.data"))
-        with chkpt_object_manager.create_buffer(checkpoint_obj_id, buffer_size=stream_size) as f:
+        with chkpt_object_manager.acquire_buffer(checkpoint_obj_id, buffer_size=stream_size) as f:
             f.write(stream.read())
         stream.seek(0)
 
@@ -650,7 +665,7 @@ class TestReadData:
         # Arrange
         stream, storage_data, stream_size = checkpoint_file
         checkpoint_obj_id = CheckpointObjectId(str(Path(checkpoint_directory) / "checkpoint.data"))
-        with chkpt_object_manager.create_buffer(checkpoint_obj_id, buffer_size=stream_size) as f:
+        with chkpt_object_manager.acquire_buffer(checkpoint_obj_id, buffer_size=stream_size) as f:
             f.write(stream.read())
 
         # Setup for the tensor request
@@ -713,7 +728,7 @@ class TestReadData:
         # Arrange
         stream, storage_data, stream_size = checkpoint_file
         checkpoint_obj_id = CheckpointObjectId(str(Path(checkpoint_directory) / "checkpoint.data"))
-        with chkpt_object_manager.create_buffer(checkpoint_obj_id, buffer_size=stream_size) as f:
+        with chkpt_object_manager.acquire_buffer(checkpoint_obj_id, buffer_size=stream_size) as f:
             f.write(stream.read())
 
         req = ReadItem(
@@ -746,31 +761,29 @@ class TestGetLatestCompleteCheckpoint:
         return CheckpointObjectManager()
 
     @pytest.fixture(autouse=True)
-    def loader(self, chkpt_object_manager, mocker) -> MLFlashpointCheckpointLoader:
+    def _setup_mocks(self, mocker: MockerFixture) -> None:
+        """Sets up common mocks for all tests in this class."""
+        self.mock_get_num_nodes = mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes", return_value=1)
+        self.mock_dist_get_rank = mocker.MagicMock(return_value=0)
+        self.mock_dist_get_world_size = mocker.MagicMock(return_value=2)
+        self.mock_dist_all_gather_object = mocker.MagicMock()
+        self.mock_dist_broadcast_object_list = mocker.MagicMock()
+        self.mock_dist_get_node_local_rank = mocker.MagicMock(return_value=0)
+        self.mock_open = mocker.patch("builtins.open", mocker.mock_open())
+        self.mock_path_exists = mocker.patch("os.path.exists", return_value=False)
+
+    @pytest.fixture(autouse=True)
+    def loader(self, chkpt_object_manager, mocker, _setup_mocks) -> MLFlashpointCheckpointLoader:
         mock_replication_manager = mocker.MagicMock(spec=ReplicationManager)
         return DefaultMLFlashpointCheckpointLoader(
             checkpoint_object_manager=chkpt_object_manager,
             replication_manager=mock_replication_manager,
+            global_rank_getter=self.mock_dist_get_rank,
+            local_rank_getter=self.mock_dist_get_node_local_rank,
+            broadcast_object_list_func=self.mock_dist_broadcast_object_list,
+            all_gather_object_func=self.mock_dist_all_gather_object,
+            world_size_getter=self.mock_dist_get_world_size,
         )
-
-    @pytest.fixture(autouse=True)
-    def _setup_mocks(self, mocker: MockerFixture) -> None:
-        """Sets up common mocks for all tests in this class."""
-        self.mock_get_num_nodes = mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes", return_value=1)
-        # Mocking specific dist functions that are used
-        mocker.patch("torch.distributed.get_rank", return_value=0)
-        mocker.patch("torch.distributed.broadcast_object_list")
-        mocker.patch("torch.distributed.all_gather_object")
-        mocker.patch("torch.distributed.all_reduce")
-        self.mock_dist_get_rank = mocker.patch("torch.distributed.get_rank", return_value=0)
-        self.mock_dist_get_world_size = mocker.patch("torch.distributed.get_world_size", return_value=2)
-        self.mock_dist_all_gather_object = mocker.patch("torch.distributed.all_gather_object")
-        self.mock_dist_broadcast_object_list = mocker.patch("torch.distributed.broadcast_object_list")
-        self.mock_dist_all_reduce = mocker.patch("torch.distributed.all_reduce")
-        self.mock_dist_get_node_local_rank = mocker.patch("torch.distributed.get_node_local_rank", return_value=0)
-        self.mock_dist_is_initialized = mocker.patch("torch.distributed.is_initialized", return_value=True)
-        self.mock_open = mocker.patch("builtins.open", mocker.mock_open())
-        self.mock_path_exists = mocker.patch("os.path.exists", return_value=False)
 
     def test_no_candidate_checkpoints(self, loader, mocker):
         """Tests that it returns None if no candidate checkpoints are found."""
@@ -1181,8 +1194,8 @@ class TestGetLatestCompleteCheckpoint:
 
         # Mock 2 nodes, 1 rank per node.
         # Rank 0 is local_rank 0. Rank 1 is local_rank 0.
-        mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes", return_value=2)
-        mocker.patch("torch.distributed.get_world_size", return_value=2)
+        self.mock_get_num_nodes.return_value = 2
+        self.mock_dist_get_world_size.return_value = 2
 
         available_objects = {
             0: [
@@ -1248,33 +1261,33 @@ class TestGetCandidateCheckpoints:
         return CheckpointObjectManager()
 
     @pytest.fixture(autouse=True)
-    def loader(self, chkpt_object_manager, mocker) -> MLFlashpointCheckpointLoader:
-        mock_replication_manager = mocker.MagicMock(spec=ReplicationManager)
-        return DefaultMLFlashpointCheckpointLoader(
-            checkpoint_object_manager=chkpt_object_manager,
-            replication_manager=mock_replication_manager,
-        )
-
-    @pytest.fixture(autouse=True)
     def _setup_mocks(self, mocker: MockerFixture) -> None:
         """Sets up common mocks for all tests in this class."""
         self.mock_get_num_nodes = mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes")
         self.mock_path_is_dir = mocker.patch("pathlib.Path.is_dir", return_value=True)
-        self.mock_dist_get_rank = mocker.patch("torch.distributed.get_rank")
-        self.mock_dist_get_node_local_rank = mocker.patch("torch.distributed.get_node_local_rank", return_value=0)
-        self.mock_broadcast = mocker.patch("torch.distributed.broadcast_object_list")
-        self.mock_all_gather = mocker.patch("torch.distributed.all_gather_object")
+        self.mock_dist_get_rank = mocker.MagicMock()
+        self.mock_dist_get_node_local_rank = mocker.MagicMock(return_value=0)
+        self.mock_broadcast = mocker.MagicMock()
+        self.mock_all_gather = mocker.MagicMock()
+        self.mock_dist_get_world_size = mocker.MagicMock(return_value=1)
 
         def side_effect(out_list, in_obj):
             out_list[0] = in_obj
 
         self.mock_all_gather.side_effect = side_effect
 
-        def side_effect(out_list, in_obj):
-            out_list[0] = in_obj
-
-        self.mock_all_gather.side_effect = side_effect
-        self.mock_dist_get_world_size = mocker.patch("torch.distributed.get_world_size", return_value=1)
+    @pytest.fixture(autouse=True)
+    def loader(self, chkpt_object_manager, mocker, _setup_mocks) -> MLFlashpointCheckpointLoader:
+        mock_replication_manager = mocker.MagicMock(spec=ReplicationManager)
+        return DefaultMLFlashpointCheckpointLoader(
+            checkpoint_object_manager=chkpt_object_manager,
+            replication_manager=mock_replication_manager,
+            global_rank_getter=self.mock_dist_get_rank,
+            local_rank_getter=self.mock_dist_get_node_local_rank,
+            broadcast_object_list_func=self.mock_broadcast,
+            all_gather_object_func=self.mock_all_gather,
+            world_size_getter=self.mock_dist_get_world_size,
+        )
 
     def test_single_node_multiple_complete_checkpoints(
         self,
@@ -1595,10 +1608,9 @@ class TestGetCandidateCheckpoints:
     ):
         """Tests fallback to full path when relative_to fails."""
         # Given
-        mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes", return_value=2)
-        mocker.patch("torch.distributed.get_rank", return_value=0)
-        mocker.patch("torch.distributed.get_world_size", return_value=2)
-        mock_broadcast = mocker.patch("torch.distributed.broadcast_object_list")
+        self.mock_get_num_nodes.return_value = 2
+        self.mock_dist_get_rank.return_value = 0
+        self.mock_dist_get_world_size.return_value = 2
 
         base_container = CheckpointContainerId("/tmp/base")
         # Create a checkpoint outside base_container to force relative_to failure
@@ -1622,24 +1634,21 @@ class TestGetCandidateCheckpoints:
             return orig_relative_to(self, other)
 
         mocker.patch("pathlib.Path.relative_to", side_effect=side_effect_relative_to, autospec=True)
-        # When
-        loader.get_candidate_checkpoints(base_container)
 
-        # Then
         # Mock all_gather to return the data
         def all_gather_side_effect(out_list, in_obj):
             out_list[0] = in_obj
             out_list[1] = []
 
-        mock_all_gather = mocker.patch("torch.distributed.all_gather_object", side_effect=all_gather_side_effect)
+        self.mock_all_gather.side_effect = all_gather_side_effect
 
         # When
         loader.get_candidate_checkpoints(base_container)
 
         # Then
-        mock_all_gather.assert_called_once()
-        mock_broadcast.assert_not_called()
-        args, _ = mock_all_gather.call_args
+        self.mock_all_gather.assert_called_once()
+        self.mock_broadcast.assert_not_called()
+        args, _ = self.mock_all_gather.call_args
         # args[1] is the input object (list of paths)
         assert len(args[1]) == 1
 
@@ -1652,20 +1661,24 @@ class TestRetrieveCheckpoint:
     @pytest.fixture
     def loader(self, mocker, chkpt_object_manager):
         mock_replication_manager = mocker.MagicMock(spec=ReplicationManager)
+        self.mock_global_rank = mocker.MagicMock(return_value=0)
+        self.mock_world_size = mocker.MagicMock(return_value=1)
+        self.mock_all_gather = mocker.MagicMock()
         return DefaultMLFlashpointCheckpointLoader(
             checkpoint_object_manager=chkpt_object_manager,
             replication_manager=mock_replication_manager,
+            global_rank_getter=self.mock_global_rank,
+            local_rank_getter=mocker.MagicMock(return_value=0),
+            broadcast_object_list_func=mocker.MagicMock(),
+            all_gather_object_func=self.mock_all_gather,
+            world_size_getter=self.mock_world_size,
         )
 
     def test_retrieve_checkpoint_local_has_all_objects(self, loader, mocker):
-        mocker.patch("torch.distributed.get_rank", return_value=0)
-        mocker.patch("torch.distributed.get_world_size", return_value=1)
-        mock_all_gather = mocker.patch("torch.distributed.all_gather_object")
-
         def side_effect(out_list, in_obj):
             out_list[0] = in_obj
 
-        mock_all_gather.side_effect = side_effect
+        self.mock_all_gather.side_effect = side_effect
 
         # Plan is empty for rank 0
         plan = {0: []}
@@ -1674,32 +1687,26 @@ class TestRetrieveCheckpoint:
 
     def test_retrieve_checkpoint_distributed_success(self, loader, mocker):
         mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes", return_value=2)
-        mocker.patch("torch.distributed.get_rank", return_value=0)
-        mocker.patch("torch.distributed.get_world_size", return_value=2)
-        mock_all_gather = mocker.patch("torch.distributed.all_gather_object")
+        self.mock_world_size.return_value = 2
 
         # Mock all_gather_object to populate success list with True
         def side_effect_gather(obj_list, obj):
             for i in range(len(obj_list)):
                 obj_list[i] = True
 
-        mock_all_gather.side_effect = side_effect_gather
+        self.mock_all_gather.side_effect = side_effect_gather
 
         plan = {0: [(1, "/obj1")]}
         loader._replication_manager.sync_bulk_retrieve.return_value = True
 
         assert loader.retrieve_checkpoint(plan) is True
-        mock_all_gather.assert_called_once()
+        self.mock_all_gather.assert_called_once()
 
     def test_retrieve_checkpoint_missing_objects_retrieved(self, loader, mocker):
-        mocker.patch("torch.distributed.get_rank", return_value=0)
-        mocker.patch("torch.distributed.get_world_size", return_value=1)
-        mock_all_gather = mocker.patch("torch.distributed.all_gather_object")
-
         def side_effect(out_list, in_obj):
             out_list[0] = in_obj
 
-        mock_all_gather.side_effect = side_effect
+        self.mock_all_gather.side_effect = side_effect
 
         # Plan says rank 0 needs to retrieve obj1 from rank 1
         plan = {0: [(1, "/obj1")]}
@@ -1715,14 +1722,10 @@ class TestRetrieveCheckpoint:
         )
 
     def test_retrieve_checkpoint_failure(self, loader, mocker):
-        mocker.patch("torch.distributed.get_rank", return_value=0)
-        mocker.patch("torch.distributed.get_world_size", return_value=1)
-        mock_all_gather = mocker.patch("torch.distributed.all_gather_object")
-
         def side_effect(out_list, in_obj):
             out_list[0] = in_obj
 
-        mock_all_gather.side_effect = side_effect
+        self.mock_all_gather.side_effect = side_effect
 
         plan = {0: [(1, "/obj1")]}
 
@@ -1737,11 +1740,25 @@ class TestGetCandidateCheckpointsOptimization:
         return CheckpointObjectManager()
 
     @pytest.fixture(autouse=True)
-    def loader(self, chkpt_object_manager, mocker) -> MLFlashpointCheckpointLoader:
+    def _setup_mocks(self, mocker: MockerFixture) -> None:
+        self.mock_get_num_nodes = mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes")
+        self.mock_global_rank = mocker.MagicMock(return_value=0)
+        self.mock_local_rank = mocker.MagicMock(return_value=0)
+        self.mock_broadcast = mocker.MagicMock()
+        self.mock_all_gather = mocker.MagicMock()
+        self.mock_world_size = mocker.MagicMock(return_value=2)
+
+    @pytest.fixture(autouse=True)
+    def loader(self, chkpt_object_manager, mocker, _setup_mocks) -> MLFlashpointCheckpointLoader:
         mock_replication_manager = mocker.MagicMock(spec=ReplicationManager)
         return DefaultMLFlashpointCheckpointLoader(
             checkpoint_object_manager=chkpt_object_manager,
             replication_manager=mock_replication_manager,
+            global_rank_getter=self.mock_global_rank,
+            local_rank_getter=self.mock_local_rank,
+            broadcast_object_list_func=self.mock_broadcast,
+            all_gather_object_func=self.mock_all_gather,
+            world_size_getter=self.mock_world_size,
         )
 
     def test_get_candidate_checkpoints_optimization(self, loader, mocker, checkpoint_directory):
@@ -1751,13 +1768,7 @@ class TestGetCandidateCheckpointsOptimization:
         ckpt_dir = base_dir / "step-100_ckpt"
         ckpt_dir.mkdir()
 
-        mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes", return_value=2)
-        mocker.patch("torch.distributed.get_rank", return_value=0)
-        mocker.patch("torch.distributed.get_node_local_rank", return_value=0)
-        mock_broadcast = mocker.patch("torch.distributed.broadcast_object_list")
-        mock_all_gather = mocker.patch("torch.distributed.all_gather_object")
-        mocker.patch("torch.distributed.get_world_size", return_value=2)
-
+        self.mock_get_num_nodes.return_value = 2
         mocker.patch("pathlib.Path.is_dir", return_value=True)
 
         base_container = CheckpointContainerId(str(base_dir))
@@ -1771,13 +1782,13 @@ class TestGetCandidateCheckpointsOptimization:
             out_list[0] = [str(base_dir / "step-100_ckpt")]
             out_list[1] = []
 
-        mock_all_gather.side_effect = all_gather_side_effect
+        self.mock_all_gather.side_effect = all_gather_side_effect
 
         # Call method
         loader.get_candidate_checkpoints(base_container)
 
-        mock_broadcast.assert_not_called()
-        args, _ = mock_all_gather.call_args
+        self.mock_broadcast.assert_not_called()
+        args, _ = self.mock_all_gather.call_args
         # args[1] is the input object (list of paths)
         assert args[1] == [str(base_dir / "step-100_ckpt")]
 
@@ -1788,16 +1799,26 @@ class TestGetCheckpointObjectsByNodeOptimization:
         return CheckpointObjectManager()
 
     @pytest.fixture(autouse=True)
-    def loader(self, chkpt_object_manager, mocker) -> MLFlashpointCheckpointLoader:
+    def _setup_mocks(self, mocker: MockerFixture) -> None:
+        self.mock_get_num_nodes = mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes")
+        self.mock_global_rank = mocker.MagicMock(return_value=0)
+        self.mock_local_rank = mocker.MagicMock(return_value=0)
+        self.mock_broadcast = mocker.MagicMock()
+        self.mock_all_gather = mocker.MagicMock()
+        self.mock_world_size = mocker.MagicMock(return_value=1)
+
+    @pytest.fixture(autouse=True)
+    def loader(self, chkpt_object_manager, mocker, _setup_mocks) -> MLFlashpointCheckpointLoader:
         mock_replication_manager = mocker.MagicMock(spec=ReplicationManager)
         return DefaultMLFlashpointCheckpointLoader(
             checkpoint_object_manager=chkpt_object_manager,
             replication_manager=mock_replication_manager,
+            global_rank_getter=self.mock_global_rank,
+            local_rank_getter=self.mock_local_rank,
+            broadcast_object_list_func=self.mock_broadcast,
+            all_gather_object_func=self.mock_all_gather,
+            world_size_getter=self.mock_world_size,
         )
-
-    @pytest.fixture(autouse=True)
-    def _setup_mocks(self, mocker):
-        mocker.patch("torch.distributed.get_node_local_rank", return_value=0)
 
     def test_get_checkpoint_objects_by_rank_optimization(self, loader, mocker, checkpoint_directory):
         """Verifies that only filenames are sent during all_gather."""
@@ -1808,10 +1829,8 @@ class TestGetCheckpointObjectsByNodeOptimization:
         (ckpt_dir / "obj1").touch()
         (ckpt_dir / "obj2").touch()
 
-        mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes", return_value=2)
-        mocker.patch("torch.distributed.get_rank", return_value=0)
-        mocker.patch("torch.distributed.get_world_size", return_value=2)
-        mock_all_gather = mocker.patch("torch.distributed.all_gather_object")
+        self.mock_get_num_nodes.return_value = 2
+        self.mock_world_size.return_value = 2
 
         # Mock all_gather to return some data for rank 1
         def side_effect_all_gather(out_list, in_obj):
@@ -1819,7 +1838,7 @@ class TestGetCheckpointObjectsByNodeOptimization:
             # Rank 1 data
             out_list[1] = [CheckpointObjectId(str(ckpt_dir / "obj3"))]
 
-        mock_all_gather.side_effect = side_effect_all_gather
+        self.mock_all_gather.side_effect = side_effect_all_gather
 
         container_id = CheckpointContainerId(str(ckpt_dir))
 
@@ -1827,8 +1846,8 @@ class TestGetCheckpointObjectsByNodeOptimization:
         result = loader.get_checkpoint_objects_by_rank(container_id)
 
         # Verify all_gather called
-        mock_all_gather.assert_called_once()
-        args, _ = mock_all_gather.call_args
+        self.mock_all_gather.assert_called_once()
+        args, _ = self.mock_all_gather.call_args
         # args[1] is the input object (list of CheckpointObjectIds for rank 0)
         # Should be full paths now
         expected_local = {str(ckpt_dir / "obj1"), str(ckpt_dir / "obj2")}
@@ -1846,16 +1865,14 @@ class TestGetCheckpointObjectsByNodeOptimization:
         ckpt_dir = base_dir / "step-100_ckpt"
         ckpt_dir.mkdir()
 
-        mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes", return_value=2)
-        mocker.patch("torch.distributed.get_rank", return_value=0)
-        mocker.patch("torch.distributed.get_world_size", return_value=2)
-        mock_all_gather = mocker.patch("torch.distributed.all_gather_object")
+        self.mock_get_num_nodes.return_value = 2
+        self.mock_world_size.return_value = 2
 
         def side_effect_all_gather(out_list, in_obj):
             out_list[0] = []  # Rank 0 empty
             out_list[1] = []  # Rank 1 empty
 
-        mock_all_gather.side_effect = side_effect_all_gather
+        self.mock_all_gather.side_effect = side_effect_all_gather
 
         container_id = CheckpointContainerId(str(ckpt_dir))
         result = loader.get_checkpoint_objects_by_rank(container_id)
@@ -1870,15 +1887,13 @@ class TestGetCheckpointObjectsByNodeOptimization:
         ckpt_dir.mkdir()
         (ckpt_dir / "obj1").touch()
 
-        mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes", return_value=1)
-        mocker.patch("torch.distributed.get_rank", return_value=0)
-        mocker.patch("torch.distributed.get_world_size", return_value=1)
-        mock_all_gather = mocker.patch("torch.distributed.all_gather_object")
+        self.mock_get_num_nodes.return_value = 1
+        self.mock_world_size.return_value = 1
 
         def side_effect(out_list, in_obj):
             out_list[0] = in_obj
 
-        mock_all_gather.side_effect = side_effect
+        self.mock_all_gather.side_effect = side_effect
 
         container_id = CheckpointContainerId(str(ckpt_dir))
         result = loader.get_checkpoint_objects_by_rank(container_id)
@@ -1899,15 +1914,13 @@ class TestGetCheckpointObjectsByNodeOptimization:
         # Create unfinished marker for rank 0
         (base_dir / "step-100_ckpt__0__unfinished").touch()
 
-        mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes", return_value=1)
-        mocker.patch("torch.distributed.get_rank", return_value=0)
-        mocker.patch("torch.distributed.get_world_size", return_value=1)
-        mock_all_gather = mocker.patch("torch.distributed.all_gather_object")
+        self.mock_get_num_nodes.return_value = 1
+        self.mock_world_size.return_value = 1
 
         def side_effect(out_list, in_obj):
             out_list[0] = in_obj
 
-        mock_all_gather.side_effect = side_effect
+        self.mock_all_gather.side_effect = side_effect
 
         container_id = CheckpointContainerId(str(ckpt_dir))
         result = loader.get_checkpoint_objects_by_rank(container_id)
@@ -1925,24 +1938,32 @@ class TestCheckpointLoaderLocalRank:
     def loader(self, mocker):
         chkpt_obj_manager = mocker.MagicMock(spec=CheckpointObjectManager)
         replication_manager = mocker.MagicMock(spec=ReplicationManager)
-        return DefaultMLFlashpointCheckpointLoader(chkpt_obj_manager, replication_manager)
+        self.mock_global_rank = mocker.MagicMock(return_value=0)
+        self.mock_local_rank = mocker.MagicMock(return_value=0)
+        self.mock_world_size = mocker.MagicMock(return_value=1)
+        self.mock_all_gather = mocker.MagicMock()
+        return DefaultMLFlashpointCheckpointLoader(
+            chkpt_obj_manager,
+            replication_manager,
+            global_rank_getter=self.mock_global_rank,
+            local_rank_getter=self.mock_local_rank,
+            broadcast_object_list_func=mocker.MagicMock(),
+            all_gather_object_func=self.mock_all_gather,
+            world_size_getter=self.mock_world_size,
+        )
 
     def test_get_checkpoint_objects_by_rank_local_rank_0(self, mocker, loader, tmp_path):
         # Setup
-        mock_get_node_local_rank = mocker.patch("ml_flashpoint.core.checkpoint_loader.dist.get_node_local_rank")
-        mock_get_rank = mocker.patch("ml_flashpoint.core.checkpoint_loader.dist.get_rank")
-        mock_get_world_size = mocker.patch("ml_flashpoint.core.checkpoint_loader.dist.get_world_size")
         mock_get_num_nodes = mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes")
-        mock_all_gather = mocker.patch("ml_flashpoint.core.checkpoint_loader.dist.all_gather_object")
 
         def side_effect(out_list, in_obj):
             out_list[0] = in_obj
 
-        mock_all_gather.side_effect = side_effect
+        self.mock_all_gather.side_effect = side_effect
 
-        mock_get_node_local_rank.return_value = 0
-        mock_get_rank.return_value = 0
-        mock_get_world_size.return_value = 1
+        self.mock_local_rank.return_value = 0
+        self.mock_global_rank.return_value = 0
+        self.mock_world_size.return_value = 1
         mock_get_num_nodes.return_value = 1
 
         container_path = tmp_path / "ckpt"
@@ -1959,15 +1980,11 @@ class TestCheckpointLoaderLocalRank:
 
     def test_get_checkpoint_objects_by_rank_local_rank_1(self, mocker, loader, tmp_path):
         # Setup
-        mock_get_node_local_rank = mocker.patch("ml_flashpoint.core.checkpoint_loader.dist.get_node_local_rank")
-        mock_get_rank = mocker.patch("ml_flashpoint.core.checkpoint_loader.dist.get_rank")
-        mock_get_world_size = mocker.patch("ml_flashpoint.core.checkpoint_loader.dist.get_world_size")
         mock_get_num_nodes = mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes")
-        mock_all_gather = mocker.patch("ml_flashpoint.core.checkpoint_loader.dist.all_gather_object")
 
-        mock_get_node_local_rank.return_value = 1
-        mock_get_rank.return_value = 1
-        mock_get_world_size.return_value = 2
+        self.mock_local_rank.return_value = 1
+        self.mock_global_rank.return_value = 1
+        self.mock_world_size.return_value = 2
         mock_get_num_nodes.return_value = 2
 
         container_path = tmp_path / "ckpt"
@@ -1978,7 +1995,7 @@ class TestCheckpointLoaderLocalRank:
         # Execute
         loader.get_checkpoint_objects_by_rank(container_id)
 
-        mock_all_gather.assert_called_once()
+        self.mock_all_gather.assert_called_once()
 
 
 class TestCheckpointLoaderSync:
@@ -1986,20 +2003,28 @@ class TestCheckpointLoaderSync:
     def loader(self, mocker):
         chkpt_obj_manager = mocker.MagicMock(spec=CheckpointObjectManager)
         replication_manager = mocker.MagicMock(spec=ReplicationManager)
-        return DefaultMLFlashpointCheckpointLoader(chkpt_obj_manager, replication_manager)
+        self.mock_global_rank = mocker.MagicMock(return_value=0)
+        self.mock_local_rank = mocker.MagicMock(return_value=0)
+        self.mock_world_size = mocker.MagicMock(return_value=1)
+        self.mock_all_gather = mocker.MagicMock()
+        return DefaultMLFlashpointCheckpointLoader(
+            chkpt_obj_manager,
+            replication_manager,
+            global_rank_getter=self.mock_global_rank,
+            local_rank_getter=self.mock_local_rank,
+            broadcast_object_list_func=mocker.MagicMock(),
+            all_gather_object_func=self.mock_all_gather,
+            world_size_getter=self.mock_world_size,
+        )
 
     def test_get_checkpoint_objects_by_rank_sync(self, mocker, loader, tmp_path):
-        mock_get_node_local_rank = mocker.patch("ml_flashpoint.core.checkpoint_loader.dist.get_node_local_rank")
-        mock_get_rank = mocker.patch("ml_flashpoint.core.checkpoint_loader.dist.get_rank")
-        mock_get_world_size = mocker.patch("ml_flashpoint.core.checkpoint_loader.dist.get_world_size")
         mock_get_num_nodes = mocker.patch("ml_flashpoint.core.checkpoint_loader.get_num_of_nodes")
-        mock_all_gather = mocker.patch("ml_flashpoint.core.checkpoint_loader.dist.all_gather_object")
 
-        mock_get_world_size.return_value = 4
+        self.mock_world_size.return_value = 4
         mock_get_num_nodes.return_value = 2
 
-        mock_get_rank.return_value = 0
-        mock_get_node_local_rank.return_value = 0
+        self.mock_global_rank.return_value = 0
+        self.mock_local_rank.return_value = 0
 
         container_path = tmp_path / "ckpt"
         container_path.mkdir()
@@ -2012,7 +2037,7 @@ class TestCheckpointLoaderSync:
             obj_list[2] = [CheckpointObjectId(str(container_path / "file2"))]
             obj_list[3] = []
 
-        mock_all_gather.side_effect = side_effect_all_gather
+        self.mock_all_gather.side_effect = side_effect_all_gather
 
         container_id = CheckpointContainerId(str(container_path))
 

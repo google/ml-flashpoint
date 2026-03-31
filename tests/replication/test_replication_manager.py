@@ -16,7 +16,11 @@ from concurrent.futures import Future
 
 import pytest
 
-from ml_flashpoint.replication.replication_manager import ReplicationManager, ReplicationRetryConfig
+from ml_flashpoint.replication.replication_manager import (
+    PairwiseReplicationStrategy,
+    ReplicationManager,
+    ReplicationRetryConfig,
+)
 
 
 @pytest.fixture
@@ -338,3 +342,59 @@ def test_sync_bulk_retrieve_invalid_rank(replication_manager):
 
     # Then
     assert result is False
+
+
+def test_pairwise_strategy_single_node_initialization(mocker):
+    """Tests that PairwiseReplicationStrategy successfully initializes for a single node without raising an error."""
+    # Given
+    mocker.patch("ml_flashpoint.core.utils.get_num_of_nodes", return_value=1)
+    # Simulate a single node with 2 processes (GPUs)
+    addresses = ["127.0.0.1:8000", "127.0.0.1:8001"]
+
+    # When
+    strategy = PairwiseReplicationStrategy(replication_service_addresses=addresses, processes_per_node=2)
+
+    # Then
+    assert getattr(strategy, "_disable_replication", False) is True
+
+
+def test_pairwise_strategy_single_node_get_destination(mocker):
+    """Tests that get_destination_addresses returns an empty list when running on a single node."""
+    # Given
+    mocker.patch("ml_flashpoint.core.utils.get_num_of_nodes", return_value=1)
+    addresses = ["127.0.0.1:8000"]
+    strategy = PairwiseReplicationStrategy(replication_service_addresses=addresses, processes_per_node=1)
+
+    # When
+    destinations = strategy.get_destination_addresses(global_rank=0)
+
+    # Then
+    assert destinations == []
+
+
+def test_async_replicate_single_node_skips(replication_manager, mocker):
+    """Tests that async_replicate does nothing and returns empty futures in a single-node environment."""
+    # Given
+    mocker.patch("ml_flashpoint.core.utils.get_num_of_nodes", return_value=1)
+    addresses = ["127.0.0.1:8000"]
+    # Initialize the strategy with 1 node
+    strategy = PairwiseReplicationStrategy(replication_service_addresses=addresses, processes_per_node=1)
+    replication_manager._repl_strategy = strategy
+
+    mocker.patch("torch.distributed.get_rank", return_value=0)
+
+    buffer_object = mocker.MagicMock()
+    buffer_object.get_id.return_value = "test_single_node_obj"
+    buffer_io = mocker.MagicMock(buffer_obj=buffer_object)
+
+    # When
+    result_futures = replication_manager.async_replicate(buffer_io)
+
+    # Then
+    assert result_futures == []
+    # Ensure transfer service is NOT called
+    replication_manager._transfer_service.async_put.assert_not_called()
+    # Ensure the buffer is closed properly
+    replication_manager._checkpoint_object_manager.close_buffer.assert_called_once_with(
+        buffer_io, skip_close_if_symlink=True
+    )

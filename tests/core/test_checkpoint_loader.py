@@ -998,6 +998,71 @@ class TestGetLatestCompleteCheckpoint:
         assert result == ckpt_id
         mock_retrieve.assert_not_called()
 
+    def test_single_node_shared_storage_no_retrieval_needed(self, loader, mocker):
+        """
+        Tests that in a 1-node setup (e.g., fallback to NFS or local shared storage),
+        the loader correctly computes an empty retrieval plan. It does not attempt to
+        fetch from non-existent peer nodes, allowing the process to execute correctly
+        without throwing an error.
+        """
+        # Given: Simulate a single-node environment (1 node, 2 ranks)
+        self.mock_dist_get_rank.return_value = 0
+        self.mock_get_num_nodes.return_value = 1
+        self.mock_dist_get_world_size.return_value = 2
+
+        base_container = CheckpointContainerId("/tmp/checkpoints")
+        ckpt_id = CheckpointContainerId.create_child(base_container, "step-100_ckpt")
+        mocker.patch.object(loader, "get_candidate_checkpoints", return_value=[ckpt_id])
+
+        # Mock metadata indicating what needs to be loaded
+        mock_metadata = mocker.MagicMock()
+        mock_metadata.storage_data = {
+            0: _StorageInfo(relative_path="/src0/obj", offset=0, length=100),
+            1: _StorageInfo(relative_path="/src1/obj", offset=0, length=100),
+        }
+        mocker.patch.object(loader, "read_metadata", return_value=mock_metadata)
+
+        # Mock available objects: Rank 0 sees src0, Rank 1 sees src1.
+        # However, since they are on the same node (num_nodes=1), the underlying system
+        # can see all files via NFS/local disk.
+        mocker.patch.object(
+            loader,
+            "get_checkpoint_objects_by_rank",
+            return_value={
+                0: [
+                    CheckpointObjectId("/tmp/checkpoints/step-100_ckpt/src0/obj"),
+                    CheckpointObjectId("/tmp/checkpoints/step-100_ckpt/.metadata"),
+                    CheckpointObjectId("/tmp/checkpoints/step-100_ckpt/common.pt"),
+                ],
+                1: [
+                    CheckpointObjectId("/tmp/checkpoints/step-100_ckpt/src1/obj"),
+                    CheckpointObjectId("/tmp/checkpoints/step-100_ckpt/.metadata"),
+                    CheckpointObjectId("/tmp/checkpoints/step-100_ckpt/common.pt"),
+                ],
+            },
+        )
+
+        mock_retrieve = mocker.patch.object(loader, "retrieve_checkpoint", return_value=True)
+
+        # When: Execute the core logic to get the latest checkpoint
+        result = loader.get_latest_complete_checkpoint(base_container)
+
+        # Then:
+        # 1. Verify that the method executes correctly instead of crashing with an error.
+        assert result == ckpt_id
+
+        # 2. Verify that the generated retrieval plan is empty (no network fetch to non-existent peers).
+        args, _ = self.mock_dist_broadcast_object_list.call_args
+        plan_container = args[0]
+        plan = plan_container[0]
+
+        # Assert that the network retries wval plan for all ranks is empty (perfect fallback to NFS/Local read).
+        assert not plan.get(0)
+        assert not plan.get(1)
+
+        # 3. Verify that the subsequent flow skips retrieval entirely since it's locally available.
+        mock_retrieve.assert_not_called()
+
     def test_non_rank0_success(self, loader, mocker):
         """Tests successful retrieval flow on non-Rank 0."""
         # Given

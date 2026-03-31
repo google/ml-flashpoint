@@ -123,7 +123,7 @@ class PairwiseReplicationStrategy(ReplicationStrategy):
 
     @override
     def get_destination_addresses(self, global_rank: int) -> List[str]:
-        if getattr(self, "_disable_replication", False):
+        if self._disable_replication:
             return []
 
         if not 0 <= global_rank < self._world_size:

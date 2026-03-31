@@ -998,11 +998,10 @@ class TestGetLatestCompleteCheckpoint:
         assert result == ckpt_id
         mock_retrieve.assert_not_called()
 
-
     def test_single_node_shared_storage_no_retrieval_needed(self, loader, mocker):
         """
         Tests that in a 1-node setup (e.g., fallback to NFS or local shared storage),
-        the loader correctly computes an empty retrieval plan. It does not attempt to 
+        the loader correctly computes an empty retrieval plan. It does not attempt to
         fetch from non-existent peer nodes, allowing the process to execute correctly
         without throwing an error.
         """
@@ -1010,7 +1009,7 @@ class TestGetLatestCompleteCheckpoint:
         self.mock_dist_get_rank.return_value = 0
         self.mock_get_num_nodes.return_value = 1
         self.mock_dist_get_world_size.return_value = 2
-        
+
         base_container = CheckpointContainerId("/tmp/checkpoints")
         ckpt_id = CheckpointContainerId.create_child(base_container, "step-100_ckpt")
         mocker.patch.object(loader, "get_candidate_checkpoints", return_value=[ckpt_id])
@@ -1024,7 +1023,7 @@ class TestGetLatestCompleteCheckpoint:
         mocker.patch.object(loader, "read_metadata", return_value=mock_metadata)
 
         # Mock available objects: Rank 0 sees src0, Rank 1 sees src1.
-        # However, since they are on the same node (num_nodes=1), the underlying system 
+        # However, since they are on the same node (num_nodes=1), the underlying system
         # can see all files via NFS/local disk.
         mocker.patch.object(
             loader,
@@ -1048,23 +1047,21 @@ class TestGetLatestCompleteCheckpoint:
         # When: Execute the core logic to get the latest checkpoint
         result = loader.get_latest_complete_checkpoint(base_container)
 
-        # Then: 
+        # Then:
         # Verify that the method executes correctly instead of crashing with an error.
         assert result == ckpt_id
-        
+
         # Verify that the generated retrieval plan is empty (no network fetch to non-existent peers).
         args, _ = self.mock_dist_broadcast_object_list.call_args
         plan_container = args[0]
         plan = plan_container[0]
-        
+
         # Assert that the network retries wval plan for all ranks is empty (perfect fallback to NFS/Local read).
         assert not plan.get(0)
         assert not plan.get(1)
-        
+
         # Verify that the subsequent flow skips retrieval entirely since it's locally available.
         mock_retrieve.assert_not_called()
-
-
 
     def test_non_rank0_success(self, loader, mocker):
         """Tests successful retrieval flow on non-Rank 0."""

@@ -93,7 +93,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
     pool_config = BufferPoolConfig(
         pool_dir_path=os.path.join(str(flashpoint_base_container), "buffer_pool"),
         rank=trainer.global_rank,
-        num_buffers=write_thread_count * NUM_OF_BUFFERS_PER_OBJECT,
+        num_buffers=write_files_per_rank * NUM_OF_BUFFERS_PER_OBJECT,
         buffer_size=initial_write_buffer_size_bytes or DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
     )
 

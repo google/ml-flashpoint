@@ -108,9 +108,9 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
         self._use_cached_ckpt_structure: bool = use_cached_ckpt_structure
 
     @property
-    def thread_count(self) -> int:
-        """Returns the number of threads used by the storage writer."""
-        return self._storage_writer._thread_count
+    def files_per_rank(self) -> int:
+        """Returns the number of files per rank used by the storage writer."""
+        return self._storage_writer._files_per_rank
 
     @override
     def can_handle_sharded_objects(self) -> bool:

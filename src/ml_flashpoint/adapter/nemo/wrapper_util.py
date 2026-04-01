@@ -57,7 +57,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
     initial_write_buffer_size_bytes: Optional[int] = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
     use_optimized_save: bool = True,
     use_cached_ckpt_structure: bool = False,
-    use_fully_parallel_wrapper: bool = False,
+    use_fully_parallel_wrapper: bool = True,
 ) -> MLFlashpointAutoResume:
     """Wraps the trainer and creates an MLFlashpointAutoResume instance wrapping `default_auto_resume`.
 
@@ -80,7 +80,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
             Defaults to False.
         use_fully_parallel_wrapper: Whether to use the fully parallel wrapper for save and load.
             This will evenly distribute checkpoint data across all ranks.
-            Defaults to False.
+            Defaults to True.
 
     Returns:
         An MLFlashpointAutoResume instance configured for ML Flashpoint, wrapping `default_auto_resume`.
@@ -147,7 +147,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
     initial_write_buffer_size_bytes: Optional[int] = DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
     use_optimized_save: bool = True,
     use_cached_ckpt_structure: bool = False,
-    use_fully_parallel_wrapper: bool = False,
+    use_fully_parallel_wrapper: bool = True,
 ):
     """Wraps the trainer's checkpoint I/O with ML Flashpoint capabilities.
 
@@ -180,7 +180,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
             Defaults to False.
         use_fully_parallel_wrapper: Whether to use the fully parallel wrapper for save and load.
             This will evenly distribute checkpoint data across all ranks.
-            Defaults to False.
+            Defaults to True.
 
     Returns:
         None. The trainer's checkpoint_io is modified in-place.

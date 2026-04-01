@@ -132,7 +132,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
             initial_write_buffer_size_bytes=DEFAULT_INITIAL_BUFFER_SIZE_BYTES,
             use_optimized_save=True,
             use_cached_ckpt_structure=False,
-            use_fully_parallel_wrapper=False,
+            use_fully_parallel_wrapper=True,
         )
 
         # 3. Result is correct type and has correct attributes
@@ -376,7 +376,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         assert kwargs["use_fully_parallel_wrapper"] is use_fully_parallel_wrapper
 
     def test_use_fully_parallel_wrapper_default_value(self, mocker):
-        """Tests that use_fully_parallel_wrapper defaults to False."""
+        """Tests that use_fully_parallel_wrapper defaults to True."""
         # Given
         mocker.patch("ml_flashpoint.adapter.nemo.wrapper_util.ReplicationManager")
         mock_wrap_trainer = mocker.patch(
@@ -398,7 +398,7 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
         # Then
         mock_wrap_trainer.assert_called_once()
         _, kwargs = mock_wrap_trainer.call_args
-        assert kwargs["use_fully_parallel_wrapper"] is False
+        assert kwargs["use_fully_parallel_wrapper"] is True
 
 
 class TestWrapTrainerCheckpointIOWithMLFlashpoint:
@@ -639,7 +639,7 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
             FullyParallelLoadStrategyWrapper,
         )
 
-    def test_fully_parallel_wrapper_disabled_by_default(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
+    def test_fully_parallel_wrapper_disabled_explicitly(self, mocker, mock_ckpt_obj_manager, mock_replication_manager):
         """Tests that FullyParallel wrappers are NOT applied when flag=False."""
 
         # Given
@@ -658,7 +658,7 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
             mock_replication_manager,
             async_save=True,
             checkpoint_loader=mocker.MagicMock(spec=DefaultMLFlashpointCheckpointLoader),
-            use_fully_parallel_wrapper=False,  # default behavior
+            use_fully_parallel_wrapper=False,
         )
 
         # Then
@@ -1150,6 +1150,7 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
             mock_replication_manager,
             async_save=True,
             checkpoint_loader=mock_loader,
+            use_fully_parallel_wrapper=False,
         )
 
         # Then

@@ -722,9 +722,7 @@ void TransferService::HandleDataReceive(int client_fd,
           }
         });
   }
-  std::string tmp_obj_id =
-      std::string(header.dest_obj_id) + std::string(kTempFileSuffix);
-  BufferObject buffer_obj(tmp_obj_id, header.obj_size,
+  BufferObject buffer_obj(header.dest_obj_id, header.obj_size,
                           /*overwrite=*/true);
   LOG(INFO) << "Successfully created buffer object";
   void* receiver_data_ptr = buffer_obj.get_data_ptr();
@@ -739,19 +737,8 @@ void TransferService::HandleDataReceive(int client_fd,
   }
 
   // Close the buffer object to ensure data is flushed and the file descriptor
-  // is released before renaming.
+  // is released.
   buffer_obj.close();
-
-  // Rename the temporary file to the final destination.
-  if (rename(tmp_obj_id.c_str(), header.dest_obj_id) != 0) {
-    PLOG(ERROR) << "Failed to rename temporary file " << tmp_obj_id << " to "
-                << header.dest_obj_id;
-    if (is_respond_get_task) {
-      ReportResult(header.task_id, false, "Failed to rename temporary file");
-    }
-    SendErrorResponse(client_fd, header.task_id, header.dest_obj_id);
-    return;
-  }
   if (is_respond_get_task) {
     UpdateTaskMetrics(header.task_id, [](TaskMetricContainer& ts) {
       if (auto* get_ts = dynamic_cast<GetTaskMetricContainer*>(&ts)) {

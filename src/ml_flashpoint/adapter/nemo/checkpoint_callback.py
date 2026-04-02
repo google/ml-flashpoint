@@ -73,8 +73,22 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
         self.every_n_steps = every_n_steps
         self.skip_every_n_steps = skip_every_n_steps if skip_every_n_steps is not None else 0
         self._enabled = enabled
-        self.replication_manager = None
+        self._replication_manager = None
         self._validate()
+
+    @property
+    def replication_manager(self):
+        """Returns the ReplicationManager instance if one has been set."""
+        return self._replication_manager
+
+    def set_replication_manager(self, manager):
+        """
+        Sets the ReplicationManager instance.
+
+        This is typically called by the ML Flashpoint wrapper to inject the managers
+        because the callback is instantiated by the user prior to wrapper initialization.
+        """
+        self._replication_manager = manager
 
     def _validate(self):
         """Ensures this instance passes validity checks and expectations. Expected to be used by __init__.
@@ -159,13 +173,10 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
         _LOGGER.info("Training ended. Synchronizing and finalizing checkpoints...")
 
         # 1. Wait for async checkpoint saves to finish locally
-        checkpoint_io = getattr(trainer.strategy, "checkpoint_io", None)
-        if hasattr(checkpoint_io, "maybe_finalize_save_checkpoint"):
-            checkpoint_io.maybe_finalize_save_checkpoint(blocking=True)
+        trainer.strategy.checkpoint_io.maybe_finalize_save_checkpoint(blocking=True)
 
         # 2. Synchronize all ranks to ensure background writes are done everywhere before deletion
-        if hasattr(trainer.strategy, "barrier"):
-            trainer.strategy.barrier("mlf_cleanup_barrier")
+        trainer.strategy.barrier("mlf_cleanup_barrier")
 
         if self.replication_manager is not None:
             _LOGGER.info("Training ended. Shutting down Replication Manager...")

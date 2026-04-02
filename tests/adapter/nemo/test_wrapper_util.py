@@ -905,8 +905,8 @@ class TestWrapTrainerCheckpointIOWithMLFlashpoint:
         )
 
         # Then
-        assert mock_mlf_callback1.replication_manager is mock_replication_manager
-        assert mock_mlf_callback2.replication_manager is mock_replication_manager
+        mock_mlf_callback1.set_replication_manager.assert_called_once_with(mock_replication_manager)
+        mock_mlf_callback2.set_replication_manager.assert_called_once_with(mock_replication_manager)
 
     def test_invalid_config_with_mlf_async_wrapper_and_async_save_false(
         self, mocker, mock_ckpt_obj_manager, mock_replication_manager

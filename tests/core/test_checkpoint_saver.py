@@ -109,7 +109,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
         CheckpointObjectManager._worker_pool = None
 
         config = BufferPoolConfig(pool_dir_path=pool_dir, rank=0, num_buffers=3, buffer_size=1024 * 1024)
-        manager = CheckpointObjectManager(pool_config=config)
+        manager = CheckpointObjectManager(local_pool_config=config)
         yield manager
 
         # Teardown

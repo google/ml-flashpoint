@@ -109,10 +109,14 @@ class TestWrapTrainerAndAutoResumeWithMLFlashpoint:
 
         mock_ckpt_obj_manager_cls.assert_called_once()
         call_args = mock_ckpt_obj_manager_cls.call_args
-        assert "pool_config" in call_args.kwargs
-        pool_config = call_args.kwargs["pool_config"]
-        assert isinstance(pool_config, BufferPoolConfig)
-        assert pool_config.pool_dir_path == f"{flashpoint_base_container}/buffer_pool"
+        assert "local_pool_config" in call_args.kwargs
+        assert "repl_pool_config" in call_args.kwargs
+        local_config = call_args.kwargs["local_pool_config"]
+        repl_config = call_args.kwargs["repl_pool_config"]
+        assert isinstance(local_config, BufferPoolConfig)
+        assert isinstance(repl_config, BufferPoolConfig)
+        assert local_config.pool_dir_path == f"{flashpoint_base_container}/buffer_pool/local"
+        assert repl_config.pool_dir_path == f"{flashpoint_base_container}/buffer_pool/repl"
 
         # Capture the ckpt_obj_manager passed to initialize
         _, kwargs_init = mock_replication_manager_instance.initialize.call_args

@@ -80,7 +80,8 @@ TransferService::~TransferService() {
 }
 
 int TransferService::Initialize(int listen_port, int threads,
-                                int conn_pool_size_per_peer, int global_rank) {
+                                int conn_pool_size_per_peer, int global_rank,
+                                const std::string& repl_shm_name) {
   std::lock_guard<std::mutex> lock(init_mutex_);
   if (running_.load()) {
     LOG(INFO) << "Transfer service is already running.";
@@ -93,6 +94,19 @@ int TransferService::Initialize(int listen_port, int threads,
   threads_ = threads;
   conn_pool_size_per_peer_ = conn_pool_size_per_peer;
   global_rank_ = global_rank;
+  repl_shm_name_ = repl_shm_name;
+
+  if (!repl_shm_name_.empty()) {
+    try {
+      LOG(INFO) << "Attaching to replication BufferPool with SHM name: " << repl_shm_name_;
+      repl_pool_ = std::make_unique<ml_flashpoint::checkpoint_object_manager::buffer_object::BufferPool>(repl_shm_name_);
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Failed to attach to replication BufferPool: " << e.what();
+      // Fallback to standalone buffers if pool fails to initialize
+      repl_pool_.reset();
+    }
+  }
+
   absl::RemoveLogSink(mlf_log_sink_.get());
   mlf_log_sink_ = std::make_unique<MLFLogSink>(global_rank);
   absl::AddLogSink(mlf_log_sink_.get());
@@ -722,9 +736,23 @@ void TransferService::HandleDataReceive(int client_fd,
           }
         });
   }
-  BufferObject buffer_obj(header.dest_obj_id, header.obj_size,
-                          /*overwrite=*/true);
-  LOG(INFO) << "Successfully created buffer object";
+  std::string buffer_path = header.dest_obj_id;
+  bool is_standalone = true;
+
+  if (repl_pool_) {
+    try {
+      LOG(INFO) << "Acquiring buffer from pool for " << header.dest_obj_id;
+      buffer_path = repl_pool_->Acquire(header.dest_obj_id);
+      is_standalone = false;
+      LOG(INFO) << "Acquired pooled buffer: " << buffer_path;
+    } catch (const std::exception& e) {
+      LOG(WARNING) << "Failed to acquire buffer from pool: " << e.what()
+                   << ". Falling back to standalone buffer.";
+    }
+  }
+
+  BufferObject buffer_obj(buffer_path, header.obj_size, is_standalone);
+  LOG(INFO) << "Successfully created buffer object at " << buffer_path;
   void* receiver_data_ptr = buffer_obj.get_data_ptr();
 
   if (!RecvAll(client_fd, receiver_data_ptr, header.obj_size).ok()) {

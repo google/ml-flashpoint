@@ -28,6 +28,7 @@ add_library(transfer_service_lib STATIC
     mlf_log_sink.cpp
     ${CMAKE_SOURCE_DIR}/src/ml_flashpoint/checkpoint_object_manager/buffer_object/buffer_object.cpp
     ${CMAKE_SOURCE_DIR}/src/ml_flashpoint/checkpoint_object_manager/buffer_object/buffer_helper.cpp
+    ${CMAKE_SOURCE_DIR}/src/ml_flashpoint/checkpoint_object_manager/buffer_object/buffer_pool.cpp
 )
 
 target_link_libraries(transfer_service_lib PUBLIC absl::log absl::check absl::status absl::statusor absl::strings absl::base absl::time absl::log_initialize absl::log_globals)

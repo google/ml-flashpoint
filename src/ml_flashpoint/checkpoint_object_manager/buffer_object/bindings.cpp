@@ -20,8 +20,10 @@
 #include <string>
 
 #include "buffer_object.h"
+#include "buffer_pool.h"
 
 namespace py = pybind11;
+using ml_flashpoint::checkpoint_object_manager::buffer_object::BufferPool;
 
 // Module entry point
 PYBIND11_MODULE(buffer_object_ext, m) {
@@ -98,4 +100,20 @@ PYBIND11_MODULE(buffer_object_ext, m) {
             b.is_readonly()                            // Readonly flag
         );
       });
+
+  py::class_<BufferPool> buffer_pool_class(m, "BufferPool");
+
+  buffer_pool_class
+      .def(py::init<const std::string&, const std::string&, int, size_t, size_t>(),
+           py::arg("shm_name"), py::arg("pool_dir") = "", py::arg("rank") = 0,
+           py::arg("num_buffers") = 0, py::arg("buffer_size") = 0,
+           py::call_guard<py::gil_scoped_release>())
+      .def("acquire", &BufferPool::Acquire, "Acquires a buffer from the pool.",
+           py::arg("associated_symlink") = "",
+           py::call_guard<py::gil_scoped_release>())
+      .def("release", &BufferPool::Release, "Releases a buffer back to the pool.",
+           py::arg("object_id"),
+           py::call_guard<py::gil_scoped_release>())
+      .def("gc", &BufferPool::GC, "Performs garbage collection.",
+           py::call_guard<py::gil_scoped_release>());
 }

@@ -394,6 +394,7 @@ def test_on_train_end_skips_cleanup_on_non_zero_rank(mocker):
     callback.on_train_end(trainer, pl_module)
 
     # Then
+    checkpoint_io.maybe_finalize_save_checkpoint.assert_called_once_with(blocking=True)
     callback.replication_manager.shutdown.assert_called_once()
     checkpoint_io.remove_checkpoint.assert_not_called()
 
@@ -409,7 +410,7 @@ def test_on_train_end_no_replication_manager_skips_shutdown(mocker):
 
     base_container = CheckpointContainerId("/test/base")
     callback = MLFlashpointCheckpointCallback(checkpoint_base_container=base_container, every_n_steps=1)
-    # self.replication_manager is inherently None initialized in __init__
+    assert callback.replication_manager is None, "replication_manager is expected to be None initially"
 
     # When
     callback.on_train_end(trainer, pl_module)

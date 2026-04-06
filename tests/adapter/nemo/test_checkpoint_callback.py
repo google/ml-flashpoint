@@ -385,7 +385,7 @@ def test_on_train_end_cleans_up_on_rank_zero(mocker, tmp_path):
 
     base_container = CheckpointContainerId(str(base_container_path))
     callback = MLFlashpointCheckpointCallback(checkpoint_base_container=base_container, every_n_steps=1)
-    callback.set_replication_manager(mocker.MagicMock())
+    callback.replication_manager = mocker.MagicMock()
 
     # When
     callback.on_train_end(trainer, pl_module)
@@ -417,7 +417,7 @@ def test_on_train_end_skips_cleanup_on_non_zero_rank(mocker, tmp_path):
 
     base_container = CheckpointContainerId(str(base_container_path))
     callback = MLFlashpointCheckpointCallback(checkpoint_base_container=base_container, every_n_steps=1)
-    callback.set_replication_manager(mocker.MagicMock())
+    callback.replication_manager = mocker.MagicMock()
 
     # When
     callback.on_train_end(trainer, pl_module)

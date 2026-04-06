@@ -81,7 +81,8 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
         """Returns the ReplicationManager instance if one has been set."""
         return self._replication_manager
 
-    def set_replication_manager(self, manager):
+    @replication_manager.setter
+    def replication_manager(self, manager):
         """
         Sets the ReplicationManager instance.
 

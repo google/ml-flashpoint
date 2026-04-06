@@ -206,7 +206,7 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
         return
 
     for cb in mlf_callbacks:
-        cb.set_replication_manager(replication_manager)
+        cb.replication_manager = replication_manager
 
     if not isinstance(trainer.strategy, nl_strategies.MegatronStrategy):
         raise ValueError(

@@ -365,12 +365,14 @@ def test_on_train_end_cleans_up_on_rank_zero(mocker):
 
     base_container = CheckpointContainerId("/test/base")
     callback = MLFlashpointCheckpointCallback(checkpoint_base_container=base_container, every_n_steps=1)
-    callback.set_replication_manager(mocker.MagicMock())
+    callback.replication_manager = mocker.MagicMock()
 
     # When
     callback.on_train_end(trainer, pl_module)
 
     # Then
+    checkpoint_io.maybe_finalize_save_checkpoint.assert_called_once_with(blocking=True)
+    trainer.strategy.barrier.assert_called_once_with("mlf_cleanup_barrier")
     callback.replication_manager.shutdown.assert_called_once()
     checkpoint_io.remove_checkpoint.assert_called_once_with(base_container.data)
 
@@ -386,7 +388,7 @@ def test_on_train_end_skips_cleanup_on_non_zero_rank(mocker):
 
     base_container = CheckpointContainerId("/test/base")
     callback = MLFlashpointCheckpointCallback(checkpoint_base_container=base_container, every_n_steps=1)
-    callback.set_replication_manager(mocker.MagicMock())
+    callback.replication_manager = mocker.MagicMock()
 
     # When
     callback.on_train_end(trainer, pl_module)
@@ -416,3 +418,28 @@ def test_on_train_end_no_replication_manager_skips_shutdown(mocker):
     # replication_manager doesn't crash since it's None and checked.
     # still cleans up on rank 0
     checkpoint_io.remove_checkpoint.assert_called_once_with(base_container.data)
+
+
+def test_on_train_end_is_idempotent(mocker):
+    """Tests that calling on_train_end twice is safe."""
+    # Given
+    trainer = mocker.MagicMock(spec=pl.Trainer)
+    trainer.local_rank = 0
+    checkpoint_io = mocker.MagicMock()
+    trainer.strategy.checkpoint_io = checkpoint_io
+
+    pl_module = mocker.MagicMock(spec=pl.LightningModule)
+
+    base_container = CheckpointContainerId("/test/base")
+    callback = MLFlashpointCheckpointCallback(checkpoint_base_container=base_container, every_n_steps=1)
+    callback.replication_manager = mocker.MagicMock()
+
+    # When
+    callback.on_train_end(trainer, pl_module)
+    callback.on_train_end(trainer, pl_module)
+
+    # Then
+    assert callback.replication_manager.shutdown.call_count == 2
+    assert checkpoint_io.remove_checkpoint.call_count == 2
+    assert checkpoint_io.maybe_finalize_save_checkpoint.call_count == 2
+    assert trainer.strategy.barrier.call_count == 2

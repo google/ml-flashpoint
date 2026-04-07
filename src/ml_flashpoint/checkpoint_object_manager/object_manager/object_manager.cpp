@@ -14,6 +14,10 @@
 
 #include "object_manager.h"
 
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 #include <filesystem>
 #include <future>
 #include <iostream>
@@ -27,13 +31,35 @@ namespace ml_flashpoint::checkpoint_object_manager::object_manager {
 namespace fs = std::filesystem;
 
 namespace {
+// We use a fork/exec approach calling 'rm -rf' here instead of
+// std::filesystem::remove_all to address a Segmentation Fault
+// observed in multi-threaded environments. This should be safer
+// and avoids the crash experienced with std::filesystem operations.
+//
 // The actual deletion logic
 void delete_directories_task(const std::vector<std::string>& directories) {
   for (const std::string& dir_path : directories) {
     try {
       if (fs::is_directory(dir_path)) {
-        LOG(INFO) << "Removing directory " << dir_path << " ...";
-        fs::remove_all(dir_path);
+        LOG(INFO) << "Removing directory " << dir_path << " via fork/exec...";
+        pid_t pid = fork();
+        if (pid == 0) {
+          // Child process
+          execlp("rm", "rm", "-rf", dir_path.c_str(), (char*)NULL);
+          // If execlp returns, it failed
+          std::cerr << "Failed to exec rm -rf for " << dir_path << std::endl;
+          exit(1);
+        } else if (pid > 0) {
+          // Parent process
+          int status;
+          waitpid(pid, &status, 0);
+          if (status != 0) {
+            LOG(ERROR) << "rm -rf failed for " << dir_path << " with status "
+                       << status;
+          }
+        } else {
+          LOG(ERROR) << "Failed to fork for deleting " << dir_path;
+        }
       }
     } catch (const fs::filesystem_error& e) {
       // It's important to handle errors inside the thread,

@@ -21,6 +21,8 @@
 #include <optional>
 #include <string>
 
+#include "../../checkpoint_object_manager/buffer_object/buffer_pool.h"
+
 // For socket programming
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -73,7 +75,8 @@ class TransferService final {
   // Returns:
   //   The port the service is listening on, or -1 on failure.
   int Initialize(int listen_port = 0, int threads = 16,
-                 int conn_pool_per_peer = 16, int global_rank = -1);
+                 int conn_pool_per_peer = 16, int global_rank = -1,
+                 const std::string& repl_shm_name = "");
 
   // Shuts down the transfer service gracefully.
   void Shutdown();
@@ -178,6 +181,9 @@ class TransferService final {
   };
   std::unordered_map<std::string, PendingTaskContext> pending_tasks_;
   std::mutex pending_tasks_mutex_;  // Guard pending_tasks_
+
+  std::string repl_shm_name_;
+  std::unique_ptr<ml_flashpoint::checkpoint_object_manager::buffer_object::BufferPool> repl_pool_;
 
   std::unique_ptr<MLFLogSink> mlf_log_sink_;
 

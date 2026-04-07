@@ -375,9 +375,6 @@ def test_on_train_end_cleans_up_on_rank_zero(mocker, tmp_path):
     mocker.spy(checkpoint_io, "remove_checkpoint")
     trainer.strategy.checkpoint_io = checkpoint_io
 
-    # Make remove_checkpoint actually delete the directory
-    checkpoint_io.remove_checkpoint.side_effect = lambda path: shutil.rmtree(path)
-
     pl_module = mocker.MagicMock(spec=pl.LightningModule)
 
     # Create a base container directory and a dummy file inside it

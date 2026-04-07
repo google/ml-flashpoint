@@ -159,6 +159,8 @@ If it is not worth fixing, make it `WARNING`.
 
 Here is a guideline for VLOG levels to use in C++.
 
+NOTE: The rule of thumb is to use `VLOG(3)` for `DEBUG` logging in C++, equivalent to when you'd use debug logging in other languages.
+
 | Level | Usage Case | Frequency |
 | :--- | :--- | :--- |
 | **`VLOG(2)`** | **Detailed events:** Per-request or per-connection logic (e.g., "Connection X added to active set"). | Medium |

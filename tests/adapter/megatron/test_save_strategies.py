@@ -72,6 +72,17 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
         # When/Then
         assert strategy.can_handle_sharded_objects() is True
 
+    def test_teardown(self, mocker, storage_writer):
+        # Given
+        strategy = MLFlashpointMegatronAsyncSaveStrategy(storage_writer=storage_writer)
+        mocker.spy(storage_writer, "teardown")
+
+        # When
+        strategy.teardown()
+
+        # Then
+        storage_writer.teardown.assert_called_once()
+
     class TestAsyncSave:
         @pytest.fixture(autouse=True)
         def mock_dist(self, mocker):
@@ -160,7 +171,8 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
         def test_async_save_initialization_calls_success(
             self, mocker, async_save_setup, storage_writer, checkpoint_saver, dummy_write_buckets
         ):
-            """Tests the initialization calls within async_save, including StorageWriter re-initialization."""
+            """Tests the initialization calls within async_save, including
+            StorageWriter re-initialization and proxy reuse."""
             # Given
             mock_statedictsaver = mocker.patch("ml_flashpoint.adapter.megatron.save_strategies.statedictsaver")
             (
@@ -182,6 +194,10 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
             )
             mock_new_storage_writer_instance = mock_memory_storage_writer_cls.return_value
 
+            # Setup the old storage writer to have some dummy proxies
+            storage_writer._write_events_per_checkpoint_id = "dummy_events_proxy"
+            storage_writer._write_results_per_checkpoint_id = "dummy_results_proxy"
+
             initialize_checkpoint_spy = mocker.spy(checkpoint_saver, "initialize_checkpoint")
 
             # When
@@ -195,6 +211,11 @@ class TestMLFlashpointMegatronAsyncSaveStrategy:
                 mp_manager_future=storage_writer._main_process_torchmp_manager_future,
                 thread_count=storage_writer._thread_count,
             )
+
+            # Verify proxy reuse
+            assert mock_new_storage_writer_instance._write_events_per_checkpoint_id == "dummy_events_proxy"
+            assert mock_new_storage_writer_instance._write_results_per_checkpoint_id == "dummy_results_proxy"
+
             mock_new_storage_writer_instance.reset.assert_called_once_with(checkpoint_id.data)
             mock_new_storage_writer_instance.stage_write_data_buckets.assert_called_once_with(
                 checkpoint_id, dummy_write_buckets, non_blocking=True

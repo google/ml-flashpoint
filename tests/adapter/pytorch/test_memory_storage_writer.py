@@ -100,6 +100,29 @@ class TestMemoryStorageWriter:
         # Then
         assert writer._thread_count == expected_thread_count
 
+    def test_teardown(self, mocker, mp_manager_future):
+        """Tests that teardown gracefully shuts down the torch_mp Manager."""
+        # Given
+        import concurrent.futures
+
+        mock_saver = mocker.MagicMock(spec=MLFlashpointCheckpointSaver)
+        writer = MemoryStorageWriter(checkpoint_saver=mock_saver, mp_manager_future=mp_manager_future)
+
+        mock_manager = mocker.MagicMock()
+        mock_future = concurrent.futures.Future()
+        mock_future.set_result(mock_manager)
+        writer._main_process_torchmp_manager_future = mock_future
+
+        # When
+        writer.teardown()
+
+        # Then
+        mock_manager.shutdown.assert_called_once()
+        assert writer._main_process_torchmp_manager_future is None
+
+        # Call again to test idempotency
+        writer.teardown()
+
     def test_validate_checkpoint_id(self):
         """Tests the validate_checkpoint_id class method."""
         # Valid cases
@@ -1016,6 +1039,7 @@ class TestMemoryStorageWriter:
             assert metadata.storage_meta == expected_storage_meta
             mock_saver.write_metadata.assert_called_once_with(checkpoint_id, metadata)
             assert checkpoint_id not in writer._write_results_per_checkpoint_id
+            assert checkpoint_id not in writer._write_events_per_checkpoint_id
 
         def test_finish_checkpoint_empty_results(self, mocker, mp_manager_future):
             """Tests finish_checkpoint with an empty results list."""
@@ -1408,7 +1432,8 @@ class TestMemoryStorageWriter:
             writer.finish(metadata, [[wr1]])
 
             # Then
-            assert writer.get_write_results(checkpoint_id) is None
+            assert checkpoint_id not in writer._write_results_per_checkpoint_id
+            assert checkpoint_id not in writer._write_events_per_checkpoint_id
 
         def test_write_data_in_separate_process(self, writer, mocker):
             """Tests that write_data in a separate process correctly updates the shared results."""

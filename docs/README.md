@@ -36,7 +36,7 @@ When comparing
 
 We observe:
 
-* Data write times that are up to 120x faster for ML Flashpoint specifically, currently reaching averages of up to **~60 GB/s/node** write throughput and peaks of over **80 GB/s/node** (which scales linearly with cluster size),.
+* Data write times that are up to 120x faster for ML Flashpoint specifically, currently reaching averages of up to **~60 GB/s/node** write throughput and peaks of over **80 GB/s/node** (which scales linearly with the number of nodes).
 * Total checkpoint recovery times that are ~7-12x faster for ML Flashpoint specifically, depending on number of nodes lost (includes the time it takes to do checkpoint detection, cross-node coordination, replication, read into model state and be ready to resume training).
 * For _async_ checkpointing: 
     * Improvements averaging **3%** (Gemma 27B) & **6%** (Llama 70B) for _overall job time_ in the hybrid approach.

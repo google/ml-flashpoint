@@ -5,7 +5,7 @@
 [![Build and Test](https://github.com/google/ml-flashpoint/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/google/ml-flashpoint/actions/workflows/build-and-test.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-3100/)
 
-[Documentation](https://google.github.io/ml-flashpoint/) | [Performance](https://google.github.io/ml-flashpoint/#performance) | [Contributing](./CONTRIBUTING.md) | [Security](./SECURITY.md)
+[User Documentation](https://google.github.io/ml-flashpoint/) | [Performance](https://google.github.io/ml-flashpoint/#performance) | [CodeWiki](https://codewiki.google/github.com/google/ml-flashpoint) | [Contributing](./CONTRIBUTING.md)
 </div>
 
 ## Overview
@@ -51,6 +51,8 @@ pip install -e .[pytorch,megatron]
 ```
 
 ## Development
+
+Check out our [CodeWiki](https://codewiki.google/github.com/google/ml-flashpoint) for AI-generated documentation of the code structure and implementation.
 
 ### Python version
 

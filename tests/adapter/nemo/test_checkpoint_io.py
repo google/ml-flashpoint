@@ -266,9 +266,7 @@ class TestMLFlashpointCheckpointIO:
         result = checkpoint_io.load_content_metadata(ckpt_version_path)
 
         # Then
-        alt_checkpoint_io.load_content_metadata.assert_called_once_with(
-            ckpt_version_path, None
-        )
+        alt_checkpoint_io.load_content_metadata.assert_called_once_with(ckpt_version_path, None)
         assert result == expected_metadata
 
     def test_load_content_metadata_from_preloaded(self, checkpoint_io_components):

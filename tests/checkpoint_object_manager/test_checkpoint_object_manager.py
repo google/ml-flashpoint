@@ -577,7 +577,7 @@ class TestDeleteContainer:
 
         if is_mock:
             # In mock mode, verify that shutil.rmtree was called.
-            mock_rmtree.assert_called_once_with(str(container_path))
+            mock_rmtree.assert_called_once_with(str(container_path), onerror=mocker.ANY)
         else:
             # In real mode, verify the directory and its content are gone.
             assert not container_path.exists()
@@ -599,7 +599,7 @@ class TestDeleteContainer:
         manager.delete_container(container_path)
 
         if is_mock:
-            mock_rmtree.assert_called_once_with(container_path)
+            mock_rmtree.assert_called_once_with(container_path, onerror=mocker.ANY)
         else:
             assert not os.path.exists(str(container_path))
 
@@ -635,6 +635,37 @@ class TestDeleteContainer:
 
         with pytest.raises(OSError, match="Permission denied"):
             manager.delete_container(fake_container_path)
+
+    def test_delete_container_ignores_file_not_found_on_rmtree(self, mocker):
+        """
+        Unit Test: Verifies that delete_container ignores FileNotFoundError
+        during shutil.rmtree by passing a proper onerror handler.
+        """
+        manager = CheckpointObjectManager()
+        fake_container_path = CheckpointContainerId("/a/fake/path")
+
+        mocker.patch("os.path.isdir", return_value=True)
+        mock_rmtree = mocker.patch("shutil.rmtree")
+
+        manager.delete_container(fake_container_path)
+
+        mock_rmtree.assert_called_once()
+        kwargs = mock_rmtree.call_args.kwargs
+        onerror_handler = kwargs.get("onerror")
+        assert onerror_handler is not None
+
+        # Test the onerror handler
+        # Should not raise FileNotFoundError
+        try:
+            exc = FileNotFoundError("file missing")
+            onerror_handler(None, None, (type(exc), exc, None))
+        except FileNotFoundError:
+            pytest.fail("onerror raised FileNotFoundError it should have ignored")
+
+        # Should raise other exceptions
+        with pytest.raises(ValueError):
+            exc = ValueError("some other error")
+            onerror_handler(None, None, (type(exc), exc, None))
 
     def test_delete_container_on_file_path_does_nothing(self, real_buffer_manager):
         """

@@ -110,6 +110,20 @@ void ConnectionPool::Shutdown() {
   std::unique_lock<std::mutex> lock(mtx_);
   stopping_ = true;
   cv_.notify_all();
+
+  for (int fd : active_connections_) {
+    LOG(INFO) << "Force shutting down active connection " << fd;
+    shutdown(fd, SHUT_RDWR);
+  }
+  active_connections_.clear();
+
+  while (!available_connections_.empty()) {
+    int fd = available_connections_.front();
+    available_connections_.pop();
+    LOG(INFO) << "Shutting down available connection " << fd;
+    shutdown(fd, SHUT_RDWR);
+    close(fd);
+  }
 }
 
 int ConnectionPool::CreateConnection() {
@@ -174,6 +188,7 @@ std::optional<ScopedConnection> ConnectionPool::GetConnection(int timeout_ms) {
   }
   int fd = available_connections_.front();
   available_connections_.pop();
+  active_connections_.insert(fd);
   return ScopedConnection(fd, this);
 }
 
@@ -187,6 +202,7 @@ void ConnectionPool::ReleaseConnection(int sockfd, bool reuse) {
     return;
   }
   std::unique_lock<std::mutex> lock(mtx_);
+  active_connections_.erase(sockfd);
   if (stopping_) {
     LOG(WARNING)
         << "ConnectionPool::ReleaseConnection: stopping, close connection";

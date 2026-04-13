@@ -201,9 +201,12 @@ def wrap_trainer_checkpoint_io_with_mlflashpoint(
         raise ValueError(f"initial_write_buffer_size_bytes must be > 0, got {initial_write_buffer_size_bytes}.")
 
     callbacks = trainer.callbacks
-    mlflashpoint_enabled = any(isinstance(cb, MLFlashpointCheckpointCallback) for cb in callbacks)
-    if not mlflashpoint_enabled:
+    mlf_callbacks = [cb for cb in callbacks if isinstance(cb, MLFlashpointCheckpointCallback)]
+    if not mlf_callbacks:
         return
+
+    for cb in mlf_callbacks:
+        cb.replication_manager = replication_manager
 
     if not isinstance(trainer.strategy, nl_strategies.MegatronStrategy):
         raise ValueError(

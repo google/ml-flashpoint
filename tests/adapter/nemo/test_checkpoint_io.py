@@ -170,14 +170,18 @@ class TestMLFlashpointCheckpointIO:
         checkpoint = {"model": torch.nn.Linear(2, 2)}
         ckpt_version_path = str(tmp_path / "diff_path")
 
+        storage_options = {"content_metadata": {"version": 1}}
+
         expected_return = mocker.MagicMock()
         alt_checkpoint_io.save_checkpoint.return_value = expected_return
 
         # When
-        result = checkpoint_io.save_checkpoint(checkpoint, ckpt_version_path)
+        result = checkpoint_io.save_checkpoint(checkpoint, ckpt_version_path, storage_options=storage_options)
 
         # Then
-        alt_checkpoint_io.save_checkpoint.assert_called_once_with(checkpoint, ckpt_version_path)
+        alt_checkpoint_io.save_checkpoint.assert_called_once_with(
+            checkpoint, ckpt_version_path, storage_options=storage_options
+        )
         assert result is expected_return
 
     def test_save_ml_flashpoint_checkpoint_writes_common_state_dict(self, checkpoint_io_components, mocker):
@@ -221,6 +225,90 @@ class TestMLFlashpointCheckpointIO:
         # Load the saved common_state_dict and verify its content
         loaded_common_state_dict = torch.load(common_state_file_path)
         assert loaded_common_state_dict == common_state_dict
+
+    def test_save_ml_flashpoint_checkpoint_writes_metadata(self, checkpoint_io_components, mocker):
+        """Tests that content_metadata is injected into the checkpoint before saving."""
+        # Given
+        mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.distributed.get_node_local_rank", return_value=0)
+        checkpoint_io = checkpoint_io_components["checkpoint_io"]
+        base_path = checkpoint_io_components["base_path"]
+        ckpt_version_path = base_path + "/checkpoint1"
+
+        checkpoint = {"some_state": 123}
+        storage_options = {"content_metadata": {"is_mlf": True}}
+
+        mock_save_preprocess = mocker.patch(
+            "ml_flashpoint.adapter.megatron.save_utils.mcore_state_dict_utils.save_preprocess", return_value=({}, {})
+        )
+        mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.save")
+        mocker.patch.object(checkpoint_io, "_save_context")
+
+        # When
+        checkpoint_io.save_checkpoint(checkpoint, ckpt_version_path, storage_options)
+
+        # Then
+        mock_save_preprocess.assert_called_once()
+        modified_checkpoint = mock_save_preprocess.call_args[0][0]
+        assert "content_metadata" in modified_checkpoint
+        assert modified_checkpoint["content_metadata"] == {"is_mlf": True}
+
+    def test_load_content_metadata_fallback(self, checkpoint_io_components, tmp_path):
+        """Tests load_content_metadata falls back to alternative IO for non-MLF paths."""
+        # Given
+        checkpoint_io = checkpoint_io_components["checkpoint_io"]
+        alt_checkpoint_io = checkpoint_io_components["alt_checkpoint_io"]
+        ckpt_version_path = str(tmp_path / "diff_path")
+
+        expected_metadata = {"meta": "fallback"}
+        alt_checkpoint_io.load_content_metadata.return_value = expected_metadata
+
+        # When
+        result = checkpoint_io.load_content_metadata(ckpt_version_path)
+
+        # Then
+        alt_checkpoint_io.load_content_metadata.assert_called_once_with(
+            ckpt_version_path, None
+        )
+        assert result == expected_metadata
+
+    def test_load_content_metadata_from_preloaded(self, checkpoint_io_components):
+        """Tests load_content_metadata prioritizes preloaded_state_dict."""
+        # Given
+        checkpoint_io = checkpoint_io_components["checkpoint_io"]
+        ckpt_version_path = checkpoint_io.flashpoint_base_dir.data + "/checkpoint1"
+
+        expected_metadata = {"from_memory": True}
+        preloaded = {"content_metadata": expected_metadata}
+
+        # When
+        result = checkpoint_io.load_content_metadata(ckpt_version_path, preloaded_state_dict=preloaded)
+
+        # Then
+        assert result == expected_metadata
+
+    def test_load_content_metadata_from_disk(self, checkpoint_io_components, mocker):
+        """Tests load_content_metadata loads from common.pt."""
+        # Given
+        checkpoint_io = checkpoint_io_components["checkpoint_io"]
+        ckpt_version_path = checkpoint_io.flashpoint_base_dir.data + "/checkpoint1"
+
+        mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.os.path.exists", return_value=True)
+
+        expected_metadata = {"from_disk": True}
+        # Mock torch.load to return a dictionary containing our expected content_metadata
+        mock_torch_load = mocker.patch(
+            "ml_flashpoint.adapter.nemo.checkpoint_io.torch.load", return_value={"content_metadata": expected_metadata}
+        )
+
+        # When
+        result = checkpoint_io.load_content_metadata(ckpt_version_path)
+
+        # Then
+        # It should load the common state dict from disk safely (CPU, weights_only=False) and extract the metadata
+        mock_torch_load.assert_called_once()
+        assert mock_torch_load.call_args[1]["map_location"] == "cpu"
+        assert mock_torch_load.call_args[1]["weights_only"] is False
+        assert result == expected_metadata
 
     def test_save_ml_flashpoint_checkpoint_async_success(self, checkpoint_io_components, mocker):
         """Tests a successful asynchronous MLF save."""

@@ -16,9 +16,11 @@
 
 #include <gtest/gtest.h>
 
+#include <mutex>
 #include <string>
 
 #include "absl/log/globals.h"
+#include "absl/log/initialize.h"
 #include "absl/log/log.h"
 #include "absl/log/log_sink.h"
 #include "absl/log/log_sink_registry.h"
@@ -29,6 +31,10 @@ namespace {
 
 class MLFLogSinkTest : public ::testing::Test {
  protected:
+  static void SetUpTestSuite() {
+    static std::once_flag flag;
+    std::call_once(flag, []() { absl::InitializeLog(); });
+  }
 
   void SetUp() override {
     original_threshold_ = absl::StderrThreshold();

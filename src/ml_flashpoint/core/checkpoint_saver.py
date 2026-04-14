@@ -20,8 +20,9 @@ import logging
 import os
 import pickle
 import queue
+import subprocess
 import threading
-from typing import Callable, Optional, Protocol, Union
+from typing import Callable, Protocol, Union
 
 import torch
 from torch.distributed.checkpoint import metadata as torchdistmeta
@@ -31,7 +32,6 @@ from torch.distributed.checkpoint.storage import WriteResult
 from typing_extensions import override
 
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
-from ml_flashpoint.checkpoint_object_manager.object_manager import object_manager_ext
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.defaults import DIRTY_MARKER_SUFFIX, CheckpointFormat, default_metadata_object_name
 from ml_flashpoint.core.mlf_logging import get_logger
@@ -269,7 +269,7 @@ class MLFlashpointCheckpointSaver(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def finalize_checkpoint(self, checkpoint_id: CheckpointContainerId) -> Optional[object_manager_ext.BasicFutureVoid]:
+    def finalize_checkpoint(self, checkpoint_id: CheckpointContainerId) -> None:
         """Finalize the checkpoint for checkpoint_id, indicating it is complete and safe to recover from.
         This specifically does the following:
           1. Cleans up the unfinished marker created by initialize_checkpoint().
@@ -549,14 +549,13 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
 
     @override
     @log_execution_time(logger=_LOGGER, name="finalize_checkpoint")
-    def finalize_checkpoint(self, checkpoint_id: CheckpointContainerId) -> Optional[object_manager_ext.BasicFutureVoid]:
+    def finalize_checkpoint(self, checkpoint_id: CheckpointContainerId) -> None:
         self._remove_dirty_checkpoint_marker(checkpoint_id)
         # synchronize across ranks to guarantee they all completed checkpointing before proceeding
         with log_execution_time(logger=_LOGGER, name="finalize_checkpoint__barrier_func", level=logging.DEBUG):
             self._barrier_func()
         if self._local_rank_getter() == 0:
-            return self._remove_older_checkpoints(older_than=checkpoint_id)
-        return None
+            self._remove_older_checkpoints(older_than=checkpoint_id)
 
     def _create_dirty_checkpoint_marker(self, checkpoint_id: CheckpointContainerId) -> None:
         """Creates a dirty marker (typically a file) for the given checkpoint_id and the current local rank,
@@ -707,9 +706,7 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
                 object_write_bucket_queue.task_done()
 
     @log_execution_time(logger=_LOGGER, name="_remove_older_checkpoints")
-    def _remove_older_checkpoints(
-        self, older_than: CheckpointContainerId
-    ) -> Optional[object_manager_ext.BasicFutureVoid]:
+    def _remove_older_checkpoints(self, older_than: CheckpointContainerId) -> None:
         """Scans for sibling checkpoint containers to `older_than`, by listing the children of its parent and filtering
         for those that match the expected format as a safety check, and then deletes all those that are considered
         older _async_.
@@ -741,7 +738,18 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
                 if step is not None and step < older_than_step:
                     siblings_to_delete.add(full_path)
 
-        return object_manager_ext.delete_directories_async(list(siblings_to_delete))
+        if siblings_to_delete:
+            try:
+                p = subprocess.Popen(
+                    ["rm", "-rf"] + list(siblings_to_delete),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                if "PYTEST_CURRENT_TEST" in os.environ:
+                    p.wait()
+            except Exception as e:
+                _LOGGER.exception("Background deletion of old checkpoints failed: %s", e)
 
     def _save_tensor_optimized(self, tensor: torch.Tensor, buffer_io_writer):
         """Saves a tensor to the buffer using a zero-copy approach where possible.

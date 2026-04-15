@@ -73,7 +73,23 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
         self.every_n_steps = every_n_steps
         self.skip_every_n_steps = skip_every_n_steps if skip_every_n_steps is not None else 0
         self._enabled = enabled
+        self._replication_manager = None
         self._validate()
+
+    @property
+    def replication_manager(self):
+        """Returns the ReplicationManager instance if one has been set."""
+        return self._replication_manager
+
+    @replication_manager.setter
+    def replication_manager(self, manager):
+        """
+        Sets the ReplicationManager instance.
+
+        This is typically called by the ML Flashpoint wrapper to inject the managers
+        because the callback is instantiated by the user prior to wrapper initialization.
+        """
+        self._replication_manager = manager
 
     def _validate(self):
         """Ensures this instance passes validity checks and expectations. Expected to be used by __init__.
@@ -151,3 +167,22 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
             ckpt_options,
         )
         trainer.save_checkpoint(ckpt_version_container.data, storage_options={ML_FLASHPOINT_OPTS_KEY: ckpt_options})
+
+    @override
+    @log_execution_time(logger=_LOGGER, name="on_train_end", level=logging.INFO)
+    def on_train_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        _LOGGER.info("Training ended. Synchronizing and finalizing checkpoints...")
+
+        # 1. Wait for async checkpoint saves to finish locally
+        trainer.strategy.checkpoint_io.maybe_finalize_save_checkpoint(blocking=True)
+
+        # 2. Synchronize all ranks to ensure background writes are done everywhere before deletion
+        trainer.strategy.barrier("mlf_cleanup_barrier")
+
+        if self.replication_manager is not None:
+            _LOGGER.info("Training ended. Shutting down Replication Manager...")
+            self.replication_manager.shutdown()
+
+        if trainer.local_rank == 0:
+            _LOGGER.info("Local rank 0: Performing final checkpoint cleanup...")
+            trainer.strategy.checkpoint_io.remove_checkpoint(self.base_container.data)

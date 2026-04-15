@@ -153,6 +153,47 @@ TEST(TransferServiceP2PTest, PutLargeObject) {
   service2.Shutdown();
 }
 
+TEST(TransferServiceP2PTest, ShutdownInterruptsTransfer) {
+  TransferService service1;
+  int port1 = service1.Initialize();
+  ASSERT_GT(port1, 0);
+
+  TransferService service2;
+  int port2 = service2.Initialize();
+  ASSERT_GT(port2, 0);
+
+  // Create a large string (100MB) to make sure it takes time to send
+  const size_t large_size = 100 * 1024 * 1024;
+  std::string large_data(large_size, 'A');
+
+  std::string obj_id = "my_interrupt_object";
+
+  auto put_future =
+      service1.AsyncPut((void*)large_data.c_str(), large_data.size(),
+                        "127.0.0.1:" + std::to_string(port2), obj_id);
+
+  // Wait a small amount of time to let the transfer start
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+  // Trigger shutdown!
+  service1.Shutdown();
+
+  try {
+    auto put_result = put_future.get();
+    EXPECT_FALSE(put_result.success);
+    LOG(INFO) << "Transfer failed as expected after shutdown.";
+  } catch (const std::runtime_error& e) {
+    EXPECT_THAT(e.what(), testing::HasSubstr("Service is shutting down"));
+    LOG(INFO) << "Transfer threw exception as expected after shutdown: " << e.what();
+  }
+
+  // Cleanup file if it was partially created
+  std::remove(obj_id.c_str());
+  std::remove((obj_id + ".tmp").c_str());
+
+  service2.Shutdown();
+}
+
 TEST(TransferServiceP2PTest, AsyncPutLargeMmapData) {
   TransferService service1;
   int port1 = service1.Initialize();

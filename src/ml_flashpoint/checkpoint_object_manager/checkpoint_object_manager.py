@@ -239,10 +239,17 @@ class CheckpointObjectManager:
         """
         container_id = str(container_id)
         _LOGGER.info("Starting deletion process for container: '%s'", container_id)
+
+        def _onerror(func, path, exc_info):
+            exc = exc_info[1]
+            if isinstance(exc, FileNotFoundError):
+                return
+            raise exc
+
         try:
             if os.path.isdir(container_id):
                 # Use shutil.rmtree for recursive deletion.
-                shutil.rmtree(container_id)
+                shutil.rmtree(container_id, onerror=_onerror)
                 _LOGGER.info("Successfully deleted container directory: '%s'", container_id)
             else:
                 # This is not an error; the directory might have already been deleted.

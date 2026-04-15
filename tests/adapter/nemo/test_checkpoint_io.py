@@ -252,6 +252,38 @@ class TestMLFlashpointCheckpointIO:
         assert "content_metadata" in modified_checkpoint
         assert modified_checkpoint["content_metadata"] == {"is_mlf": True}
 
+    def test_save_ml_flashpoint_checkpoint_does_not_overwrite_existing_metadata(self, checkpoint_io_components, mocker):
+        """Tests that existing content_metadata in the checkpoint is not overwritten
+        if storage_options doesn't provide it."""
+        # Given
+        mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.distributed.get_node_local_rank", return_value=0)
+        checkpoint_io = checkpoint_io_components["checkpoint_io"]
+        base_path = checkpoint_io_components["base_path"]
+        ckpt_version_path = base_path + "/checkpoint_no_overwrite"
+
+        # Prepare a checkpoint that already contains metadata
+        original_metadata = {"existing_key": "original_value"}
+        checkpoint = {"model_state": [1, 2, 3], "content_metadata": original_metadata}
+
+        mocker.patch(
+            "ml_flashpoint.adapter.megatron.save_utils.mcore_state_dict_utils.save_preprocess", return_value=({}, {})
+        )
+
+        mocker.patch("ml_flashpoint.adapter.megatron.save_utils.torch.save")
+        mocker.patch.object(checkpoint_io, "_save_context")
+
+        # Scenario 1: storage_options is None
+        # When
+        checkpoint_io.save_checkpoint(checkpoint, ckpt_version_path, storage_options=None)
+        # Then: Verify metadata was not modified or removed
+        assert checkpoint["content_metadata"] == original_metadata
+
+        # Scenario 2: storage_options is an empty dictionary {}
+        # When
+        checkpoint_io.save_checkpoint(checkpoint, ckpt_version_path, storage_options={})
+        # Then: Verify metadata still remains unchanged
+        assert checkpoint["content_metadata"] == original_metadata
+
     def test_load_content_metadata_fallback(self, checkpoint_io_components, tmp_path):
         """Tests load_content_metadata falls back to alternative IO for non-MLF paths."""
         # Given

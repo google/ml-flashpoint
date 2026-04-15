@@ -290,11 +290,12 @@ class MLFlashpointCheckpointIO(AsyncCompatibleCheckpointIO):
 
         common_pt_path = os.path.join(path, COMMON_STATE_FNAME)
         if os.path.exists(common_pt_path):
-            try:
-                common_state_dict = torch.load(common_pt_path, map_location="cpu", weights_only=False)
-                return common_state_dict.get("content_metadata")
-            except Exception as e:
-                _LOGGER.warning("Failed to load common state dict for metadata from %s: %s", common_pt_path, e)
+            common_state_dict = torch.load(common_pt_path, map_location="cpu", weights_only=False)
+            if "content_metadata" in common_state_dict:
+                return common_state_dict["content_metadata"]
+
+        # Log a warning if the file exists but doesn't have the expected metadata key
+        _LOGGER.warning("Checkpoint at %s exists but does not contain 'content_metadata'.", path)
 
         return None
 

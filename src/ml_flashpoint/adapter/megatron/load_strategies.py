@@ -95,8 +95,7 @@ class MLFlashpointMegatronLoadStrategy(LoadShardedStrategy):
         torch_dist_checkpoint.load(state_dict=pyt_state_dict, storage_reader=storage_reader, planner=planner)
 
         mlf_state_dict: dict[str, Union[TorchShardedTensor, list[io.BytesIO]]] = {
-            k: v if not isinstance(v, TorchShardedTensor) else _unwrap_pyt_sharded_tensor(v)
-            for k, v in pyt_state_dict.items()
+            k: _unwrap_pyt_sharded_tensor(v) for k, v in pyt_state_dict.items()
         }
         mlf_state_dict = _replace_sharded_keys_with_state_dict_keys(mlf_state_dict, flat_mapping, rename_mapping)
         # Need to restore dict key types to handle str<->int conversions for later merging/processing.

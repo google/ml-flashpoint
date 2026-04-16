@@ -211,14 +211,7 @@ void TransferService::Shutdown() {
     epoll_thread_.join();
   }
 
-  // 6. Stop the thread pool. This will wait for all currently executing tasks
-  // to complete. Now that both the task queue and epoll threads are stopped,
-  // no new tasks can be enqueued.
-  if (thread_pool_) {
-    thread_pool_->stop();
-  }
-
-  // 7. Clean up connection pools.
+  // 6. Clean up connection pools.
   {
     std::unique_lock write_lock(connection_pools_mutex_);
     for (auto const& [peer_addr, pool] : connection_pools_) {
@@ -227,6 +220,11 @@ void TransferService::Shutdown() {
       }
     }
     connection_pools_.clear();
+  }
+
+  // 7. Stop the thread pool.
+  if (thread_pool_) {
+    thread_pool_->stop();
   }
 
   // 8. Clean up epoll fd.

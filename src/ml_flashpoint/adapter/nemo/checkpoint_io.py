@@ -26,7 +26,7 @@ from megatron.core.dist_checkpointing.strategies.async_utils import (
 from megatron.core.dist_checkpointing.strategies.async_utils import (
     AsyncRequest as MegatronAsyncRequest,
 )
-from megatron.core.dist_checkpointing.strategies.common import TorchCommonLoadStrategy
+from megatron.core.dist_checkpointing.strategies.common import COMMON_STATE_FNAME, TorchCommonLoadStrategy
 from nemo.lightning.io.pl import MegatronCheckpointIO, TrainerContext, _fix_tensors_device
 from nemo.lightning.pytorch.trainer import Trainer
 from nemo.utils.callbacks.dist_ckpt_io import AsyncCompatibleCheckpointIO, AsyncFinalizableCheckpointIO
@@ -131,8 +131,12 @@ class MLFlashpointCheckpointIO(AsyncCompatibleCheckpointIO):
         """
         if not _is_ml_flashpoint_checkpoint(self.flashpoint_base_dir, path):
             _LOGGER.info("Fallback to alternative checkpoint io.")
-            return self.fallback_checkpoint_io.save_checkpoint(checkpoint, path)
+            return self.fallback_checkpoint_io.save_checkpoint(checkpoint, path, storage_options=storage_options)
         _LOGGER.info("Use ML Flashpoint checkpoint io. Async_save: '%s'", self.async_save)
+
+        content_metadata = (storage_options or {}).get("content_metadata")
+        if content_metadata is not None:
+            checkpoint["content_metadata"] = content_metadata
 
         # Use the helper for local-aware megatron save
         optional_async_request = save_local_aware_megatron_checkpoint(
@@ -264,6 +268,50 @@ class MLFlashpointCheckpointIO(AsyncCompatibleCheckpointIO):
             self.chkpt_obj_manager.delete_container(CheckpointContainerId(path))
         else:
             self.fallback_checkpoint_io.remove_checkpoint(path)
+
+    @override
+    @log_execution_time(logger=_LOGGER, name="MLFlashpointCheckpointIO.load_content_metadata", level=logging.INFO)
+    def load_content_metadata(self, path: Optional[_PATH] = None, preloaded_state_dict: Optional[dict] = None) -> dict:
+        """Loads checkpoint content metadata, handling ML Flashpoint checkpoints specifically.
+
+        This implementation is a specialized version of the standard logic found in NeMo's
+        MegatronCheckpointIO (see: https://sourcegraph.com/r/github.com/NVIDIA-NeMo/NeMo@v2.5.0/-/blob/nemo/lightning/io/pl.py?L115),
+        but is tailored to ML Flashpoint.
+
+        Standard helpers like `dist_checkpointing.load_content_metadata` are designed to read
+        from the standard distributed metadata format (e.g., the .metadata file). However,
+        ML Flashpoint checkpoints utilize a stub `metadata.json` containing only
+        {"sharded_backend": ""} to satisfy Megatron's internal validation checks. Because this
+        stub does not contain the actual training state, the standard helper would not be
+        able to retrieve the correct metadata.
+
+        Therefore, this implementation persists the `content_metadata` inside the `common.pt`
+        file and bypasses the stub to explicitly load the metadata from `common.pt`.
+
+        Args:
+            path: The path to the checkpoint directory.
+            preloaded_state_dict: Optional preloaded state dictionary.
+
+        Returns:
+            A dictionary containing the metadata of the checkpoint.
+        """
+        if not _is_ml_flashpoint_checkpoint(self.flashpoint_base_dir, path):
+            _LOGGER.info("Fallback to alternative checkpoint io for load_content_metadata.")
+            return self.fallback_checkpoint_io.load_content_metadata(path, preloaded_state_dict)
+
+        if preloaded_state_dict is not None:
+            return preloaded_state_dict.get("content_metadata")
+
+        common_pt_path = os.path.join(path, COMMON_STATE_FNAME)
+        if os.path.exists(common_pt_path):
+            common_state_dict = torch.load(common_pt_path, map_location="cpu", weights_only=False)
+            if "content_metadata" in common_state_dict:
+                return common_state_dict["content_metadata"]
+
+        # Log a warning if the file exists but doesn't have the expected metadata key
+        _LOGGER.warning("Checkpoint at %s exists but does not contain 'content_metadata'.", path)
+
+        return None
 
 
 class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):

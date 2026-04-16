@@ -108,8 +108,12 @@ class PairwiseReplicationStrategy(ReplicationStrategy):
             )
 
         self._num_nodes = utils.get_num_of_nodes()
-        if self._num_nodes % 2 != 0:
-            raise ValueError(f"The total number of nodes ({self._num_nodes}) must be even.")
+        # Allow 1-node execution by bypassing the even-number node check.
+        # Pairwise replication requires an even number of nodes, but we allow exactly 1 node
+        # to run without any replication.
+        if self._num_nodes > 1 and self._num_nodes % 2 != 0:
+            raise ValueError(f"The total number of nodes ({self._num_nodes}) must be even for pairwise replication.")
+        self._disable_replication = self._num_nodes == 1
 
         if self._num_nodes != self._world_size // self._processes_per_node:
             raise ValueError(
@@ -119,6 +123,9 @@ class PairwiseReplicationStrategy(ReplicationStrategy):
 
     @override
     def get_destination_addresses(self, global_rank: int) -> List[str]:
+        if self._disable_replication:
+            return []
+
         if not 0 <= global_rank < self._world_size:
             raise ValueError(f"global_rank {global_rank} is out of valid range [0, {self._world_size - 1}].")
 
@@ -441,6 +448,7 @@ class ReplicationManager:
         Returns:
             `True` if the bulk retrieval was successful, `False` otherwise.
         """
+
         if self._retry_config is None:
             _LOGGER.error("ReplicationManager is not initialized. Cannot retrieve.")
             return False

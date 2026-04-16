@@ -5,7 +5,7 @@
 [![Build and Test](https://github.com/google/ml-flashpoint/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/google/ml-flashpoint/actions/workflows/build-and-test.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-3100/)
 
-[Documentation](https://google.github.io/ml-flashpoint/) | [Performance](https://google.github.io/ml-flashpoint/#performance) | [Contributing](./CONTRIBUTING.md) | [Security](./SECURITY.md)
+[User Documentation](https://google.github.io/ml-flashpoint/) | [Performance](https://google.github.io/ml-flashpoint/#performance) | [CodeWiki](https://codewiki.google/github.com/google/ml-flashpoint) | [Contributing](./CONTRIBUTING.md)
 </div>
 
 ## Overview
@@ -51,6 +51,8 @@ pip install -e .[pytorch,megatron]
 ```
 
 ## Development
+
+Check out our [CodeWiki](https://codewiki.google/github.com/google/ml-flashpoint) for AI-generated documentation of the code structure and implementation.
 
 ### Python version
 
@@ -146,6 +148,26 @@ chore(replication): add the ReplicationManager skeleton class
 
 feat(adapter/nemo): implement the callback to trigger MLFlashpoint checkpoints
 ```
+
+### Logging
+
+* Keep useful, low-frequency progress logs and major state changes or important function entries at `INFO` level. 
+High level important performance metrics can be `INFO` as well (see the note below on `DEBUG` logging).
+* Warnings and things that should be notified to the user, but not necessarily halt immediately, should be `WARNING` level.
+This includes things that are potentially unexpected, or could lead to unwanted behavior/performance.
+* All errors and exceptions (whether swallowed/handled or not) should be logged at `ERROR` level - these should always be noteworthy and worth trying to address.
+If it is not worth fixing, make it `WARNING`.
+* Everything else, such as low-level details on branch logic, progress within a function, and more specific performance details should be `DEBUG`.
+
+Here is a guideline for VLOG levels to use in C++.
+
+NOTE: The rule of thumb is to use `VLOG(3)` for `DEBUG` logging in C++, equivalent to when you'd use debug logging in other languages.
+
+| Level | Usage Case | Frequency |
+| :--- | :--- | :--- |
+| **`VLOG(2)`** | **Detailed events:** Per-request or per-connection logic (e.g., "Connection X added to active set"). | Medium |
+| **`VLOG(3)`** | **Deep tracing:** Logic branches inside loops or complex conditionals. | High |
+| **`VLOG(4)+`** | **Extremely noisy:** Byte-level data, heartbeats, or internal mutex locking/unlocking details. | Very High |
 
 ## Releases
 

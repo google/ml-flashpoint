@@ -274,6 +274,20 @@ class MLFlashpointCheckpointIO(AsyncCompatibleCheckpointIO):
     def load_content_metadata(self, path: Optional[_PATH] = None, preloaded_state_dict: Optional[dict] = None) -> dict:
         """Loads checkpoint content metadata, handling ML Flashpoint checkpoints specifically.
 
+        This implementation is a specialized version of the standard logic found in NeMo's
+        MegatronCheckpointIO (see: https://sourcegraph.com/r/github.com/NVIDIA-NeMo/NeMo@v2.5.0/-/blob/nemo/lightning/io/pl.py?L115),
+        but is tailored to ML Flashpoint.
+
+        Standard helpers like `dist_checkpointing.load_content_metadata` are designed to read
+        from the standard distributed metadata format (e.g., the .metadata file). However,
+        ML Flashpoint checkpoints utilize a stub `metadata.json` containing only
+        {"sharded_backend": ""} to satisfy Megatron's internal validation checks. Because this
+        stub does not contain the actual training state, the standard helper would not be
+        able to retrieve the correct metadata.
+
+        Therefore, this implementation persists the `content_metadata` inside the `common.pt`
+        file and bypasses the stub to explicitly load the metadata from `common.pt`.
+
         Args:
             path: The path to the checkpoint directory.
             preloaded_state_dict: Optional preloaded state dictionary.

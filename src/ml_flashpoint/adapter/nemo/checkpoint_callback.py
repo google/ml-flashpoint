@@ -77,7 +77,7 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
         self.skip_every_n_steps = skip_every_n_steps if skip_every_n_steps is not None else 0
         self._enabled = enabled
         self._replication_manager = None
-        self.keep_mlf_checkpoint_on_train_end = keep_mlf_checkpoint_on_train_end
+        self._keep_mlf_checkpoint_on_train_end = keep_mlf_checkpoint_on_train_end
         self._validate()
 
     @property
@@ -188,10 +188,11 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
             self.replication_manager.shutdown()
 
         if trainer.local_rank == 0:
-            if not self.keep_mlf_checkpoint_on_train_end:
+            if not self._keep_mlf_checkpoint_on_train_end:
                 _LOGGER.info("Local rank 0: Performing final checkpoint cleanup...")
                 trainer.strategy.checkpoint_io.remove_checkpoint(self.base_container.data)
             else:
                 _LOGGER.info(
-                    "Local rank 0: Skipping final checkpoint cleanup due to keep_mlf_checkpoint_on_train_end=True."
+                    "Local rank 0: Skipping final checkpoint cleanup because keep_mlf_checkpoint_on_train_end=%s.",
+                    self._keep_mlf_checkpoint_on_train_end,
                 )

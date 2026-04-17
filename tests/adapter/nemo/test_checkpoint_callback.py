@@ -497,3 +497,57 @@ def test_on_train_end_is_idempotent(mocker, tmp_path):
 
     # Verify file deletion
     assert not base_container_path.exists(), "Base container directory should have been deleted"
+
+
+def test_on_train_end_skips_cleanup_when_flag_is_true(mocker, tmp_path):
+    """
+    Tests that the final checkpoint cleanup is skipped when
+    keep_mlf_checkpoint_on_train_end is set to True.
+
+    This ensures that for E2E tests or specific debugging scenarios,
+    the last ML Flashpoint checkpoint remains on disk after training ends.
+    """
+
+    # Given
+    trainer = mocker.MagicMock(spec=pl.Trainer)
+    trainer.local_rank = 0
+    chkpt_obj_manager = CheckpointObjectManager()
+
+    checkpoint_io = MLFlashpointCheckpointIO(
+        flashpoint_base_path=str(tmp_path / "ckpt_base"),
+        alt_checkpoint_io=mocker.MagicMock(),
+        chkpt_obj_manager=chkpt_obj_manager,
+        save_strategy=mocker.MagicMock(),
+        load_strategy=mocker.MagicMock(),
+        trainer=trainer,
+    )
+    checkpoint_io.maybe_finalize_save_checkpoint = mocker.MagicMock()
+    mocker.spy(checkpoint_io, "remove_checkpoint")
+    trainer.strategy.checkpoint_io = checkpoint_io
+
+    pl_module = mocker.MagicMock(spec=pl.LightningModule)
+
+    # Create a base container directory and a dummy file inside it
+    base_container_path = tmp_path / "ckpt_base"
+    base_container_path.mkdir()
+    dummy_file = base_container_path / "dummy.txt"
+    dummy_file.write_text("dummy")
+
+    base_container = CheckpointContainerId(str(base_container_path))
+    callback = MLFlashpointCheckpointCallback(
+        checkpoint_base_container=base_container, every_n_steps=1, keep_mlf_checkpoint_on_train_end=True
+    )
+    callback.replication_manager = mocker.MagicMock()
+
+    # When
+    callback.on_train_end(trainer, pl_module)
+
+    # Then
+    checkpoint_io.maybe_finalize_save_checkpoint.assert_called_once_with(blocking=True)
+    trainer.strategy.barrier.assert_called_once_with("mlf_cleanup_barrier")
+    callback.replication_manager.shutdown.assert_called_once()
+
+    checkpoint_io.remove_checkpoint.assert_not_called()
+
+    assert base_container_path.exists(), "Base container directory should NOT have been deleted"
+    assert dummy_file.exists(), "Dummy file should NOT have been deleted"

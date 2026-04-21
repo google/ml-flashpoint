@@ -675,8 +675,12 @@ class TestDefaultMLFlashpointCheckpointSaver:
             checkpoint_id = CheckpointContainerId(current_ckpt_path)
 
             # When
-            future = saver.finalize_checkpoint(checkpoint_id)
-            assert future is None
+            proc = saver.finalize_checkpoint(checkpoint_id)
+            if local_rank == 0:
+                assert proc is not None
+                proc.wait()  # Wait for background deletion to complete
+            else:
+                assert proc is None
 
             # Then
             if local_rank == 0:
@@ -1887,9 +1891,11 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 os.makedirs(d)
 
             # When
-            saver._remove_older_checkpoints(
+            proc = saver._remove_older_checkpoints(
                 older_than=CheckpointContainerId(os.path.join(checkpoint_base_dir, "step-300_ckpt")),
             )
+            if proc is not None:
+                proc.wait()
 
             # Then
             assert not os.path.exists(os.path.join(checkpoint_base_dir, "step-100_ckpt"))
@@ -1910,9 +1916,10 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 os.makedirs(d)
 
             # When
-            saver._remove_older_checkpoints(
+            proc = saver._remove_older_checkpoints(
                 older_than=CheckpointContainerId(os.path.join(checkpoint_base_dir, "step-100_ckpt")),
             )
+            assert proc is None
 
             # Then
             assert os.path.exists(os.path.join(checkpoint_base_dir, "step-100_ckpt"))
@@ -1937,9 +1944,11 @@ class TestDefaultMLFlashpointCheckpointSaver:
             os.makedirs(other_dir)
 
             # When
-            saver._remove_older_checkpoints(
+            proc = saver._remove_older_checkpoints(
                 older_than=CheckpointContainerId(os.path.join(checkpoint_base_dir, "step-300_ckpt")),
             )
+            if proc is not None:
+                proc.wait()
 
             # Then
             assert not os.path.exists(os.path.join(checkpoint_base_dir, "step-100_ckpt"))
@@ -1953,9 +1962,10 @@ class TestDefaultMLFlashpointCheckpointSaver:
             os.makedirs(checkpoint_base_dir)
 
             # When
-            saver._remove_older_checkpoints(
+            proc = saver._remove_older_checkpoints(
                 older_than=CheckpointContainerId(os.path.join(checkpoint_base_dir, "step-100_ckpt")),
             )
+            assert proc is None
 
             # Then
             # No directories were deleted, and no error was raised.
@@ -1973,14 +1983,16 @@ class TestDefaultMLFlashpointCheckpointSaver:
             for d in checkpoint_dirs:
                 os.makedirs(d)
 
-            mock_popen = mocker.patch("subprocess.Popen")
+            mock_popen = mocker.patch("subprocess.Popen", side_effect=IOError("Mocked deletion failure"))
+            mock_logger = mocker.patch("ml_flashpoint.core.checkpoint_saver._LOGGER")
 
             # When
-            saver._remove_older_checkpoints(
+            proc = saver._remove_older_checkpoints(
                 older_than=CheckpointContainerId(os.path.join(checkpoint_base_dir, "step-300_ckpt")),
             )
 
             # Then
+            assert proc is None
             mock_popen.assert_called_once()
             args, _ = mock_popen.call_args
             actual_cmd = args[0]
@@ -1991,6 +2003,13 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 os.path.join(checkpoint_base_dir, "step-200_ckpt"),
             }
             assert actual_requested_deleted == expected_requested_deleted
+            for d in checkpoint_dirs:
+                assert os.path.exists(d)
+
+            # Verify that the exception was caught and logged
+            mock_logger.exception.assert_called_once()
+            log_args, _ = mock_logger.exception.call_args
+            assert "Background deletion of old checkpoints failed" in log_args[0]
 
         def test_remove_older_checkpoints_with_various_invalid_formats(self, saver, temp_dir_path):
             # Given
@@ -2018,9 +2037,11 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 os.makedirs(d)
 
             # When
-            saver._remove_older_checkpoints(
+            proc = saver._remove_older_checkpoints(
                 older_than=CheckpointContainerId(os.path.join(checkpoint_base_dir, "step-300_ckpt")),
             )
+            if proc is not None:
+                proc.wait()
 
             # Then
             for d in checkpoint_dirs_to_delete:
@@ -2114,7 +2135,9 @@ class TestDefaultMLFlashpointCheckpointSaver:
             )
 
             # When
-            saver._remove_older_checkpoints(older_than=older_than_checkpoint_id)
+            proc = saver._remove_older_checkpoints(older_than=older_than_checkpoint_id)
+            if proc is not None:
+                proc.wait()
 
             # Then
             expected_deleted_paths = {

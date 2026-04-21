@@ -269,7 +269,7 @@ class MLFlashpointCheckpointSaver(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def finalize_checkpoint(self, checkpoint_id: CheckpointContainerId) -> None:
+    def finalize_checkpoint(self, checkpoint_id: CheckpointContainerId) -> Union[subprocess.Popen, None]:
         """Finalize the checkpoint for checkpoint_id, indicating it is complete and safe to recover from.
         This specifically does the following:
           1. Cleans up the unfinished marker created by initialize_checkpoint().
@@ -281,7 +281,7 @@ class MLFlashpointCheckpointSaver(abc.ABC):
             checkpoint_id: The CheckpointContainerId to mark as finalized.
 
         Returns:
-            A future that completes when deletion of older checkpoints is done, or None if no deletion was started.
+            The subprocess.Popen object that handles deletion of older checkpoints, or None if no deletion was started.
         """
         pass
 
@@ -549,13 +549,14 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
 
     @override
     @log_execution_time(logger=_LOGGER, name="finalize_checkpoint")
-    def finalize_checkpoint(self, checkpoint_id: CheckpointContainerId) -> None:
+    def finalize_checkpoint(self, checkpoint_id: CheckpointContainerId) -> Union[subprocess.Popen, None]:
         self._remove_dirty_checkpoint_marker(checkpoint_id)
         # synchronize across ranks to guarantee they all completed checkpointing before proceeding
         with log_execution_time(logger=_LOGGER, name="finalize_checkpoint__barrier_func", level=logging.DEBUG):
             self._barrier_func()
         if self._local_rank_getter() == 0:
-            self._remove_older_checkpoints(older_than=checkpoint_id)
+            return self._remove_older_checkpoints(older_than=checkpoint_id)
+        return None
 
     def _create_dirty_checkpoint_marker(self, checkpoint_id: CheckpointContainerId) -> None:
         """Creates a dirty marker (typically a file) for the given checkpoint_id and the current local rank,
@@ -706,7 +707,7 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
                 object_write_bucket_queue.task_done()
 
     @log_execution_time(logger=_LOGGER, name="_remove_older_checkpoints")
-    def _remove_older_checkpoints(self, older_than: CheckpointContainerId) -> None:
+    def _remove_older_checkpoints(self, older_than: CheckpointContainerId) -> Union[subprocess.Popen, None]:
         """Scans for sibling checkpoint containers to `older_than`, by listing the children of its parent and filtering
         for those that match the expected format as a safety check, and then deletes all those that are considered
         older _async_.
@@ -718,7 +719,7 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
                 older than this will be removed.
 
         Returns:
-            A future that completes when deletion is done, or None if no deletion was started.
+            The subprocess.Popen object that handles deletion of older checkpoints, or None if no deletion was started.
         """
         parent_dir = os.path.dirname(older_than.data)
         older_than_step = CheckpointContainerId.parse_version_container_step(os.path.basename(older_than.data))
@@ -740,16 +741,25 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
 
         if siblings_to_delete:
             try:
+                # We use a background subprocess (rm -rf) instead of Python's shutil.rmtree
+                # to avoid blocking the main Python thread (GIL) during large directory deletions.
+                # This allows the training process to continue immediately while the OS handles
+                # the deletion asynchronously.
+                #
+                # start_new_session=True is used to ensure the deletion process is decoupled
+                # from the parent process group, preventing it from being interrupted by signals
+                # (like SIGINT during Ctrl+C) sent to the main training job.
                 p = subprocess.Popen(
                     ["rm", "-rf"] + list(siblings_to_delete),
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     start_new_session=True,
                 )
-                if "PYTEST_CURRENT_TEST" in os.environ:
-                    p.wait()
+                return p
             except Exception as e:
                 _LOGGER.exception("Background deletion of old checkpoints failed: %s", e)
+                return None
+        return None
 
     def _save_tensor_optimized(self, tensor: torch.Tensor, buffer_io_writer):
         """Saves a tensor to the buffer using a zero-copy approach where possible.

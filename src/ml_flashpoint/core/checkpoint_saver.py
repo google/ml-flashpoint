@@ -707,7 +707,7 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
                 object_write_bucket_queue.task_done()
 
     @log_execution_time(logger=_LOGGER, name="_remove_older_checkpoints")
-    def _remove_older_checkpoints(self, older_than: CheckpointContainerId) -> Union[subprocess.Popen, None]:
+    def _remove_older_checkpoints(self, older_than: CheckpointContainerId) -> subprocess.Popen | None:
         """Scans for sibling checkpoint containers to `older_than`, by listing the children of its parent and filtering
         for those that match the expected format as a safety check, and then deletes all those that are considered
         older _async_.

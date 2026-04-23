@@ -551,3 +551,33 @@ def test_on_train_end_skips_cleanup_when_flag_is_true(mocker, tmp_path):
 
     assert base_container_path.exists(), "Base container directory should NOT have been deleted"
     assert dummy_file.exists(), "Dummy file should NOT have been deleted"
+
+
+def test_on_train_end_with_sync_checkpoint_io(mocker):
+    """
+    Tests that on_train_end executes successfully during synchronous saving.
+    """
+    mock_trainer = mocker.MagicMock()
+    mock_strategy = mocker.MagicMock()
+    mock_checkpoint_io = mocker.MagicMock()
+
+    # Remove the async-specific method to simulate a synchronous CheckpointIO instance.
+    del mock_checkpoint_io.maybe_finalize_save_checkpoint
+
+    mock_strategy.checkpoint_io = mock_checkpoint_io
+    mock_trainer.strategy = mock_strategy
+    mock_trainer.local_rank = 0
+
+    callback = MLFlashpointCheckpointCallback(
+        checkpoint_base_container="/tmp/fake_base",
+        every_n_steps=10,
+    )
+
+    # Execute on_train_end; it should gracefully skip finalization without errors.
+    try:
+        callback.on_train_end(trainer=mock_trainer, pl_module=mocker.MagicMock())
+    except AttributeError as e:
+        pytest.fail(f"on_train_end failed to handle synchronous CheckpointIO: {e}")
+
+    # Verify that the subsequent cleanup steps (e.g., barrier) are still reached.
+    mock_trainer.strategy.barrier.assert_called_once_with("mlf_cleanup_barrier")

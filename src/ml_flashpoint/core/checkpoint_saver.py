@@ -210,7 +210,7 @@ class MLFlashpointCheckpointSaver(abc.ABC):
         self,
         checkpoint_id: CheckpointContainerId,
         write_buckets: list[ObjectWriteBucket],
-        thread_count: int,
+        files_per_rank: int,
         replicate_after_write: bool,
     ) -> list[WriteResult]:
         """Performs the core write logic for the given write items and checkpoint_id.
@@ -225,7 +225,7 @@ class MLFlashpointCheckpointSaver(abc.ABC):
             checkpoint_id: Unique hierarchical ID representing this checkpoint container.
                 This typically follows a directory path structure.
             write_buckets: A list of `ObjectWriteBucket` objects, each containing resolved data ready for writing.
-            thread_count: The number of threads to use for writing data.
+            files_per_rank: The number of files each rank writes to.
             replicate_after_write: Whether to trigger async replication of each object after it is written.
 
         Returns:
@@ -371,7 +371,7 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
     ) -> list[ObjectWriteBucket]:
         bucket_count = max(bucket_count, 1)
         _LOGGER.debug(
-            "%s prepare_write_data with prefix: '%s', thread_count: %d",
+            "%s prepare_write_data with prefix: '%s', files_per_rank: %d",
             self.__class__.__name__,
             object_name_prefix,
             bucket_count,
@@ -403,7 +403,7 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         # NOTE: There is support for multiple threads, to simplify modifying that setting, but we typically
         # only use 1 thread.
 
-        # Group items into buckets, one bucket per file, up to thread_count files
+        # Group items into buckets, one bucket per file, up to files_per_rank files
         buckets = _split_by_size_and_type(bucket_count, write_items)
         for bucket in buckets:
             if not bucket:
@@ -437,22 +437,22 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
         checkpoint_id: CheckpointContainerId,
         write_buckets: list[ObjectWriteBucket],
         replicate_after_write: bool,
-        thread_count: int = 1,
+        files_per_rank: int = 1,
     ) -> list[WriteResult]:
-        thread_count = max(thread_count, 1)
+        files_per_rank = max(files_per_rank, 1)
         num_cpus = os.cpu_count() or 1
         num_ranks = max(get_accelerator_count(), 1)
         # Use 50% of available CPU cores for PyTorch intra-op threads and evenly distribute them across ranks.
-        torch_thread_count = max(1, num_cpus // 2 // num_ranks // thread_count)
+        torch_thread_count = max(1, num_cpus // 2 // num_ranks // files_per_rank)
         original_num_threads = torch.get_num_threads()
         # Explicitly set PyTorch intra-op threads to optimize for performance.
         # This also avoids potential runtime errors in tensor.copy_() with concurrent writers
         torch.set_num_threads(torch_thread_count)
         _LOGGER.debug(
-            "%s starting multi-threaded write_data. thread_count: %d, original_num_threads: %d, "
+            "%s starting multi-threaded write_data. files_per_rank: %d, original_num_threads: %d, "
             "num_cpus: %d, num_ranks: %d, torch_thread_count: %d",
             self.__class__.__name__,
-            thread_count,
+            files_per_rank,
             original_num_threads,
             num_cpus,
             num_ranks,
@@ -471,8 +471,8 @@ class DefaultMLFlashpointCheckpointSaver(MLFlashpointCheckpointSaver):
             threads = []
 
             # Kick off additional threads to main thread, if any.
-            _LOGGER.debug("Spawning %d extra writer threads (in addition to the main thread).", thread_count - 1)
-            for i in range(1, thread_count):
+            _LOGGER.debug("Spawning %d extra writer threads (in addition to the main thread).", files_per_rank - 1)
+            for i in range(1, files_per_rank):
                 thread = threading.Thread(
                     target=self._write_to_buffer_from_queue_worker,
                     args=(object_items_queue, results_from_threads, replicate_after_write, self._use_optimized_save),

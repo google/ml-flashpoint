@@ -926,8 +926,8 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
                 async_save=True,
                 flashpoint_base_dir="/mlf/checkpoints",
             )
-            # Mock the thread count needed for buffer pool init
-            mock_checkpoint_io.save_strategy.thread_count = 1
+            # Mock the files_per_rank needed for buffer pool init
+            mock_checkpoint_io.save_strategy.files_per_rank = 1
             mock_mlf_queue = mocker.MagicMock()
             mock_alt_queue = mocker.MagicMock()
 
@@ -972,7 +972,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
                 flashpoint_base_dir="/mlf/checkpoints",
             )
             mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_checkpoint_io.save_strategy.files_per_rank = 1
             mock_checkpoint_io.flashpoint_base_dir = "/mlf/checkpoints"
             mock_mlf_queue = MagicMock()
             mock_alt_queue = MagicMock()
@@ -1008,7 +1008,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
                 flashpoint_base_dir="/mlf/checkpoints",
             )
             mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_checkpoint_io.save_strategy.files_per_rank = 1
             mock_checkpoint_io.flashpoint_base_dir = "/mlf/checkpoints"
             mock_mlf_queue = mocker.MagicMock()
             mock_alt_queue = mocker.MagicMock()
@@ -1041,7 +1041,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
                 flashpoint_base_dir="/mlf/checkpoints",
             )
             mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_checkpoint_io.save_strategy.files_per_rank = 1
             mock_checkpoint_io.flashpoint_base_dir = "/mlf/checkpoints"
             self.mock_async_calls_queue_cls.side_effect = [mocker.MagicMock(), mocker.MagicMock()]
             instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
@@ -1079,7 +1079,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
                 flashpoint_base_dir="/mlf/checkpoints",
             )
             mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_checkpoint_io.save_strategy.files_per_rank = 1
             mock_mlf_queue = mocker.MagicMock()
             mock_alt_queue = mocker.MagicMock()
             self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
@@ -1109,7 +1109,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
                 flashpoint_base_dir="/mlf/checkpoints",
             )
             mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_checkpoint_io.save_strategy.files_per_rank = 1
             mock_mlf_queue = mocker.MagicMock()
             mock_alt_queue = mocker.MagicMock()
             self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
@@ -1141,7 +1141,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
                 flashpoint_base_dir="/mlf/checkpoints",
             )
             mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_checkpoint_io.save_strategy.files_per_rank = 1
             mock_mlf_queue = mocker.MagicMock()
             mock_alt_queue = mocker.MagicMock()
             self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
@@ -1173,7 +1173,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
                 flashpoint_base_dir="/mlf/checkpoints",
             )
             mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_checkpoint_io.save_strategy.files_per_rank = 1
             mock_mlf_queue = mocker.MagicMock()
             mock_alt_queue = mocker.MagicMock()
             self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
@@ -1213,7 +1213,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
                 flashpoint_base_dir="/mlf/checkpoints",
             )
             mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_checkpoint_io.save_strategy.files_per_rank = 1
             mock_mlf_queue = MagicMock()
             mock_alt_queue = MagicMock()
             self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
@@ -1241,7 +1241,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
                 flashpoint_base_dir="/mlf/checkpoints",
             )
             mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_checkpoint_io.save_strategy.files_per_rank = 1
             mock_mlf_queue = mocker.MagicMock()
             mock_alt_queue = mocker.MagicMock()
             self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
@@ -1269,7 +1269,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
                 flashpoint_base_dir="/mlf/checkpoints",
             )
             mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_checkpoint_io.save_strategy.files_per_rank = 1
             mock_mlf_queue = mocker.MagicMock()
             mock_alt_queue = mocker.MagicMock()
             self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
@@ -1297,7 +1297,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
                 flashpoint_base_dir="/mlf/checkpoints",
             )
             mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_checkpoint_io.save_strategy.files_per_rank = 1
             mock_mlf_queue = mocker.MagicMock()
             mock_alt_queue = mocker.MagicMock()
             self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
@@ -1335,7 +1335,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
                 flashpoint_base_dir="/mlf/checkpoints",
             )
             mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_checkpoint_io.save_strategy.files_per_rank = 1
             mock_mlf_queue = mocker.MagicMock()
             mock_alt_queue = mocker.MagicMock()
             self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
@@ -1376,7 +1376,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
                 flashpoint_base_dir="/mlf/checkpoints",
             )
             mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_checkpoint_io.save_strategy.files_per_rank = 1
             mock_checkpoint_io.flashpoint_base_dir = "/mlf/checkpoints"
             mock_mlf_queue = MagicMock()
             mock_alt_queue = MagicMock()
@@ -1413,7 +1413,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
                 flashpoint_base_dir="/mlf/checkpoints",
             )
             mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_checkpoint_io.save_strategy.files_per_rank = 1
             mock_checkpoint_io.flashpoint_base_dir = "/mlf/checkpoints"
             mock_mlf_queue = mocker.MagicMock()
             mock_alt_queue = mocker.MagicMock()
@@ -1447,7 +1447,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
                 flashpoint_base_dir="/mlf/checkpoints",
             )
             mock_checkpoint_io.trainer.global_rank = 0
-            mock_checkpoint_io.save_strategy.thread_count = 1
+            mock_checkpoint_io.save_strategy.files_per_rank = 1
             mock_checkpoint_io.flashpoint_base_dir = "/mlf/checkpoints"
             mock_mlf_queue = mocker.MagicMock()
             mock_alt_queue = mocker.MagicMock()

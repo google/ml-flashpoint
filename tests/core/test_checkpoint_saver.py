@@ -263,9 +263,9 @@ class TestDefaultMLFlashpointCheckpointSaver:
         # When
         if exception_in_worker:
             with pytest.raises(RuntimeError, match="Worker failed"):
-                saver.write_data(checkpoint_id, [], replicate_after_write=False, thread_count=1)
+                saver.write_data(checkpoint_id, [], replicate_after_write=False, files_per_rank=1)
         else:
-            saver.write_data(checkpoint_id, [], replicate_after_write=False, thread_count=1)
+            saver.write_data(checkpoint_id, [], replicate_after_write=False, files_per_rank=1)
 
         # Then
         # Verify it was reset to original_num_threads in finally block
@@ -309,7 +309,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
         )
 
         # When
-        results = saver.write_data(checkpoint_id, buckets, replicate_after_write=False, thread_count=4)
+        results = saver.write_data(checkpoint_id, buckets, replicate_after_write=False, files_per_rank=4)
 
         # Then
         assert len(results) == num_items
@@ -1147,9 +1147,9 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 replication_manager=replication_manager,
             )
 
-        @pytest.mark.parametrize("thread_count", [1, 2, 3])
-        def test_write_data_single_tensor(self, saver, temp_dir_path, chkpt_object_manager, thread_count):
-            checkpoint_id = CheckpointContainerId(f"{temp_dir_path}/checkpoint_write_data_tensor_th{thread_count}")
+        @pytest.mark.parametrize("files_per_rank", [1, 2, 3])
+        def test_write_data_single_tensor(self, saver, temp_dir_path, chkpt_object_manager, files_per_rank):
+            checkpoint_id = CheckpointContainerId(f"{temp_dir_path}/checkpoint_write_data_tensor_th{files_per_rank}")
             os.makedirs(checkpoint_id.data, exist_ok=True)
 
             tensor_data = torch.tensor([1, 2, 3])
@@ -1163,13 +1163,13 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 ),
             ]
             write_buckets = saver.prepare_write_data(
-                checkpoint_id, write_items, resolver, "data", bucket_count=thread_count
+                checkpoint_id, write_items, resolver, "data", bucket_count=files_per_rank
             )
 
             actual_results = saver.write_data(
                 checkpoint_id,
                 write_buckets,
-                thread_count=thread_count,
+                files_per_rank=files_per_rank,
                 replicate_after_write=False,
             )
 
@@ -1186,9 +1186,9 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 chkpt_object_manager,
             )
 
-        @pytest.mark.parametrize("thread_count", [1, 2, 3])
-        def test_write_data_single_byteio(self, saver, temp_dir_path, chkpt_object_manager, thread_count):
-            checkpoint_id = CheckpointContainerId(f"{temp_dir_path}/checkpoint_write_data_byteio_th{thread_count}")
+        @pytest.mark.parametrize("files_per_rank", [1, 2, 3])
+        def test_write_data_single_byteio(self, saver, temp_dir_path, chkpt_object_manager, files_per_rank):
+            checkpoint_id = CheckpointContainerId(f"{temp_dir_path}/checkpoint_write_data_byteio_th{files_per_rank}")
             os.makedirs(checkpoint_id.data, exist_ok=True)
 
             data_binary = b"test byte data"
@@ -1203,13 +1203,13 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 ),
             ]
             write_buckets = saver.prepare_write_data(
-                checkpoint_id, write_items, resolver, "data", bucket_count=thread_count
+                checkpoint_id, write_items, resolver, "data", bucket_count=files_per_rank
             )
 
             actual_results = saver.write_data(
                 checkpoint_id,
                 write_buckets,
-                thread_count=thread_count,
+                files_per_rank=files_per_rank,
                 replicate_after_write=False,
             )
 
@@ -1228,10 +1228,10 @@ class TestDefaultMLFlashpointCheckpointSaver:
             assert actual_results[0].size_in_bytes == len(data_binary)
             assert actual_results[0].storage_data.offset == 0
 
-        @pytest.mark.parametrize("thread_count", [1, 2, 3])
-        def test_write_data_multiple_tensors(self, saver, temp_dir_path, chkpt_object_manager, thread_count):
+        @pytest.mark.parametrize("files_per_rank", [1, 2, 3])
+        def test_write_data_multiple_tensors(self, saver, temp_dir_path, chkpt_object_manager, files_per_rank):
             checkpoint_id = CheckpointContainerId(
-                f"{temp_dir_path}/checkpoint_write_data_multi_tensor_th{thread_count}"
+                f"{temp_dir_path}/checkpoint_write_data_multi_tensor_th{files_per_rank}"
             )
             os.makedirs(checkpoint_id.data, exist_ok=True)
 
@@ -1255,13 +1255,13 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 ),
             ]
             write_buckets = saver.prepare_write_data(
-                checkpoint_id, write_items, resolver, "data", bucket_count=thread_count
+                checkpoint_id, write_items, resolver, "data", bucket_count=files_per_rank
             )
 
             actual_results = saver.write_data(
                 checkpoint_id,
                 write_buckets,
-                thread_count=thread_count,
+                files_per_rank=files_per_rank,
                 replicate_after_write=False,
             )
 
@@ -1306,9 +1306,9 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 chkpt_object_manager,
             )
 
-        @pytest.mark.parametrize("thread_count", [1, 2, 3])
-        def test_write_data_mixed_types(self, saver, temp_dir_path, chkpt_object_manager, thread_count):
-            checkpoint_id = CheckpointContainerId(f"{temp_dir_path}/checkpoint_write_data_mixed_th{thread_count}")
+        @pytest.mark.parametrize("files_per_rank", [1, 2, 3])
+        def test_write_data_mixed_types(self, saver, temp_dir_path, chkpt_object_manager, files_per_rank):
+            checkpoint_id = CheckpointContainerId(f"{temp_dir_path}/checkpoint_write_data_mixed_th{files_per_rank}")
             os.makedirs(checkpoint_id.data, exist_ok=True)
 
             expected_tensor0 = torch.tensor([1, 2, 3])
@@ -1343,13 +1343,13 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 ),
             ]
             write_buckets = saver.prepare_write_data(
-                checkpoint_id, write_items, resolver, "data", bucket_count=thread_count
+                checkpoint_id, write_items, resolver, "data", bucket_count=files_per_rank
             )
 
             actual_results = saver.write_data(
                 checkpoint_id,
                 write_buckets,
-                thread_count=thread_count,
+                files_per_rank=files_per_rank,
                 replicate_after_write=False,
             )
 
@@ -1430,9 +1430,9 @@ class TestDefaultMLFlashpointCheckpointSaver:
                                 assert torch.equal(loaded_tensor, expected_tensor2)
                         current_offset += sinfo.length
 
-        @pytest.mark.parametrize("thread_count", [1, 2, 3])
-        def test_write_data_io_error(self, saver, temp_dir_path, mocker, thread_count):
-            checkpoint_id = CheckpointContainerId(f"{temp_dir_path}/checkpoint_write_data_io_error_th{thread_count}")
+        @pytest.mark.parametrize("files_per_rank", [1, 2, 3])
+        def test_write_data_io_error(self, saver, temp_dir_path, mocker, files_per_rank):
+            checkpoint_id = CheckpointContainerId(f"{temp_dir_path}/checkpoint_write_data_io_error_th{files_per_rank}")
             os.makedirs(checkpoint_id.data, exist_ok=True)
 
             tensor_data = torch.tensor([1, 2, 3])
@@ -1446,7 +1446,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 ),
             ]
             write_buckets = saver.prepare_write_data(
-                checkpoint_id, write_items, resolver, "data", bucket_count=thread_count
+                checkpoint_id, write_items, resolver, "data", bucket_count=files_per_rank
             )
 
             # Mock the checkpoint object manager to raise an IOError during buffer creation
@@ -1455,19 +1455,19 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 saver.write_data(
                     checkpoint_id,
                     write_buckets,
-                    thread_count=thread_count,
+                    files_per_rank=files_per_rank,
                     replicate_after_write=False,
                 )
 
-        @pytest.mark.parametrize("thread_count", [1, 2, 3])
-        def test_write_data_empty_buckets(self, saver, temp_dir_path, thread_count):
-            checkpoint_id = CheckpointContainerId(f"{temp_dir_path}/checkpoint_write_data_empty_th{thread_count}")
+        @pytest.mark.parametrize("files_per_rank", [1, 2, 3])
+        def test_write_data_empty_buckets(self, saver, temp_dir_path, files_per_rank):
+            checkpoint_id = CheckpointContainerId(f"{temp_dir_path}/checkpoint_write_data_empty_th{files_per_rank}")
             os.makedirs(checkpoint_id.data, exist_ok=True)
 
             actual_results = saver.write_data(
                 checkpoint_id,
                 write_buckets=[],
-                thread_count=thread_count,
+                files_per_rank=files_per_rank,
                 replicate_after_write=False,
             )
 
@@ -1479,7 +1479,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
         @pytest.mark.parametrize("preexisting_content", [b"", b"some old data"])
         def test_write_data_overwrite(self, saver, temp_dir_path, chkpt_object_manager, preexisting_content):
             # Given
-            thread_count = 1
+            files_per_rank = 1
             checkpoint_id = CheckpointContainerId(f"{temp_dir_path}/checkpoint_write_data_overwrite")
             os.makedirs(checkpoint_id.data, exist_ok=True)
 
@@ -1494,7 +1494,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 ),
             ]
             write_buckets = saver.prepare_write_data(
-                checkpoint_id, write_items, resolver, "data", bucket_count=thread_count
+                checkpoint_id, write_items, resolver, "data", bucket_count=files_per_rank
             )
 
             # Create a file with the same name that will be written to
@@ -1507,7 +1507,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
             actual_results = saver.write_data(
                 checkpoint_id,
                 write_buckets,
-                thread_count=thread_count,
+                files_per_rank=files_per_rank,
                 replicate_after_write=False,
             )
 
@@ -1545,10 +1545,12 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 loaded_tensor = _load_tensor_maybe_optimized(io.BytesIO(data_from_file), header=header)
                 assert torch.equal(loaded_tensor, tensor_data)
 
-        @pytest.mark.parametrize("thread_count", [0, -1, -5])
-        def test_write_data_thread_count_less_than_1(self, saver, temp_dir_path, chkpt_object_manager, thread_count):
+        @pytest.mark.parametrize("files_per_rank", [0, -1, -5])
+        def test_write_data_files_per_rank_less_than_1(
+            self, saver, temp_dir_path, chkpt_object_manager, files_per_rank
+        ):
             # Given
-            checkpoint_id = CheckpointContainerId(f"{temp_dir_path}/checkpoint_write_data_tensor_th{thread_count}")
+            checkpoint_id = CheckpointContainerId(f"{temp_dir_path}/checkpoint_write_data_tensor_th{files_per_rank}")
             os.makedirs(checkpoint_id.data, exist_ok=True)
 
             tensor_data1 = torch.tensor([1, 2, 3])
@@ -1572,7 +1574,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
             actual_results = saver.write_data(
                 checkpoint_id,
                 write_buckets,
-                thread_count=thread_count,
+                files_per_rank=files_per_rank,
                 replicate_after_write=False,
             )
 
@@ -1600,7 +1602,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
 
         def test_write_data_triggers_replication(self, saver, temp_dir_path, replication_manager):
             # Given
-            thread_count = 1
+            files_per_rank = 1
             checkpoint_id = CheckpointContainerId(f"{temp_dir_path}/checkpoint_write_data_replication")
             os.makedirs(checkpoint_id.data, exist_ok=True)
 
@@ -1615,14 +1617,14 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 ),
             ]
             write_buckets = saver.prepare_write_data(
-                checkpoint_id, write_items, resolver, "data", bucket_count=thread_count
+                checkpoint_id, write_items, resolver, "data", bucket_count=files_per_rank
             )
 
             # When
             saver.write_data(
                 checkpoint_id,
                 write_buckets,
-                thread_count=thread_count,
+                files_per_rank=files_per_rank,
                 replicate_after_write=True,
             )
 
@@ -1641,7 +1643,7 @@ class TestDefaultMLFlashpointCheckpointSaver:
 
         def test_write_data_no_replication(self, saver, temp_dir_path, replication_manager):
             # Given
-            thread_count = 1
+            files_per_rank = 1
             checkpoint_id = CheckpointContainerId(f"{temp_dir_path}/checkpoint_write_data_no_replication")
             os.makedirs(checkpoint_id.data, exist_ok=True)
 
@@ -1656,14 +1658,14 @@ class TestDefaultMLFlashpointCheckpointSaver:
                 ),
             ]
             write_buckets = saver.prepare_write_data(
-                checkpoint_id, write_items, resolver, "data", bucket_count=thread_count
+                checkpoint_id, write_items, resolver, "data", bucket_count=files_per_rank
             )
 
             # When
             saver.write_data(
                 checkpoint_id,
                 write_buckets,
-                thread_count=thread_count,
+                files_per_rank=files_per_rank,
                 replicate_after_write=False,
             )
 

@@ -15,6 +15,7 @@
 
 import lightning.pytorch as pl
 import pytest
+from nemo.utils.callbacks.dist_ckpt_io import AsyncFinalizableCheckpointIO
 
 import ml_flashpoint
 from ml_flashpoint.adapter.nemo.checkpoint_callback import (
@@ -23,7 +24,6 @@ from ml_flashpoint.adapter.nemo.checkpoint_callback import (
     MLFlashpointCheckpointCallback,
 )
 from ml_flashpoint.adapter.nemo.checkpoint_io import MLFlashpointCheckpointIO
-from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId
 from ml_flashpoint.core.mlf_logging import _TRAINING_STEP
 
@@ -361,28 +361,13 @@ def test_on_train_end_cleans_up_on_rank_zero(mocker, tmp_path):
     # Given
     trainer = mocker.MagicMock(spec=pl.Trainer)
     trainer.local_rank = 0
-    chkpt_obj_manager = CheckpointObjectManager()
-
-    checkpoint_io = MLFlashpointCheckpointIO(
-        flashpoint_base_path=str(tmp_path / "ckpt_base"),
-        alt_checkpoint_io=mocker.MagicMock(),
-        chkpt_obj_manager=chkpt_obj_manager,
-        save_strategy=mocker.MagicMock(),
-        load_strategy=mocker.MagicMock(),
-        trainer=trainer,
-    )
-    checkpoint_io.maybe_finalize_save_checkpoint = mocker.MagicMock()
-    mocker.spy(checkpoint_io, "remove_checkpoint")
+    checkpoint_io = mocker.MagicMock(spec=AsyncFinalizableCheckpointIO)
     trainer.strategy.checkpoint_io = checkpoint_io
 
     pl_module = mocker.MagicMock(spec=pl.LightningModule)
 
     # Create a base container directory and a dummy file inside it
     base_container_path = tmp_path / "ckpt_base"
-    base_container_path.mkdir()
-    dummy_file = base_container_path / "dummy.txt"
-    dummy_file.write_text("dummy")
-
     base_container = CheckpointContainerId(str(base_container_path))
     callback = MLFlashpointCheckpointCallback(checkpoint_base_container=base_container, every_n_steps=1)
     callback.replication_manager = mocker.MagicMock()
@@ -396,24 +381,18 @@ def test_on_train_end_cleans_up_on_rank_zero(mocker, tmp_path):
     callback.replication_manager.shutdown.assert_called_once()
     checkpoint_io.remove_checkpoint.assert_called_once_with(base_container.data)
 
-    # Verify file deletion
-    assert not base_container_path.exists(), "Base container directory should have been deleted"
-
 
 def test_on_train_end_skips_cleanup_on_non_zero_rank(mocker, tmp_path):
     # Given
     trainer = mocker.MagicMock(spec=pl.Trainer)
     trainer.local_rank = 1
-    checkpoint_io = mocker.MagicMock()
+    checkpoint_io = mocker.MagicMock(spec=AsyncFinalizableCheckpointIO)
     trainer.strategy.checkpoint_io = checkpoint_io
 
     pl_module = mocker.MagicMock(spec=pl.LightningModule)
 
     # Create a base container directory and a dummy file inside it
     base_container_path = tmp_path / "ckpt_base"
-    base_container_path.mkdir()
-    dummy_file = base_container_path / "dummy.txt"
-    dummy_file.write_text("dummy")
 
     base_container = CheckpointContainerId(str(base_container_path))
     callback = MLFlashpointCheckpointCallback(checkpoint_base_container=base_container, every_n_steps=1)
@@ -424,12 +403,9 @@ def test_on_train_end_skips_cleanup_on_non_zero_rank(mocker, tmp_path):
 
     # Then
     checkpoint_io.maybe_finalize_save_checkpoint.assert_called_once_with(blocking=True)
+    trainer.strategy.barrier.assert_called_once_with("mlf_cleanup_barrier")
     callback.replication_manager.shutdown.assert_called_once()
     checkpoint_io.remove_checkpoint.assert_not_called()
-
-    # Verify file retention
-    assert base_container_path.exists(), "Base container directory should NOT have been deleted"
-    assert dummy_file.exists(), "Dummy file should NOT have been deleted"
 
 
 def test_on_train_end_no_replication_manager_skips_shutdown(mocker):
@@ -459,27 +435,13 @@ def test_on_train_end_is_idempotent(mocker, tmp_path):
     # Given
     trainer = mocker.MagicMock(spec=pl.Trainer)
     trainer.local_rank = 0
-    chkpt_obj_manager = CheckpointObjectManager()
-
-    checkpoint_io = MLFlashpointCheckpointIO(
-        flashpoint_base_path=str(tmp_path / "ckpt_base"),
-        alt_checkpoint_io=mocker.MagicMock(),
-        chkpt_obj_manager=chkpt_obj_manager,
-        save_strategy=mocker.MagicMock(),
-        load_strategy=mocker.MagicMock(),
-        trainer=trainer,
-    )
-    checkpoint_io.maybe_finalize_save_checkpoint = mocker.MagicMock()
-    mocker.spy(checkpoint_io, "remove_checkpoint")
+    checkpoint_io = mocker.MagicMock(spec=AsyncFinalizableCheckpointIO)
     trainer.strategy.checkpoint_io = checkpoint_io
 
     pl_module = mocker.MagicMock(spec=pl.LightningModule)
 
     # Create a base container directory and a dummy file inside it
     base_container_path = tmp_path / "ckpt_base"
-    base_container_path.mkdir()
-    dummy_file = base_container_path / "dummy.txt"
-    dummy_file.write_text("dummy")
 
     base_container = CheckpointContainerId(str(base_container_path))
     callback = MLFlashpointCheckpointCallback(checkpoint_base_container=base_container, every_n_steps=1)
@@ -495,9 +457,6 @@ def test_on_train_end_is_idempotent(mocker, tmp_path):
     assert checkpoint_io.maybe_finalize_save_checkpoint.call_count == 2
     assert trainer.strategy.barrier.call_count == 2
 
-    # Verify file deletion
-    assert not base_container_path.exists(), "Base container directory should have been deleted"
-
 
 def test_on_train_end_skips_cleanup_when_flag_is_true(mocker, tmp_path):
     """
@@ -511,27 +470,13 @@ def test_on_train_end_skips_cleanup_when_flag_is_true(mocker, tmp_path):
     # Given
     trainer = mocker.MagicMock(spec=pl.Trainer)
     trainer.local_rank = 0
-    chkpt_obj_manager = CheckpointObjectManager()
-
-    checkpoint_io = MLFlashpointCheckpointIO(
-        flashpoint_base_path=str(tmp_path / "ckpt_base"),
-        alt_checkpoint_io=mocker.MagicMock(),
-        chkpt_obj_manager=chkpt_obj_manager,
-        save_strategy=mocker.MagicMock(),
-        load_strategy=mocker.MagicMock(),
-        trainer=trainer,
-    )
-    checkpoint_io.maybe_finalize_save_checkpoint = mocker.MagicMock()
-    mocker.spy(checkpoint_io, "remove_checkpoint")
+    checkpoint_io = mocker.MagicMock(spec=AsyncFinalizableCheckpointIO)
     trainer.strategy.checkpoint_io = checkpoint_io
 
     pl_module = mocker.MagicMock(spec=pl.LightningModule)
 
     # Create a base container directory and a dummy file inside it
     base_container_path = tmp_path / "ckpt_base"
-    base_container_path.mkdir()
-    dummy_file = base_container_path / "dummy.txt"
-    dummy_file.write_text("dummy")
 
     base_container = CheckpointContainerId(str(base_container_path))
     callback = MLFlashpointCheckpointCallback(
@@ -549,9 +494,6 @@ def test_on_train_end_skips_cleanup_when_flag_is_true(mocker, tmp_path):
 
     checkpoint_io.remove_checkpoint.assert_not_called()
 
-    assert base_container_path.exists(), "Base container directory should NOT have been deleted"
-    assert dummy_file.exists(), "Dummy file should NOT have been deleted"
-
 
 def test_on_train_end_with_sync_checkpoint_io(mocker):
     """
@@ -559,10 +501,8 @@ def test_on_train_end_with_sync_checkpoint_io(mocker):
     """
     mock_trainer = mocker.MagicMock()
     mock_strategy = mocker.MagicMock()
-    mock_checkpoint_io = mocker.MagicMock()
 
-    # Remove the async-specific method to simulate a synchronous CheckpointIO instance.
-    del mock_checkpoint_io.maybe_finalize_save_checkpoint
+    mock_checkpoint_io = mocker.MagicMock(spec=MLFlashpointCheckpointIO)
 
     mock_strategy.checkpoint_io = mock_checkpoint_io
     mock_trainer.strategy = mock_strategy

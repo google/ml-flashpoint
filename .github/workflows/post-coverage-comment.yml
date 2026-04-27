@@ -45,6 +45,7 @@ jobs:
           name: coverage-reports
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
+          merge-multiple: true
 
       - name: Check for coverage files
         # We use an explicit step to check for file existence and set outputs.

@@ -22,7 +22,7 @@ from ml_flashpoint.adapter.nemo.checkpoint_callback import (
     ML_FLASHPOINT_TYPE,
     MLFlashpointCheckpointCallback,
 )
-from ml_flashpoint.adapter.nemo.checkpoint_io import MLFlashpointCheckpointIO
+from ml_flashpoint.adapter.nemo.checkpoint_io import MLFlashpointAsyncFinalizableCheckpointIO, MLFlashpointCheckpointIO
 from ml_flashpoint.checkpoint_object_manager.checkpoint_object_manager import CheckpointObjectManager
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId
 from ml_flashpoint.core.mlf_logging import _TRAINING_STEP
@@ -371,9 +371,10 @@ def test_on_train_end_cleans_up_on_rank_zero(mocker, tmp_path):
         load_strategy=mocker.MagicMock(),
         trainer=trainer,
     )
-    checkpoint_io.maybe_finalize_save_checkpoint = mocker.MagicMock()
     mocker.spy(checkpoint_io, "remove_checkpoint")
-    trainer.strategy.checkpoint_io = checkpoint_io
+    wrapped_io = MLFlashpointAsyncFinalizableCheckpointIO(checkpoint_io)
+    mocker.spy(wrapped_io, "maybe_finalize_save_checkpoint")
+    trainer.strategy.checkpoint_io = wrapped_io
 
     pl_module = mocker.MagicMock(spec=pl.LightningModule)
 
@@ -391,7 +392,7 @@ def test_on_train_end_cleans_up_on_rank_zero(mocker, tmp_path):
     callback.on_train_end(trainer, pl_module)
 
     # Then
-    checkpoint_io.maybe_finalize_save_checkpoint.assert_called_once_with(blocking=True)
+    wrapped_io.maybe_finalize_save_checkpoint.assert_called_once_with(blocking=True)
     trainer.strategy.barrier.assert_called_once_with("mlf_cleanup_barrier")
     callback.replication_manager.shutdown.assert_called_once()
     checkpoint_io.remove_checkpoint.assert_called_once_with(base_container.data)
@@ -404,8 +405,21 @@ def test_on_train_end_skips_cleanup_on_non_zero_rank(mocker, tmp_path):
     # Given
     trainer = mocker.MagicMock(spec=pl.Trainer)
     trainer.local_rank = 1
-    checkpoint_io = mocker.MagicMock()
-    trainer.strategy.checkpoint_io = checkpoint_io
+    chkpt_obj_manager = CheckpointObjectManager()
+
+    checkpoint_io = MLFlashpointCheckpointIO(
+        flashpoint_base_path=str(tmp_path / "ckpt_base"),
+        alt_checkpoint_io=mocker.MagicMock(),
+        chkpt_obj_manager=chkpt_obj_manager,
+        save_strategy=mocker.MagicMock(),
+        load_strategy=mocker.MagicMock(),
+        trainer=trainer,
+    )
+    mocker.spy(checkpoint_io, "remove_checkpoint")
+
+    wrapped_io = MLFlashpointAsyncFinalizableCheckpointIO(checkpoint_io)
+    mocker.spy(wrapped_io, "maybe_finalize_save_checkpoint")
+    trainer.strategy.checkpoint_io = wrapped_io
 
     pl_module = mocker.MagicMock(spec=pl.LightningModule)
 
@@ -423,13 +437,12 @@ def test_on_train_end_skips_cleanup_on_non_zero_rank(mocker, tmp_path):
     callback.on_train_end(trainer, pl_module)
 
     # Then
-    checkpoint_io.maybe_finalize_save_checkpoint.assert_called_once_with(blocking=True)
+    wrapped_io.maybe_finalize_save_checkpoint.assert_called_once_with(blocking=True)
+    trainer.strategy.barrier.assert_called_once_with("mlf_cleanup_barrier")
     callback.replication_manager.shutdown.assert_called_once()
-    checkpoint_io.remove_checkpoint.assert_not_called()
 
-    # Verify file retention
-    assert base_container_path.exists(), "Base container directory should NOT have been deleted"
-    assert dummy_file.exists(), "Dummy file should NOT have been deleted"
+    checkpoint_io.remove_checkpoint.assert_not_called()
+    assert base_container_path.exists()
 
 
 def test_on_train_end_no_replication_manager_skips_shutdown(mocker):
@@ -469,9 +482,11 @@ def test_on_train_end_is_idempotent(mocker, tmp_path):
         load_strategy=mocker.MagicMock(),
         trainer=trainer,
     )
-    checkpoint_io.maybe_finalize_save_checkpoint = mocker.MagicMock()
     mocker.spy(checkpoint_io, "remove_checkpoint")
-    trainer.strategy.checkpoint_io = checkpoint_io
+
+    wrapped_io = MLFlashpointAsyncFinalizableCheckpointIO(checkpoint_io)
+    mocker.spy(wrapped_io, "maybe_finalize_save_checkpoint")
+    trainer.strategy.checkpoint_io = wrapped_io
 
     pl_module = mocker.MagicMock(spec=pl.LightningModule)
 
@@ -492,7 +507,7 @@ def test_on_train_end_is_idempotent(mocker, tmp_path):
     # Then
     assert callback.replication_manager.shutdown.call_count == 2
     assert checkpoint_io.remove_checkpoint.call_count == 2
-    assert checkpoint_io.maybe_finalize_save_checkpoint.call_count == 2
+    assert wrapped_io.maybe_finalize_save_checkpoint.call_count == 2
     assert trainer.strategy.barrier.call_count == 2
 
     # Verify file deletion
@@ -521,9 +536,11 @@ def test_on_train_end_skips_cleanup_when_flag_is_true(mocker, tmp_path):
         load_strategy=mocker.MagicMock(),
         trainer=trainer,
     )
-    checkpoint_io.maybe_finalize_save_checkpoint = mocker.MagicMock()
     mocker.spy(checkpoint_io, "remove_checkpoint")
-    trainer.strategy.checkpoint_io = checkpoint_io
+
+    wrapped_io = MLFlashpointAsyncFinalizableCheckpointIO(checkpoint_io)
+    mocker.spy(wrapped_io, "maybe_finalize_save_checkpoint")
+    trainer.strategy.checkpoint_io = wrapped_io
 
     pl_module = mocker.MagicMock(spec=pl.LightningModule)
 
@@ -543,12 +560,11 @@ def test_on_train_end_skips_cleanup_when_flag_is_true(mocker, tmp_path):
     callback.on_train_end(trainer, pl_module)
 
     # Then
-    checkpoint_io.maybe_finalize_save_checkpoint.assert_called_once_with(blocking=True)
+    wrapped_io.maybe_finalize_save_checkpoint.assert_called_once_with(blocking=True)
     trainer.strategy.barrier.assert_called_once_with("mlf_cleanup_barrier")
     callback.replication_manager.shutdown.assert_called_once()
 
     checkpoint_io.remove_checkpoint.assert_not_called()
-
     assert base_container_path.exists(), "Base container directory should NOT have been deleted"
     assert dummy_file.exists(), "Dummy file should NOT have been deleted"
 

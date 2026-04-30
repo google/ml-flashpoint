@@ -399,6 +399,7 @@ def test_on_train_end_cleans_up_on_rank_zero(mocker, tmp_path):
 
     # Verify file deletion
     assert not base_container_path.exists(), "Base container directory should have been deleted"
+    assert not dummy_file.exists(), "Dummy file should have been deleted"
 
 
 def test_on_train_end_skips_cleanup_on_non_zero_rank(mocker, tmp_path):
@@ -515,6 +516,7 @@ def test_on_train_end_is_idempotent(mocker, tmp_path):
 
     # Verify file deletion
     assert not base_container_path.exists(), "Base container directory should have been deleted"
+    assert not dummy_file.exists(), "Dummy file should have been deleted"
 
 
 def test_on_train_end_skips_cleanup_when_flag_is_true(mocker, tmp_path):
@@ -572,31 +574,53 @@ def test_on_train_end_skips_cleanup_when_flag_is_true(mocker, tmp_path):
     assert dummy_file.exists(), "Dummy file should NOT have been deleted"
 
 
-def test_on_train_end_with_sync_checkpoint_io(mocker):
+def test_on_train_end_with_sync_checkpoint_io(mocker, tmp_path):
     """
-    Tests that on_train_end executes successfully during synchronous saving.
+    Tests that on_train_end executes successfully during synchronous saving
+    when CheckpointIO is an instance of MLFlashpointCheckpointIO .
     """
-    mock_trainer = mocker.MagicMock()
-    mock_strategy = mocker.MagicMock()
-    mock_checkpoint_io = mocker.MagicMock()
+    # Given
+    trainer = mocker.MagicMock(spec=pl.Trainer)
+    trainer.local_rank = 0
+    chkpt_obj_manager = CheckpointObjectManager()
 
-    # Remove the async-specific method to simulate a synchronous CheckpointIO instance.
-    del mock_checkpoint_io.maybe_finalize_save_checkpoint
-
-    mock_strategy.checkpoint_io = mock_checkpoint_io
-    mock_trainer.strategy = mock_strategy
-    mock_trainer.local_rank = 0
-
-    callback = MLFlashpointCheckpointCallback(
-        checkpoint_base_container="/tmp/fake_base",
-        every_n_steps=10,
+    checkpoint_io = MLFlashpointCheckpointIO(
+        flashpoint_base_path=str(tmp_path / "ckpt_base"),
+        alt_checkpoint_io=mocker.MagicMock(),
+        chkpt_obj_manager=chkpt_obj_manager,
+        save_strategy=mocker.MagicMock(),
+        load_strategy=mocker.MagicMock(),
+        trainer=trainer,
     )
+    mocker.spy(checkpoint_io, "remove_checkpoint")
 
+    trainer.strategy.checkpoint_io = checkpoint_io
+
+    pl_module = mocker.MagicMock(spec=pl.LightningModule)
+
+    # Create a base container directory and a dummy file inside it
+    base_container_path = tmp_path / "ckpt_base"
+    base_container_path.mkdir()
+    dummy_file = base_container_path / "dummy.txt"
+    dummy_file.write_text("dummy")
+
+    base_container = CheckpointContainerId(str(base_container_path))
+    callback = MLFlashpointCheckpointCallback(checkpoint_base_container=base_container, every_n_steps=10)
+    callback.replication_manager = mocker.MagicMock()
+
+    # When
     # Execute on_train_end; it should gracefully skip finalization without errors.
     try:
-        callback.on_train_end(trainer=mock_trainer, pl_module=mocker.MagicMock())
+        callback.on_train_end(trainer=trainer, pl_module=pl_module)
     except AttributeError as e:
         pytest.fail(f"on_train_end failed to handle synchronous CheckpointIO: {e}")
 
+    # Then
     # Verify that the subsequent cleanup steps (e.g., barrier) are still reached.
-    mock_trainer.strategy.barrier.assert_called_once_with("mlf_cleanup_barrier")
+    trainer.strategy.barrier.assert_called_once_with("mlf_cleanup_barrier")
+    callback.replication_manager.shutdown.assert_called_once()
+    checkpoint_io.remove_checkpoint.assert_called_once_with(base_container.data)
+
+    # Verify file deletion
+    assert not base_container_path.exists(), "Base container directory should have been deleted"
+    assert not dummy_file.exists(), "Dummy file should have been deleted"

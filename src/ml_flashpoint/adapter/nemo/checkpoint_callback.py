@@ -18,6 +18,7 @@ from typing import Any, Optional, Union
 import lightning.pytorch as pl
 from lightning.pytorch import callbacks as pl_callbacks
 from lightning.pytorch.utilities import types as pl_util_types
+from nemo.utils.callbacks.dist_ckpt_io import AsyncFinalizableCheckpointIO
 from typing_extensions import override
 
 from ml_flashpoint.core import mlf_logging
@@ -178,7 +179,9 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
         _LOGGER.info("Training ended. Synchronizing and finalizing checkpoints...")
 
         # 1. Wait for async checkpoint saves to finish locally
-        trainer.strategy.checkpoint_io.maybe_finalize_save_checkpoint(blocking=True)
+        # Only finalize if the CheckpointIO implementation supports it (e.g., async mode).
+        if isinstance(trainer.strategy.checkpoint_io, AsyncFinalizableCheckpointIO):
+            trainer.strategy.checkpoint_io.maybe_finalize_save_checkpoint(blocking=True)
 
         # 2. Synchronize all ranks to ensure background writes are done everywhere before deletion
         trainer.strategy.barrier("mlf_cleanup_barrier")

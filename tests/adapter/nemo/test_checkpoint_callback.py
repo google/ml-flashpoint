@@ -442,7 +442,10 @@ def test_on_train_end_skips_cleanup_on_non_zero_rank(mocker, tmp_path):
     callback.replication_manager.shutdown.assert_called_once()
 
     checkpoint_io.remove_checkpoint.assert_not_called()
-    assert base_container_path.exists()
+
+    # Verify file retention
+    assert base_container_path.exists(), "Base container directory should NOT have been deleted"
+    assert dummy_file.exists(), "Dummy file should NOT have been deleted"
 
 
 def test_on_train_end_no_replication_manager_skips_shutdown(mocker):

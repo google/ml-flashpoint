@@ -398,3 +398,17 @@ def test_async_replicate_single_node_skips(replication_manager, mocker):
     replication_manager._checkpoint_object_manager.close_buffer.assert_called_once_with(
         buffer_io, skip_close_if_symlink=True
     )
+
+
+def test_shutdown_clears_transfer_service(replication_manager):
+    """Tests that shutdown calls transfer_service.shutdown() and sets it to None."""
+    # Given
+    mock_transfer_service = replication_manager._transfer_service
+
+    # When
+    replication_manager.shutdown()
+
+    # Then
+    mock_transfer_service.shutdown.assert_called_once()
+
+    assert replication_manager._transfer_service is None

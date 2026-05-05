@@ -503,6 +503,7 @@ class ReplicationManager:
         _LOGGER.info("Shutting down ReplicationManager and TransferService...")
         if self._transfer_service:
             self._transfer_service.shutdown()
+            self._transfer_service = None
             _LOGGER.info("TransferService shut down.")
 
     # TODO: Use the ip address return from c++ transfer service to avoid duplication.

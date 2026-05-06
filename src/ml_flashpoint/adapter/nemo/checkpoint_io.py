@@ -477,4 +477,3 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
             caller.close = lambda: None
 
         self._alt_async_calls_queue.close()
-

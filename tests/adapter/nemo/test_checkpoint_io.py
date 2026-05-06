@@ -1359,10 +1359,10 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             """Tests that teardown calls close on both queues."""
             # Given
             real_checkpoint_io = checkpoint_io_components["checkpoint_io"]
-            
+
             # Instantiate real instance with real AsyncCallsQueue
             instance = MLFlashpointAsyncFinalizableCheckpointIO(real_checkpoint_io)
-            
+
             # Spy on close methods
             spy_mlf_close = mocker.spy(instance._mlf_async_calls_queue, "close")
             spy_alt_close = mocker.spy(instance._alt_async_calls_queue, "close")

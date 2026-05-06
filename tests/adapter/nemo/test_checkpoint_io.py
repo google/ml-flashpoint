@@ -1360,7 +1360,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             # Given
             real_checkpoint_io = checkpoint_io_components["checkpoint_io"]
             
-            # Instantiate with real AsyncCallsQueue (due to patch above)
+            # Instantiate real instance with real AsyncCallsQueue
             instance = MLFlashpointAsyncFinalizableCheckpointIO(real_checkpoint_io)
             
             # Spy on close methods

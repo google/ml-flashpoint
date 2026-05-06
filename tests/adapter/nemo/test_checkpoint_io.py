@@ -1309,7 +1309,11 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
             instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
             # simulate queue not closed
-            mock_mlf_queue.__bool__.return_value = True
+            # Python resolves magic methods (like __bool__) on the class level when evaluating truthiness
+            # of an object (as the teardown() function does for `self._mlf_async_calls_queue`).
+            # Setting it on type(mock) bypasses the spec restriction of MagicMock
+            # which would otherwise raise AttributeError if __bool__ is not in the spec.
+            type(mock_mlf_queue).__bool__ = lambda self: True
             mock_mlf_queue.get_num_unfinalized_calls.return_value = 0
             mock_alt_queue.get_num_unfinalized_calls.return_value = 0
 
@@ -1345,7 +1349,11 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             self.mock_async_calls_queue_cls.side_effect = [mock_mlf_queue, mock_alt_queue]
             instance = MLFlashpointAsyncFinalizableCheckpointIO(mock_checkpoint_io)
             # simulate queue not closed for truthiness check
-            mock_mlf_queue.__bool__.return_value = True
+            # Python resolves magic methods (like __bool__) on the class level when evaluating truthiness
+            # of an object (as the teardown() function does for `self._mlf_async_calls_queue`).
+            # Setting it on type(mock) bypasses the spec restriction of MagicMock
+            # which would otherwise raise AttributeError if __bool__ is not in the spec.
+            type(mock_mlf_queue).__bool__ = lambda self: True
             mock_mlf_queue.get_num_unfinalized_calls.return_value = 0
             mock_alt_queue.get_num_unfinalized_calls.return_value = 0
 

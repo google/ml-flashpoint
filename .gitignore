@@ -80,3 +80,6 @@ cmake-build-debug/
 
 # Linters
 .ruff_cache
+
+# AI Agents
+.gemini

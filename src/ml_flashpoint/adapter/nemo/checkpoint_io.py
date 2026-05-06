@@ -464,14 +464,17 @@ class MLFlashpointAsyncFinalizableCheckpointIO(AsyncFinalizableCheckpointIO):
                 # Queue might be closed already
                 pass
 
-        if hasattr(self._mlf_async_calls_queue, "close"):
-            self._mlf_async_calls_queue.close()
-            # Monkeypatch persistent caller's close method to prevent double-close error at exit
-            # which happens if __del__ is called after process group destruction.
-            # We access the caller directly if possible as AsyncCallsQueue might store it as 'persistent_caller'.
-            caller = getattr(self._mlf_async_calls_queue, "persistent_caller", None)
-            if caller and hasattr(caller, "close"):
-                # We already closed the queue (and hopefully the caller), so we prevent future closes.
-                # Specifically, PersistentAsyncCaller.__del__ calls close() which calls torch.distributed.get_rank(),
-                # causing a crash if the process group is already destroyed.
-                caller.close = lambda: None
+        # Close each queue
+        self._mlf_async_calls_queue.close()
+        # Monkeypatch persistent caller's close method to prevent double-close error at exit
+        # which happens if __del__ is called after process group destruction.
+        # We access the caller directly if possible as AsyncCallsQueue might store it as 'persistent_caller'.
+        caller = getattr(self._mlf_async_calls_queue, "persistent_caller", None)
+        if caller and hasattr(caller, "close"):
+            # We already closed the queue (and hopefully the caller), so we prevent future closes.
+            # Specifically, PersistentAsyncCaller.__del__ calls close() which calls torch.distributed.get_rank(),
+            # causing a crash if the process group is already destroyed.
+            caller.close = lambda: None
+
+        self._alt_async_calls_queue.close()
+

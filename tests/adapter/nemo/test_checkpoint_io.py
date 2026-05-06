@@ -1194,12 +1194,12 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
     class TestTeardown:
         """Test the teardown method."""
 
-        @pytest.fixture(autouse=True)
+        @pytest.fixture
         def setup_mocks(self, mocker):
             self.mock_async_calls_queue_cls = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io.AsyncCallsQueue")
             self.mock_logger = mocker.patch("ml_flashpoint.adapter.nemo.checkpoint_io._LOGGER")
 
-        def test_teardown_with_no_pending_saves(self, mocker):
+        def test_teardown_with_no_pending_saves(self, mocker, setup_mocks):
             """Tests that no warning is logged when there are no pending saves."""
             # Given
             mock_checkpoint_io = mocker.Mock(
@@ -1227,7 +1227,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             # Then
             self.mock_logger.warning.assert_not_called()
 
-        def test_teardown_with_pending_mlf_saves(self, mocker):
+        def test_teardown_with_pending_mlf_saves(self, mocker, setup_mocks):
             """Tests that a warning is logged when there are pending MLF saves."""
             # Given
             mock_checkpoint_io = mocker.Mock(
@@ -1255,7 +1255,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             # Then
             self.mock_logger.warning.assert_called_once()
 
-        def test_teardown_with_pending_alt_saves(self, mocker):
+        def test_teardown_with_pending_alt_saves(self, mocker, setup_mocks):
             """Tests that a warning is logged when there are pending alternative saves."""
             # Given
             mock_checkpoint_io = mocker.Mock(
@@ -1283,7 +1283,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             # Then
             self.mock_logger.warning.assert_called_once()
 
-        def test_buffer_pool_teardown_scheduled(self, mocker):
+        def test_buffer_pool_teardown_scheduled(self, mocker, setup_mocks):
             """Tests that BufferPool teardown is scheduled during teardown."""
             # Given
             mock_checkpoint_io = mocker.Mock(
@@ -1321,7 +1321,7 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
             assert scheduled_request.async_fn == mock_checkpoint_io.chkpt_obj_manager.teardown_pool
             assert scheduled_request.async_fn_args == ()
 
-        def test_teardown_handles_closed_queue(self, mocker):
+        def test_teardown_handles_closed_queue(self, mocker, setup_mocks):
             """Tests that teardown handles exceptions when scheduling async request (e.g. queue closed)."""
             # Given
             mock_checkpoint_io = mocker.Mock(
@@ -1354,6 +1354,25 @@ class TestMLFlashpointAsyncFinalizableCheckpointIO:
 
             # Then
             mock_mlf_queue.schedule_async_request.assert_called_once()
+
+        def test_teardown_closes_queues(self, checkpoint_io_components, mocker):
+            """Tests that teardown calls close on both queues."""
+            # Given
+            real_checkpoint_io = checkpoint_io_components["checkpoint_io"]
+            
+            # Instantiate with real AsyncCallsQueue (due to patch above)
+            instance = MLFlashpointAsyncFinalizableCheckpointIO(real_checkpoint_io)
+            
+            # Spy on close methods
+            spy_mlf_close = mocker.spy(instance._mlf_async_calls_queue, "close")
+            spy_alt_close = mocker.spy(instance._alt_async_calls_queue, "close")
+
+            # When
+            instance.teardown()
+
+            # Then
+            spy_mlf_close.assert_called_once()
+            spy_alt_close.assert_called_once()
 
     class TestIntegration:
         """Integration tests for MLFlashpointAsyncFinalizableCheckpointIO."""

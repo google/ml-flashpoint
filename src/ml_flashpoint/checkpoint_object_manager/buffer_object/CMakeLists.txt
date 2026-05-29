@@ -21,6 +21,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 add_library(buffer_object_lib STATIC
     buffer_object.cpp
     buffer_helper.cpp
+    buffer_pool.cpp
 )
 
 target_link_libraries(buffer_object_lib PUBLIC

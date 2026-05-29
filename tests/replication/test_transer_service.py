@@ -351,3 +351,55 @@ def test_async_get_non_existent_object(
     # Then
     with pytest.raises(RuntimeError, match="Received error message"):
         get_future.result(timeout=10)
+
+
+def test_transfer_to_symlink(
+    transfer_services: tuple[
+        transfer_service_ext.TransferService,
+        transfer_service_ext.TransferService,
+        str,
+        str,
+    ],
+) -> None:
+    """Verifies that async_put follows symlinks when writing to destination."""
+    service1, _, _, addr2 = transfer_services
+
+    target_id = "test_target.object"
+    symlink_id = "test_symlink.object"
+    data_to_send = np.arange(20, dtype=np.int64)
+    expected_content = data_to_send.tobytes()
+
+    # Create the target file
+    with open(target_id, "wb") as f:
+        f.write(b"initial data")
+
+    # Create the symlink
+    pathlib.Path(symlink_id).symlink_to(target_id)
+
+    try:
+        # Call the async_put method to transfer data from service1 to service2.
+        put_future = service1.async_put(
+            data_to_send.ctypes.data,  # data_ptr
+            data_to_send.nbytes,  # data_size
+            addr2,  # dest_address
+            symlink_id,  # dest_object_id (the symlink!)
+        )
+
+        # Block until the C++ future completes and get the result.
+        result = put_future.result(timeout=10)
+
+        assert result.success is True, "The 'success' flag should be True."
+
+        # Verify that the symlink is still a symlink
+        assert pathlib.Path(symlink_id).is_symlink(), "The symlink should still be a symlink."
+
+        # Verify the content of the target file
+        with open(target_id, "rb") as f:
+            received_content = f.read()
+        assert received_content == expected_content, "Received content in target file does not match."
+
+    finally:
+        # Clean up
+        safe_remove_file(symlink_id)
+        safe_remove_file(target_id)
+

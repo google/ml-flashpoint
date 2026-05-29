@@ -15,12 +15,12 @@
 import os
 import shutil
 import threading
-from typing import ClassVar, Optional
+from typing import ClassVar, Dict, Optional
 
 from ml_flashpoint.checkpoint_object_manager.buffer_io import BufferIO
 from ml_flashpoint.checkpoint_object_manager.buffer_metadata import METADATA_SIZE
-from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject
-from ml_flashpoint.core.buffer_pool import BufferPool, BufferPoolConfig
+from ml_flashpoint.checkpoint_object_manager.buffer_object.buffer_object_ext import BufferObject, BufferPool
+from ml_flashpoint.core.buffer_pool import BufferPoolConfig
 from ml_flashpoint.core.checkpoint_id_types import CheckpointContainerId, CheckpointObjectId
 from ml_flashpoint.core.mlf_logging import get_logger
 
@@ -34,68 +34,73 @@ class CheckpointObjectManager:
     awareness of buffers (within a rank).
     """
 
-    # Class-level registry for BufferPool in the worker process.
-    _worker_pool: ClassVar[Optional[BufferPool]] = None
+    # Class-level registry for BufferPools in the worker process.
+    # Maps pool type (string) to BufferPool instance.
+    _worker_pools: ClassVar[Dict[str, BufferPool]] = {}
     _worker_pool_lock: ClassVar[threading.Lock] = threading.Lock()
 
-    def __init__(self, pool_config: Optional[BufferPoolConfig] = None):
+    def __init__(self, local_pool_config: Optional[BufferPoolConfig] = None, repl_pool_config: Optional[BufferPoolConfig] = None):
         """Initializes the CheckpointObjectManager.
 
         Args:
-            pool_config: Optional configuration for the BufferPool.
+            local_pool_config: Optional configuration for the local BufferPool.
+            repl_pool_config: Optional configuration for the replication BufferPool.
         """
-        self._pool_config = pool_config
+        self._local_pool_config = local_pool_config
+        self._repl_pool_config = repl_pool_config
 
-    def _get_or_create_buffer_pool(self) -> Optional[BufferPool]:
-        """Lazily initializes and returns the BufferPool instance.
+    def _get_or_create_buffer_pool(self, pool_type: str = "local") -> Optional[BufferPool]:
+        """Lazily initializes and returns the specified BufferPool instance.
 
         Check the class-level registry first to reuse existing pools in this process.
         """
         # 1. Fast path: check class var directly
-        if CheckpointObjectManager._worker_pool:
-            return CheckpointObjectManager._worker_pool
+        if pool_type in CheckpointObjectManager._worker_pools:
+            return CheckpointObjectManager._worker_pools[pool_type]
 
-        if not self._pool_config:
+        config = self._local_pool_config if pool_type == "local" else self._repl_pool_config
+        if not config:
             return None
 
         # 2. Registry lookup / Creation
         with CheckpointObjectManager._worker_pool_lock:
-            if CheckpointObjectManager._worker_pool:
-                _LOGGER.debug("Reusing existing BufferPool from worker registry.")
-                return CheckpointObjectManager._worker_pool
+            if pool_type in CheckpointObjectManager._worker_pools:
+                _LOGGER.debug("Reusing existing %s BufferPool from worker registry.", pool_type)
+                return CheckpointObjectManager._worker_pools[pool_type]
 
             # Create new
             try:
-                _LOGGER.info("Initializing BufferPool with config: %s", self._pool_config)
+                _LOGGER.info("Initializing C++ BufferPool for %s with config: %s", pool_type, config)
+                shm_suffix = "local" if pool_type == "local" else "repl"
                 pool = BufferPool(
-                    pool_dir_path=self._pool_config.pool_dir_path,
-                    rank=self._pool_config.rank,
-                    num_buffers=self._pool_config.num_buffers,
-                    buffer_size=self._pool_config.buffer_size,
+                    shm_name=f"/mlf_buffer_pool_rank_{config.rank}_{shm_suffix}",
+                    pool_dir=config.pool_dir_path,
+                    rank=config.rank,
+                    num_buffers=config.num_buffers,
+                    buffer_size=config.buffer_size,
                 )
-                CheckpointObjectManager._worker_pool = pool
+                CheckpointObjectManager._worker_pools[pool_type] = pool
             except Exception:
-                _LOGGER.exception("Failed to initialize BufferPool")
+                _LOGGER.exception("Failed to initialize BufferPool for %s", pool_type)
                 pass
 
-        return CheckpointObjectManager._worker_pool
+        return CheckpointObjectManager._worker_pools.get(pool_type)
 
     def teardown_pool(self):
-        """Teardown the BufferPool if it exists and remove from registry."""
-        pool_to_teardown = None
-
+        """Teardown the BufferPools if they exist and remove from registry."""
         with CheckpointObjectManager._worker_pool_lock:
-            if CheckpointObjectManager._worker_pool:
-                pool_to_teardown = CheckpointObjectManager._worker_pool
-                CheckpointObjectManager._worker_pool = None
+            if CheckpointObjectManager._worker_pools:
+                _LOGGER.debug("Clearing BufferPools from registry.")
+                CheckpointObjectManager._worker_pools.clear()
 
-        if pool_to_teardown:
-            try:
-                pool_to_teardown.teardown()
-            except Exception as e:
-                _LOGGER.debug("Failed to teardown BufferPool: %s", e)
+    @property
+    def replication_pool_shm_name(self) -> str:
+        """Returns the shared memory name for the replication pool."""
+        if not self._repl_pool_config:
+            return ""
+        return f"/mlf_buffer_pool_rank_{self._repl_pool_config.rank}_repl"
 
-    def acquire_buffer(self, object_id: CheckpointObjectId, buffer_size: int, overwrite: bool = True) -> "BufferIO":
+    def acquire_buffer(self, object_id: CheckpointObjectId, buffer_size: int, overwrite: bool = True, use_replication_pool: bool = False) -> "BufferIO":
         """Acquires a buffer, preferring the BufferPool if available.
 
         This method attempts to acquire a buffer from the rank level BufferPool. If the pool
@@ -111,6 +116,7 @@ class CheckpointObjectManager:
             object_id: A unique identifier (logical path) for the new buffer object.
             buffer_size: The desired size of the buffer in bytes.
             overwrite: If True, allows overwriting an existing object. Defaults to True.
+            use_replication_pool: If True, uses the replication pool instead of the local pool.
 
         Returns:
             A BufferIO instance.
@@ -144,14 +150,15 @@ class CheckpointObjectManager:
                 else:
                     raise FileExistsError(f"File {object_id} already exists and overwrite=False")
 
-            pool = self._get_or_create_buffer_pool()
+            pool_type = "repl" if use_replication_pool else "local"
+            pool = self._get_or_create_buffer_pool(pool_type)
             if pool:
                 # Pool manages the physical creation/resizing AND the logical link (symlink) creation.
-                buffer_io = pool.acquire(associated_symlink=str(object_id))
-
-                _LOGGER.debug("Acquired buffer for '%s'", object_id)
-
-                return buffer_io
+                buffer_path = pool.acquire(associated_symlink=str(object_id))
+                _LOGGER.debug("Acquired pool buffer '%s' for '%s'", buffer_path, object_id)
+                # Create a writable BufferObject pointing to the physical path in the pool
+                buffer_obj = BufferObject(buffer_path, buffer_size, overwrite=True)
+                return BufferIO(buffer_obj)
             else:
                 _LOGGER.debug(
                     "BufferPool not configured or validation failed. Falling back to standalone buffer creation."

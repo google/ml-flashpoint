@@ -25,9 +25,9 @@ from ml_flashpoint.replication.replication_manager import PairwiseReplicationStr
 from ml_flashpoint.replication.transfer_service import transfer_service_ext
 
 
-def run_service(service, port_container, rank):
+def run_service(service, port_container, rank, repl_shm_name=""):
     """Target function for running a TransferService in a thread."""
-    port = service.initialize(0, global_rank=rank)
+    port = service.initialize(0, global_rank=rank, repl_shm_name=repl_shm_name)
     port_container.append(port)
 
 
@@ -191,3 +191,104 @@ def test_sync_bulk_retrieve_end_to_end(tmp_path, services, mocker):
         retrieved_data = retrieved_buffer_io.read()
         assert retrieved_data == original_data_map[obj_id]
         ckpt_obj_manager.close_buffer(retrieved_buffer_io)
+
+
+@pytest.mark.e2e
+def test_sync_bulk_retrieve_with_buffer_pool_and_resize(tmp_path, services, mocker):
+    """
+    An end-to-end test for sync_bulk_retrieve using BufferPool and triggering resize.
+    """
+    # Given
+    # We ignore receiver_service from fixture because we need to create one with pool attached!
+    sender_service, _, sender_addr, _ = services
+
+    # Mock torch.distributed
+    mocker.patch("torch.distributed.get_rank", return_value=1)
+    mocker.patch("torch.distributed.get_world_size", return_value=2)
+    mocker.patch("torch.cuda.device_count", return_value=1)
+    mocker.patch("ml_flashpoint.core.utils.get_num_of_nodes", return_value=2)
+
+    # METADATA_SIZE is 4096. We need buffer larger than that.
+    metadata_size = 4096
+    
+    # Create a BufferObject on the sender side with size metadata_size + 2048
+    obj_id = str(tmp_path / "test_buffer_large")
+    capacity = metadata_size + 2048
+    sender_bo = buffer_object_ext.BufferObject(obj_id, capacity, overwrite=True)
+    original_data = os.urandom(2048)
+    
+    buffer_io = BufferIO(sender_bo)
+    buffer_io.write(original_data)
+    buffer_io.close()
+
+    # Setup CheckpointObjectManager with BufferPoolConfig on receiver
+    # Set default buffer_size small (e.g. metadata_size + 1024) to trigger resize!
+    pool_dir = tmp_path / "pool_dir"
+    os.makedirs(pool_dir)
+    from ml_flashpoint.core.buffer_pool import BufferPoolConfig
+    pool_config = BufferPoolConfig(
+        pool_dir_path=str(pool_dir),
+        rank=1,
+        num_buffers=2,
+        buffer_size=metadata_size + 1024, # Smaller than metadata_size + 2048!
+    )
+    ckpt_obj_manager = CheckpointObjectManager(repl_pool_config=pool_config)
+    
+    # Create and start a NEW receiver TransferService with pool attached!
+    new_receiver_service = transfer_service_ext.TransferService()
+    repl_shm_name = ckpt_obj_manager.replication_pool_shm_name
+    receiver_port_container = []
+    
+    import threading
+    import time
+    
+    receiver_thread = threading.Thread(
+        target=run_service, 
+        args=(new_receiver_service, receiver_port_container, 1, repl_shm_name)
+    )
+    receiver_thread.daemon = True
+    receiver_thread.start()
+    
+    start_time = time.time()
+    while not receiver_port_container and time.time() - start_time < 5:
+        time.sleep(0.1)
+    assert receiver_port_container, "New receiver service failed to start"
+    
+    manager = ReplicationManager()
+    strategy = PairwiseReplicationStrategy(
+        replication_service_addresses=[sender_addr, "127.0.0.1:0"], processes_per_node=1
+    )
+    manager.initialize(
+        checkpoint_object_manager=ckpt_obj_manager,
+        replication_transfer_service=new_receiver_service,
+        repl_strategy=strategy,
+    )
+
+    retrieved_obj_id = obj_id + "_retrieved"
+
+    try:
+        # When
+        success = manager.sync_bulk_retrieve(
+            source_global_rank=0,
+            object_ids_to_retrieve=[obj_id],
+            container_ids_to_retrieve=[],
+            retrieved_object_ids=[retrieved_obj_id],
+            retrieved_container_ids=[],
+        )
+    
+        # Then
+        assert success
+    
+        # Verify that retrieved_obj_id is a symlink!
+        assert os.path.islink(retrieved_obj_id)
+        
+        # Verify the retrieved data
+        retrieved_bo = buffer_object_ext.BufferObject(retrieved_obj_id)
+        retrieved_buffer_io = BufferIO(retrieved_bo)
+        retrieved_data = retrieved_buffer_io.read()
+        assert retrieved_data == original_data
+        ckpt_obj_manager.close_buffer(retrieved_buffer_io)
+        
+    finally:
+        new_receiver_service.shutdown()
+        receiver_thread.join(timeout=5)

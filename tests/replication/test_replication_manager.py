@@ -59,7 +59,9 @@ def test_initialize_binds_port_success(replication_manager, mocker):
 
     # Then
     assert replication_manager._listen_port == 12345
-    mock_transfer_service_instance.initialize.assert_called_once_with(0, global_rank=0)
+    mock_transfer_service_instance.initialize.assert_called_once_with(
+        0, global_rank=0, repl_shm_name=mock_checkpoint_manager.replication_pool_shm_name
+    )
 
 
 def test_initialize_binds_port_failure(replication_manager, mocker):

@@ -219,9 +219,11 @@ class ReplicationManager:
         if self._transfer_service is None:
             _LOGGER.info("No TransferService provided, initializing a new one...")
             self._transfer_service = transfer_service_ext.TransferService()
+            repl_shm_name = self._checkpoint_object_manager.replication_pool_shm_name
             bound_listen_port = self._transfer_service.initialize(
                 listen_port,
                 global_rank=dist.get_rank(),
+                repl_shm_name=repl_shm_name,
             )
             if bound_listen_port <= 0:
                 _LOGGER.error("Failed to initialize C++ TransferService")
@@ -473,8 +475,19 @@ class ReplicationManager:
 
         futures = []
         effective_retrieved_ids = retrieved_object_ids if retrieved_object_ids else object_ids_to_retrieve
+        
         for i, obj_id in enumerate(object_ids_to_retrieve):
-            futures.append(self._async_retrieve(source_address, obj_id, effective_retrieved_ids[i]))
+            target_id = effective_retrieved_ids[i]
+            try:
+                # Use a default size of 1MB, it will be resized by TransferService if needed
+                buf = self._checkpoint_object_manager.acquire_buffer(target_id, buffer_size=1024*1024, overwrite=True, use_replication_pool=True)
+                # Close it immediately in Python to avoid conflicts with TransferService
+                buf.close(truncate=False)
+                _LOGGER.info("Acquired and closed buffer from pool for retrieval to %s", target_id)
+            except Exception as e:
+                _LOGGER.warning("Failed to acquire buffer from pool for %s, falling back to direct retrieval. Error: %s", target_id, e)
+                
+            futures.append(self._async_retrieve(source_address, obj_id, target_id))
 
         # TODO: Handle container_ids_to_retrieve
 

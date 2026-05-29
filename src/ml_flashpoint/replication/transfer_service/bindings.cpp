@@ -37,7 +37,7 @@ PYBIND11_MODULE(transfer_service_ext, m) {
       // Synchronous methods remain unchanged (still blocking)
       .def("initialize", &TransferService::Initialize, py::arg("listen_port"),
            py::arg("threads") = 16, py::arg("conn_pool_per_peer") = 16,
-           py::arg("global_rank") = -1,
+           py::arg("global_rank") = -1, py::arg("repl_shm_name") = "",
            "Initializes and starts the C++ transfer service.")
 
       .def("shutdown", &TransferService::Shutdown,

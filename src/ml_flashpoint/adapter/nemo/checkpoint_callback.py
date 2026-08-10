@@ -18,6 +18,7 @@ from typing import Any, Optional, Union
 import lightning.pytorch as pl
 from lightning.pytorch import callbacks as pl_callbacks
 from lightning.pytorch.utilities import types as pl_util_types
+from nemo.utils.callbacks.dist_ckpt_io import AsyncFinalizableCheckpointIO
 from typing_extensions import override
 
 from ml_flashpoint.core import mlf_logging
@@ -55,6 +56,7 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
         every_n_steps: int,
         skip_every_n_steps: Optional[int] = None,
         enabled: bool = True,
+        keep_mlf_checkpoint_on_train_end: bool = False,
     ):
         """
         Initializes and validates the callback.
@@ -68,12 +70,15 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
             skip_every_n_steps (int, optional): The step frequency to skip checkpointing. This is suggested to be set to
                 the interval used for long-term checkpointing by the alternative strategy. Defaults to 0 (no skipping).
             enabled (bool): Whether this callback should be enabled. Defaults to True.
+            keep_mlf_checkpoint_on_train_end (bool): Whether to keep the ML Flashpoint checkpoint after training ends.
+                Defaults to False.
         """
         self.base_container = CheckpointContainerId(checkpoint_base_container)
         self.every_n_steps = every_n_steps
         self.skip_every_n_steps = skip_every_n_steps if skip_every_n_steps is not None else 0
         self._enabled = enabled
         self._replication_manager = None
+        self._keep_mlf_checkpoint_on_train_end = keep_mlf_checkpoint_on_train_end
         self._validate()
 
     @property
@@ -174,7 +179,9 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
         _LOGGER.info("Training ended. Synchronizing and finalizing checkpoints...")
 
         # 1. Wait for async checkpoint saves to finish locally
-        trainer.strategy.checkpoint_io.maybe_finalize_save_checkpoint(blocking=True)
+        # Only finalize if the CheckpointIO implementation supports it (e.g., async mode).
+        if isinstance(trainer.strategy.checkpoint_io, AsyncFinalizableCheckpointIO):
+            trainer.strategy.checkpoint_io.maybe_finalize_save_checkpoint(blocking=True)
 
         # 2. Synchronize all ranks to ensure background writes are done everywhere before deletion
         trainer.strategy.barrier("mlf_cleanup_barrier")
@@ -184,5 +191,11 @@ class MLFlashpointCheckpointCallback(pl_callbacks.Callback):
             self.replication_manager.shutdown()
 
         if trainer.local_rank == 0:
-            _LOGGER.info("Local rank 0: Performing final checkpoint cleanup...")
-            trainer.strategy.checkpoint_io.remove_checkpoint(self.base_container.data)
+            if not self._keep_mlf_checkpoint_on_train_end:
+                _LOGGER.info("Local rank 0: Performing final checkpoint cleanup...")
+                trainer.strategy.checkpoint_io.remove_checkpoint(self.base_container.data)
+            else:
+                _LOGGER.info(
+                    "Local rank 0: Skipping final checkpoint cleanup because keep_mlf_checkpoint_on_train_end=%s.",
+                    self._keep_mlf_checkpoint_on_train_end,
+                )

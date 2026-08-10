@@ -435,8 +435,14 @@ def _setup_load_mocks(mocker, global_rank):
         "ml_flashpoint.adapter.megatron.load_strategies.mcore_to_pyt_state_dict",
         return_value=mock_pyt_state_dict,
     )
+
+    def mock_unwrap(sh_ten):
+        if isinstance(sh_ten, list):
+            return sh_ten
+        return [torch.empty(10, 20, dtype=torch.float32)]
+
     mocker.patch(
         "ml_flashpoint.adapter.megatron.load_strategies._unwrap_pyt_sharded_tensor",
-        return_value=[torch.empty(10, 20, dtype=torch.float32)],
+        side_effect=mock_unwrap,
     )
     return load_patched_fn

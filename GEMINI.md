@@ -6,7 +6,7 @@
 ## General Rules
 1. Always, always, always reread the code in case other external changes have been made to it.
 Do not assume that it is in the exact same state as it was the last time you read or edited it.
-1. When searching for application code, ignore files and paths listed in .gitignore, especially `.venv`.
+1. When searching for application code, ignore files and paths listed in `.gitignore`, especially `.venv`.
 Only look at `.venv` when trying to understand dependencies.
 1. Use existing code as an example for new code where possible for consistency, but not as a hard rule.
 1. Always ensure formatting rules are adhered to by checking pyproject.toml for the configuration, such as line length.
@@ -24,10 +24,11 @@ If the function's logic is obvious, do not write a redundant one-liner descripti
 1. Format tests such that the setup, action and assertion parts are separated by an empty line when possible.
 Add the comments "# Given", "# When" and "# Then" before each section respectively.
 If the action and assertion are combined, can use the comment "# When/Then".
-1. So long as the project is using pytest, never import `unittest` or any sub-package of it, and only use pytest mocking capabilities.
+1. Only use pytest mocking capabilities instead of importing other test frameworks, so avoid importing `unittest` or any sub-package of it.
 1. When naming the expected and actual data variables in a test, use those prefixes: `expected_` and `actual_` respectively, to clearly denote what those variables represent.
 1. Minimize mocking.
 If something can be done without mocking, that keeps the unit test simple (such as creating inputs that are the actual types instead of mocks), then do that.
 This is usually the case for data classes or simple classes that are easy to instantiate.
-1. DO NOT remove unrelated test code or assertions when adding or updating a test case.
+1. Only modify the minimum relevant lines of code needed when adding or updating a test case.
+Keep all other unrelated test code or assertions as-is.
 1. Add a short docstring to each test function explaining what it is testing, i.e. what behavior the test is validating.

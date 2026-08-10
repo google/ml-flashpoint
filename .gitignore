@@ -80,3 +80,4 @@ cmake-build-debug/
 
 # Linters
 .ruff_cache
+.gemini

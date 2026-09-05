@@ -3,6 +3,13 @@
 1. If a virtual environment does not exist at `.venv` or is not already activated, create one in `.venv`, prompting the user for confirmation of the command first.
 1. Activate the venv via `source .venv/bin/activate`.
 
+## Reference Notes
+
+1. `notes/checkpointing-integration-research.md` holds source-verified notes on how Megatron Bridge and NeMo RL do
+checkpointing, and where ML Flashpoint hooks into each. Read it before changing
+`src/ml_flashpoint/adapter/megatron_bridge` or `src/ml_flashpoint/adapter/nemo_rl`, and update it when a finding there
+turns out to be wrong or stale.
+
 ## General Rules
 1. Always, always, always reread the code in case other external changes have been made to it.
 Do not assume that it is in the exact same state as it was the last time you read or edited it.

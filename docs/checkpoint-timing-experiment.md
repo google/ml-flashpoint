@@ -18,8 +18,21 @@ Megatron Bridge brackets each checkpoint with barriers and logs the elapsed time
 * `save-checkpoint-non-persistent` — a non-persistent one, which is the ML Flashpoint checkpoint when the adapter is
   enabled.
 
-Both are logged through Megatron's timers, so they measure the slowest rank, which is what the loop actually waits for.
-For NeMo RL, the adapter also emits `nemo_rl.save_checkpoint`, covering the whole worker save including the blocking
+Both are logged through Megatron's timers in **milliseconds**, in one of two shapes depending on
+`logger.timing_log_option`:
+
+```
+(min, max) time across ranks (ms):
+    save-checkpoint ................................: (18450.20, 18512.90)   # minmax (default)
+    save-checkpoint ................................: 18512.90               # max
+```
+
+The parser reads either shape and always keeps the **max** — the slowest rank — because the save is barrier-bracketed
+on both sides, so the whole job waits for that rank. `(18450.20, 18512.90)` therefore contributes one sample of
+**18.51 s**.
+
+For NeMo RL, Bridge's timers never fire at all: NeMo RL calls `save_checkpoint` directly rather than through
+`train.py`. The adapter emits `nemo_rl.save_checkpoint` instead, covering the whole worker save including the blocking
 `maybe_finalize_async_save` that precedes it.
 
 The headline comparison is the mean and max of those timers between two runs that differ only in whether ML Flashpoint
@@ -111,8 +124,8 @@ scripts/benchmarks/compare_checkpoint_timings.py \
     --baseline baseline.json --candidate flashpoint.json
 ```
 
-Which prints, for every timer found in either arm, the sample count, both means, and the delta as an absolute change, a
-percentage and a speedup:
+Which prints one row per timer name, with the sample count, the mean in each arm, and the delta as an absolute change,
+a percentage and a speedup:
 
 ```
 Checkpoint timing: flashpoint vs baseline
@@ -127,13 +140,37 @@ Add `--json` for a machine-readable form.
 
 ## Reading the result
 
-* **`save-checkpoint-non-persistent` versus the baseline's `save-checkpoint`** is the comparison that matters: it is the
-  cost of an ML Flashpoint checkpoint against the cost of the durable checkpoint it substitutes for.
-* **`save-checkpoint` should be unchanged between arms.** The adapter does not touch the durable path, so a difference
-  there means something else differed between the runs — a different node pool, a cold storage cache, contention.
-  Investigate it before trusting the rest of the table.
-* **A single fast checkpoint is not the claim.** Recovery has to work too. Confirm the ML Flashpoint arm logs
-  `Recovered from ML Flashpoint checkpoint` after a deliberate restart before treating the integration as validated.
+Read the table **down the rows, then across the arms** — and be aware that the tool's own `mean delta` column does not
+show the headline number, for the reason below.
+
+**Row 1, `save-checkpoint`, is the control.** 18.306 s vs 18.402 s: durable checkpoints cost the same in both arms.
+That is the expected and desired result. The adapter does not touch the durable path, so any real difference here means
+the two runs differed in something else — a different node pool, a cold storage cache, contention — and everything else
+in the table should be distrusted until that is explained.
+
+**Row 2, `save-checkpoint-non-persistent`, is the new work.** It exists only in the ML Flashpoint arm, because the
+baseline has no non-persistent cadence at all. Hence `-` for baseline and `n/a` for the delta: the tool compares
+like-named timers across arms, and there is nothing to subtract from.
+
+**The headline number is the cross-row comparison the tool cannot compute for you:**
+
+```
+baseline  save-checkpoint                 18.306 s   <- what a checkpoint used to cost
+flashpoint save-checkpoint-non-persistent  0.621 s   <- what the substituted checkpoint costs now
+                                          ---------
+                                          ~29x faster, 17.7 s off each substituted checkpoint
+```
+
+That is the claim: on the steps where ML Flashpoint now holds the checkpoint, the loop stalls for ~0.6 s instead of
+~18 s. It is only a real saving in `replace` mode, where those steps genuinely skip the durable write. In `augment`
+mode the durable write still happens, so row 2 is pure added cost — correct, but not faster.
+
+Two further checks before treating the integration as validated:
+
+* **Sample counts are small.** Three durable samples per arm is enough to spot an order-of-magnitude difference, not a
+  5% one. Read `max_s` in the JSON alongside the mean.
+* **A fast checkpoint is not the whole claim — recovery has to work.** Confirm the ML Flashpoint arm logs
+  `Recovered from ML Flashpoint checkpoint` after a deliberate restart.
 
 ## Results
 

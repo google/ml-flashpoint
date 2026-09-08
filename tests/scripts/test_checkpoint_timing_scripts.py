@@ -66,6 +66,31 @@ class TestParseLines:
         assert_that(samples["save-checkpoint"][0]).is_close_to(18.5129, 1e-6)
         assert_that(samples["save-checkpoint"][1]).is_close_to(18.1001, 1e-6)
 
+    def test_reads_the_max_only_log_option(self, parser_module):
+        """A run configured with timing_log_option='max' logs a bare value, not a (min, max) pair."""
+        # Given
+        lines = ["    save-checkpoint ................................: 2345.67"]
+
+        # When
+        samples = parser_module.parse_lines(lines)
+
+        # Then
+        assert_that(samples["save-checkpoint"]).is_length(1)
+        assert_that(samples["save-checkpoint"][0]).is_close_to(2.34567, 1e-6)
+
+    def test_both_log_options_produce_comparable_samples(self, parser_module):
+        """The same underlying duration parses identically whichever shape it was logged in."""
+        # Given
+        minmax = ["    save-checkpoint ....: (100.00, 2345.67)"]
+        max_only = ["    save-checkpoint ....: 2345.67"]
+
+        # When
+        expected_samples = parser_module.parse_lines(minmax)
+        actual_samples = parser_module.parse_lines(max_only)
+
+        # Then
+        assert_that(actual_samples).is_equal_to(expected_samples)
+
     def test_recognizes_non_persistent_and_load_timers(self, parser_module):
         # Given/When
         samples = parser_module.parse_lines(FLASHPOINT_LOG.splitlines())

@@ -20,9 +20,11 @@ Three sources are recognized, in decreasing order of preference:
 ``megatron-timer``
     Megatron's own timer line, emitted by ``save_checkpoint_and_time``. It brackets
     the save with barriers, so it is the number that reflects what the training
-    loop actually paid::
+    loop actually paid. Values are milliseconds; both ``timing_log_option`` shapes
+    are read, and the max (slowest rank) is the sample kept::
 
-        save-checkpoint ................................: (1234.56, 1234.56)
+        save-checkpoint ................................: (1234.56, 2345.67)
+        save-checkpoint ................................: 2345.67
 
 ``mlf-timer``
     ML Flashpoint's ``log_execution_time`` output, which isolates the adapter's
@@ -48,11 +50,18 @@ import statistics
 import sys
 from typing import Iterable, Optional
 
-# "save-checkpoint ....: (1234.56, 1234.56)" -- Megatron reports (min, max) in ms
-# across ranks; the max is the one the slowest rank paid.
+# Megatron's timers report milliseconds, in one of two shapes depending on
+# `logger.timing_log_option`:
+#
+#   minmax (the default)  save-checkpoint ....: (1234.56, 2345.67)   -> (min, max) across ranks
+#   max                   save-checkpoint ....: 2345.67              -> max across ranks
+#
+# Either way the value taken below is the max, because that is the rank the
+# training loop actually waited for. The `all` option prints a different,
+# per-rank layout and is not parsed.
 _MEGATRON_TIMER = re.compile(
     r"(?P<name>save-checkpoint(?:-non-persistent)?|load-checkpoint)\s*\.*\s*:\s*"
-    r"\(\s*(?P<min>[0-9.]+)\s*,\s*(?P<max>[0-9.]+)\s*\)"
+    r"(?:\(\s*[0-9.]+\s*,\s*(?P<minmax>[0-9.]+)\s*\)|(?P<maxonly>[0-9.]+))"
 )
 
 # ml_flashpoint.core.utils.log_execution_time: "<name> took 1.2345s"
@@ -83,8 +92,10 @@ def parse_lines(lines: Iterable[str]) -> dict[str, list[float]]:
     for line in lines:
         match = _MEGATRON_TIMER.search(line)
         if match:
-            # Megatron timers are reported in milliseconds.
-            samples.setdefault(match.group("name"), []).append(float(match.group("max")) / 1000.0)
+            # Megatron timers are reported in milliseconds, under whichever of the
+            # two `timing_log_option` shapes the run was configured for.
+            max_ms = match.group("minmax") or match.group("maxonly")
+            samples.setdefault(match.group("name"), []).append(float(max_ms) / 1000.0)
             continue
         match = _MLF_TIMER.search(line)
         if match and match.group("name") in _MLF_NAMES_OF_INTEREST:

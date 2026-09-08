@@ -232,6 +232,153 @@ else:
     )
 ```
 
+### Megatron Bridge
+
+Code: See the [`ml_flashpoint.adapter.megatron_bridge`](https://github.com/google/ml-flashpoint/tree/main/src/ml_flashpoint/adapter/megatron_bridge) package.
+
+Megatron Bridge lets a run replace its checkpointing implementation through
+[`CheckpointConfig.custom_manager_class`](https://github.com/NVIDIA-NeMo/Megatron-Bridge/blob/main/docs/training/checkpointing.md#custom-checkpoint-manager).
+ML Flashpoint ships a manager for that hook which splits the two cadences Megatron Bridge already distinguishes:
+
+| Checkpoint | Cadence | Written by | Durability |
+|---|---|---|---|
+| Persistent | `save_interval` | Megatron Bridge, unchanged | Durable, wherever `save` points |
+| Non-persistent | `non_persistent_save_interval` | ML Flashpoint | Node-local memory, replicated to a peer node |
+
+Bridge takes the non-persistent branch only on steps that are *not* also persistent-checkpoint steps, so the two never collide.
+
+!!! warning
+
+    ML Flashpoint checkpoints are a fast recovery tier, not a replacement for durable ones.
+    They survive a process or node failure inside a run; they do not survive losing the cluster.
+    Keep `save` and `save_interval` configured.
+
+#### Configuration
+
+```python
+from megatron.bridge.training.config import CheckpointConfig
+import ml_flashpoint.adapter.megatron_bridge as mlf_bridge
+
+checkpoint = CheckpointConfig(
+    save="/gcs/my-run/checkpoints",
+    save_interval=500,
+    async_save=True,
+    ckpt_format="torch_dist",  # The only format the ML Flashpoint strategies support.
+)
+
+# Sets custom_manager_class, non_persistent_ckpt_type="local" and
+# non_persistent_save_interval, and registers `ml_flashpoint` with the Megatron
+# Bridge import allowlist.
+mlf_bridge.enable(checkpoint, non_persistent_save_interval=20)
+```
+
+To configure it from YAML instead, set the fields directly and register the allowlist prefix before
+`megatron.bridge.training.setup` runs — Megatron Bridge rejects a `custom_manager_class` outside its allowlist:
+
+```yaml
+checkpoint:
+  save: /gcs/my-run/checkpoints
+  save_interval: 500
+  non_persistent_save_interval: 20
+  non_persistent_ckpt_type: local
+  custom_manager_class: ml_flashpoint.adapter.megatron_bridge.MLFlashpointBridgeCheckpointManager
+```
+
+```python
+import ml_flashpoint.adapter.megatron_bridge as mlf_bridge
+
+mlf_bridge.register_with_megatron_bridge()
+```
+
+#### ML Flashpoint settings
+
+Megatron Bridge constructs the manager with only its own `CheckpointConfig`, so ML Flashpoint's own knobs come from
+either an explicit registration or `MLFLASHPOINT_*` environment variables:
+
+```python
+from ml_flashpoint.adapter.megatron_bridge import MLFlashpointBridgeConfig, configure
+
+configure(
+    MLFlashpointBridgeConfig(
+        base_container="/dev/shm/ml_flashpoint/job-145",
+        write_thread_count=2,
+    )
+)
+```
+
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `MLFLASHPOINT_BRIDGE_ENABLED` | `True` | Set to `false` to make the manager a pass-through to Megatron Bridge. |
+| `MLFLASHPOINT_BASE_CONTAINER` | `/dev/shm/ml_flashpoint` | Node-local, memory-backed base directory holding one child container per checkpoint. |
+| `MLFLASHPOINT_ASYNC_SAVE` | `True` | Keep saves off the training critical path. |
+| `MLFLASHPOINT_WRITE_THREAD_COUNT` | `1` | Writer threads per rank. |
+| `MLFLASHPOINT_INITIAL_WRITE_BUFFER_SIZE_BYTES` | 16 GiB | Initial per-buffer size. Raise it if per-rank checkpoint data is larger. |
+| `MLFLASHPOINT_USE_OPTIMIZED_SAVE` | `True` | Zero-copy tensor writes. |
+| `MLFLASHPOINT_USE_CACHED_CKPT_STRUCTURE` | `False` | Reuse the save plan across steps. Only safe with a constant checkpoint structure. |
+| `MLFLASHPOINT_USE_FULLY_PARALLEL_WRAPPER` | `True` | Spread checkpoint data evenly across ranks. |
+| `MLFLASHPOINT_KEEP_CHECKPOINTS_ON_FINALIZE` | `False` | Keep the container after training ends instead of releasing node memory. |
+
+The base container should be unique per job run but sticky across restarts of the same job, exactly as for the NeMo
+adapter above.
+
+#### Recovery
+
+The manager registers itself in Megatron Bridge's `checkpointing_context` under `local_checkpoint_manager`, which is
+what `megatron.bridge.training.setup` consults to decide whether to attempt a resume. On resume it prefers the newest
+recoverable ML Flashpoint container and falls back to Megatron Bridge's own load path when there is none, or when the
+in-memory read fails.
+
+Because ML Flashpoint containers are node-local, recovery expects the same nodes; missing objects are pulled from the
+peer that holds the replica.
+
+### NeMo RL
+
+Code: See the [`ml_flashpoint.adapter.nemo_rl`](https://github.com/google/ml-flashpoint/tree/main/src/ml_flashpoint/adapter/nemo_rl) package.
+
+!!! note
+
+    NeMo RL builds its Megatron training state with Megatron Bridge but drives checkpointing itself: its
+    `MegatronPolicyWorker` calls `megatron.bridge.training.checkpointing.save_checkpoint` directly rather than going
+    through `create_checkpoint_manager`, so `custom_manager_class` is never consulted. There is therefore no
+    configuration-only way to enable ML Flashpoint for a NeMo RL run; the adapter attaches to the worker instead.
+
+`install_into_worker` wraps `MegatronPolicyWorker.save_checkpoint` on a worker instance, after the worker has finished
+initializing (`mcore_state`, `model` and the process group are all live):
+
+```python
+from ml_flashpoint.adapter import nemo_rl as mlf_nemo_rl
+
+mlf_nemo_rl.install_into_worker(worker, mode=mlf_nemo_rl.MODE_AUGMENT)
+```
+
+Two modes are available:
+
+* `MODE_AUGMENT` (default) — every NeMo RL checkpoint is still written durably, and an ML Flashpoint checkpoint is
+  written alongside it. Faster recovery, unchanged durability.
+* `MODE_REPLACE` with `durable_every_n_saves=N` — only every N-th checkpoint is written durably; the rest go to
+  ML Flashpoint alone. This is what removes checkpoint stalls from the RL loop.
+
+An ML Flashpoint failure never fails the durable write: it is logged and the original save proceeds.
+
+For A/B experiments, `install_from_env` makes both arms share one launch command:
+
+```python
+from ml_flashpoint.adapter import nemo_rl as mlf_nemo_rl
+
+mlf_nemo_rl.install_from_env(worker)
+```
+
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `MLFLASHPOINT_NEMO_RL_ENABLED` | `False` | Master switch. When unset, the run is a plain NeMo RL run. |
+| `MLFLASHPOINT_NEMO_RL_MODE` | `augment` | `augment` or `replace`. |
+| `MLFLASHPOINT_NEMO_RL_DURABLE_EVERY_N_SAVES` | `1` | In `replace` mode, how often to still write durably. |
+
+The `MLFLASHPOINT_*` settings from the Megatron Bridge section above apply here too.
+
+To restore, call `MLFlashpointNeMoRLCheckpointer.load(...)` from the worker's setup path. Unlike the Megatron Bridge
+manager, it never falls back to the durable load path — NeMo RL owns that decision.
+
 ### PyTorch DCP
 
 Code: See the [`ml_flashpoint.adapter.pytorch`](https://github.com/google/ml-flashpoint/tree/main/src/ml_flashpoint/adapter/pytorch) package.

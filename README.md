@@ -12,7 +12,7 @@
 
 A memory-first, lightning-fast, ready-to-use ML checkpointing library.
 
-Adapters for PyTorch DCP, Megatron-LM and NeMo 2.0 are readily available for seamless integration.
+Adapters for PyTorch DCP, Megatron-LM, Megatron Bridge, NeMo 2.0 and NeMo RL are readily available for seamless integration.
 They are built on top of the core checkpointing APIs, which can also be used directly for custom integrations.
 
 If interested in a native integration with another framework, please let us know by creating a [feature request](https://github.com/google/ml-flashpoint/issues/new?template=feature_request.md) or upvoting an [existing one](https://github.com/google/ml-flashpoint/issues?q=is%3Aissue%20state%3Aopen%20label%3Aenhancement)!
@@ -45,6 +45,12 @@ pip install -e .[pytorch]
 
 # Megatron-LM
 pip install -e .[megatron]
+
+# Megatron Bridge
+pip install -e .[megatron-bridge]
+
+# NeMo RL (installs the Megatron Bridge stack; NeMo RL itself is installed from source)
+pip install -e .[nemo-rl]
 
 # Multiple
 pip install -e .[pytorch,megatron]

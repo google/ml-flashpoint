@@ -30,6 +30,7 @@
 #include "absl/log/log_sink.h"
 #include "absl/log/log_sink_registry.h"
 #include "gtest/gtest.h"
+#include "net_util.h"
 #include "transfer_service.h"
 
 namespace ml_flashpoint::replication::transfer_service {
@@ -184,7 +185,8 @@ TEST(TransferServiceP2PTest, ShutdownInterruptsTransfer) {
     LOG(INFO) << "Transfer failed as expected after shutdown.";
   } catch (const std::runtime_error& e) {
     EXPECT_THAT(e.what(), testing::HasSubstr("Service is shutting down"));
-    LOG(INFO) << "Transfer threw exception as expected after shutdown: " << e.what();
+    LOG(INFO) << "Transfer threw exception as expected after shutdown: "
+              << e.what();
   }
 
   // Cleanup file if it was partially created
@@ -914,6 +916,195 @@ TEST(TransferServiceP2PTest, TimestampsAreRecorded) {
   }
   // We expect 3 tasks: Put, Get, RespondToGet
   EXPECT_EQ(timing_logs_count, 3) << "timing_logs_count: " << timing_logs_count;
+}
+
+// Verifies that handling a kGetObj request responds over the existing client
+// socket and never initiates an outbound connection to header.dest_address.
+TEST(TransferServiceP2PTest, GetObjDoesNotConnectToDestAddress) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize();
+  ASSERT_GT(port1, 0);
+
+  std::string expected_data = "ssrf_test_payload";
+  std::string source_obj_id = "ssrf_source_obj";
+  std::ofstream(source_obj_id) << expected_data;
+
+  int target_listener_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+  ASSERT_GE(target_listener_fd, 0);
+  sockaddr_in target_addr{};
+  target_addr.sin_family = AF_INET;
+  inet_pton(AF_INET, "127.0.0.1", &target_addr.sin_addr);
+  target_addr.sin_port = 0;
+  ASSERT_EQ(bind(target_listener_fd, reinterpret_cast<sockaddr*>(&target_addr),
+                 sizeof(target_addr)),
+            0);
+  socklen_t target_len = sizeof(target_addr);
+  ASSERT_EQ(getsockname(target_listener_fd,
+                        reinterpret_cast<sockaddr*>(&target_addr), &target_len),
+            0);
+  int target_port = ntohs(target_addr.sin_port);
+  ASSERT_EQ(listen(target_listener_fd, 1), 0);
+
+  int client_fd = socket(AF_INET, SOCK_STREAM, 0);
+  ASSERT_GE(client_fd, 0);
+  sockaddr_in serv_addr{};
+  serv_addr.sin_family = AF_INET;
+  serv_addr.sin_port = htons(port1);
+  inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr);
+  ASSERT_EQ(connect(client_fd, reinterpret_cast<sockaddr*>(&serv_addr),
+                    sizeof(serv_addr)),
+            0);
+
+  // When
+  ObjInfoHeader req_header;
+  req_header.type = MessageType::kGetObj;
+  snprintf(req_header.task_id, sizeof(req_header.task_id), "test_task_id");
+  snprintf(req_header.source_obj_id, sizeof(req_header.source_obj_id), "%s",
+           source_obj_id.c_str());
+  snprintf(req_header.dest_obj_id, sizeof(req_header.dest_obj_id),
+           "ssrf_dest_obj");
+  snprintf(req_header.dest_address, sizeof(req_header.dest_address),
+           "127.0.0.1:%d", target_port);
+  ASSERT_TRUE(SendAll(client_fd, &req_header, kHeaderSize).ok());
+
+  ObjInfoHeader resp_header;
+  ASSERT_TRUE(RecvHeader(client_fd, resp_header).ok());
+  std::string actual_data(resp_header.obj_size, '\0');
+  ASSERT_TRUE(
+      RecvAll(client_fd, actual_data.data(), resp_header.obj_size).ok());
+
+  ObjInfoHeader ack_header;
+  ack_header.type = MessageType::kAck;
+  ASSERT_TRUE(SendAll(client_fd, &ack_header, kHeaderSize).ok());
+
+  // Then
+  EXPECT_EQ(resp_header.type, MessageType::kRespondToGetObj);
+  EXPECT_EQ(actual_data, expected_data);
+  EXPECT_EQ(accept(target_listener_fd, nullptr, nullptr), -1);
+
+  close(client_fd);
+  close(target_listener_fd);
+  std::remove(source_obj_id.c_str());
+  service1.Shutdown();
+}
+
+// Verifies that a single pooled connection (conn_pool_per_peer=1) is cleanly
+// reused across sequential AsyncGet calls, including after a kError response.
+TEST(TransferServiceP2PTest,
+     GetReusesSinglePooledConnectionAfterSuccessAndError) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(0, /*threads=*/4, /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+
+  TransferService service2("127.0.0.1");
+  int port2 = service2.Initialize(0, /*threads=*/4, /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port2, 0);
+
+  std::string peer1_addr = "127.0.0.1:" + std::to_string(port1);
+  std::string expected_data_1 = "first_payload_over_single_conn";
+  std::string expected_data_2 = "second_payload_after_error_over_single_conn";
+  std::string source_obj_1 = "single_conn_source_1";
+  std::string source_obj_2 = "single_conn_source_2";
+  std::string dest_obj_1 = "single_conn_dest_1";
+  std::string dest_obj_2 = "single_conn_dest_2";
+
+  std::ofstream(source_obj_1) << expected_data_1;
+  std::ofstream(source_obj_2) << expected_data_2;
+
+  // When
+  TransferResult actual_result_1 =
+      service2.AsyncGet(source_obj_1, peer1_addr, dest_obj_1).get();
+  auto missing_future =
+      service2.AsyncGet("non_existent_single_conn_obj", peer1_addr,
+                        "non_existent_single_conn_dest");
+  EXPECT_THROW(missing_future.get(), std::runtime_error);
+  TransferResult actual_result_2 =
+      service2.AsyncGet(source_obj_2, peer1_addr, dest_obj_2).get();
+
+  // Then
+  EXPECT_TRUE(actual_result_1.success);
+  EXPECT_TRUE(actual_result_2.success);
+  VerifyFileContentAndRemove(dest_obj_1, expected_data_1);
+  VerifyFileContentAndRemove(dest_obj_2, expected_data_2);
+
+  std::remove(source_obj_1.c_str());
+  std::remove(source_obj_2.c_str());
+  service1.Shutdown();
+  service2.Shutdown();
+}
+
+// Verifies that simultaneous bidirectional AsyncGet and AsyncPut calls between
+// two peers complete without deadlock or stream corruption.
+TEST(TransferServiceP2PTest, BidirectionalConcurrentGetAndPut) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize();
+  ASSERT_GT(port1, 0);
+
+  TransferService service2("127.0.0.1");
+  int port2 = service2.Initialize();
+  ASSERT_GT(port2, 0);
+
+  std::string addr1 = "127.0.0.1:" + std::to_string(port1);
+  std::string addr2 = "127.0.0.1:" + std::to_string(port2);
+
+  const int kNumOps = 8;
+  std::vector<std::string> s1_get_sources(kNumOps);
+  std::vector<std::string> s2_get_sources(kNumOps);
+  std::vector<std::string> s1_get_dests(kNumOps);
+  std::vector<std::string> s2_get_dests(kNumOps);
+  std::vector<std::string> s1_put_dests(kNumOps);
+  std::vector<std::string> s2_put_dests(kNumOps);
+  std::vector<std::string> expected_payloads(kNumOps);
+
+  for (int i = 0; i < kNumOps; ++i) {
+    expected_payloads[i] =
+        "Bidirectional payload " + std::to_string(i) + std::string(1024, 'X');
+    s1_get_sources[i] = "bidir_s1_src_" + std::to_string(i);
+    s2_get_sources[i] = "bidir_s2_src_" + std::to_string(i);
+    s1_get_dests[i] = "bidir_s1_get_dst_" + std::to_string(i);
+    s2_get_dests[i] = "bidir_s2_get_dst_" + std::to_string(i);
+    s1_put_dests[i] = "bidir_s1_put_dst_" + std::to_string(i);
+    s2_put_dests[i] = "bidir_s2_put_dst_" + std::to_string(i);
+
+    std::ofstream(s1_get_sources[i]) << expected_payloads[i];
+    std::ofstream(s2_get_sources[i]) << expected_payloads[i];
+  }
+
+  // When
+  std::vector<std::future<TransferResult>> futures;
+  for (int i = 0; i < kNumOps; ++i) {
+    futures.push_back(
+        service1.AsyncGet(s2_get_sources[i], addr2, s1_get_dests[i]));
+    futures.push_back(
+        service2.AsyncGet(s1_get_sources[i], addr1, s2_get_dests[i]));
+    futures.push_back(
+        service1.AsyncPut(const_cast<char*>(expected_payloads[i].data()),
+                          expected_payloads[i].size(), addr2, s2_put_dests[i]));
+    futures.push_back(
+        service2.AsyncPut(const_cast<char*>(expected_payloads[i].data()),
+                          expected_payloads[i].size(), addr1, s1_put_dests[i]));
+  }
+
+  // Then
+  for (auto& fut : futures) {
+    TransferResult actual_result = fut.get();
+    EXPECT_TRUE(actual_result.success);
+  }
+
+  for (int i = 0; i < kNumOps; ++i) {
+    VerifyFileContentAndRemove(s1_get_dests[i], expected_payloads[i]);
+    VerifyFileContentAndRemove(s2_get_dests[i], expected_payloads[i]);
+    VerifyFileContentAndRemove(s1_put_dests[i], expected_payloads[i]);
+    VerifyFileContentAndRemove(s2_put_dests[i], expected_payloads[i]);
+    std::remove(s1_get_sources[i].c_str());
+    std::remove(s2_get_sources[i].c_str());
+  }
+
+  service1.Shutdown();
+  service2.Shutdown();
 }
 
 }  // namespace

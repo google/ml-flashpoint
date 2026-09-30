@@ -162,6 +162,7 @@ class TransferService final {
   int global_rank_ = -1;
 
   std::unique_ptr<ThreadPool> thread_pool_;
+  std::unique_ptr<ThreadPool> epoll_thread_pool_;
   std::thread epoll_thread_;
   std::thread task_queue_thread_;
   TaskQueue<TaskUniquePtr> task_queue_;

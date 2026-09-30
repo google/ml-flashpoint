@@ -123,8 +123,9 @@ int TransferService::Initialize(int listen_port, int threads,
       absl::StrFormat("%s:%d", local_ip_address.value(), listen_port_);
   LOG(INFO) << "Listening on " << local_address_;
 
-  // Create the thread pool.
+  // Create the thread pools for outbound tasks and inbound epoll events.
   thread_pool_ = std::make_unique<ThreadPool>(threads_);
+  epoll_thread_pool_ = std::make_unique<ThreadPool>(threads_);
 
   // Create epoll instance.
   epoll_fd_ = epoll_create1(0);
@@ -222,9 +223,12 @@ void TransferService::Shutdown() {
     connection_pools_.clear();
   }
 
-  // 7. Stop the thread pool.
+  // 7. Stop the thread pools.
   if (thread_pool_) {
     thread_pool_->stop();
+  }
+  if (epoll_thread_pool_) {
+    epoll_thread_pool_->stop();
   }
 
   // 8. Clean up epoll fd.
@@ -428,7 +432,7 @@ void TransferService::ProcessEpollEventsLoop() {
           running_.store(false);
           break;
         }
-        thread_pool_->enqueue([this]() { this->HandleNewConnection(); });
+        epoll_thread_pool_->enqueue([this]() { this->HandleNewConnection(); });
       } else {
         if ((current_events & EPOLLERR) || (current_events & EPOLLHUP)) {
           if (current_events & EPOLLERR) {
@@ -439,7 +443,7 @@ void TransferService::ProcessEpollEventsLoop() {
             LOG(INFO) << "Epoll HUP event (EPOLLHUP) on client fd="
                       << current_fd << ". Closing.";
           }
-          thread_pool_->enqueue(
+          epoll_thread_pool_->enqueue(
               [this, current_fd]() { this->RemoveClient(current_fd); });
           continue;
         }
@@ -448,8 +452,8 @@ void TransferService::ProcessEpollEventsLoop() {
           LOG(INFO) << "Epoll loop: Dispatching incoming data "
                        "processing for fd="
                     << current_fd;
-          thread_pool_->enqueue(&TransferService::ProcessIncomingData, this,
-                                current_fd);
+          epoll_thread_pool_->enqueue(&TransferService::ProcessIncomingData,
+                                      this, current_fd);
         } else {
           LOG(WARNING) << "Epoll loop: Unhandled event flags=" << current_events
                        << " on client fd=" << current_fd;

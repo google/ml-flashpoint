@@ -351,3 +351,61 @@ def test_async_get_non_existent_object(
     # Then
     with pytest.raises(RuntimeError, match="Received error message"):
         get_future.result(timeout=10)
+
+
+def test_concurrent_and_repeated_async_get(
+    transfer_services: tuple[
+        transfer_service_ext.TransferService,
+        transfer_service_ext.TransferService,
+        str,
+        str,
+    ],
+    tmp_path: pathlib.Path,
+) -> None:
+    """Verifies that concurrent and repeated async_get calls succeed and recover cleanly after an error."""
+    # Given
+    _, service2, addr1, _ = transfer_services
+    num_objects = 10
+    source_paths = []
+    dest_paths = []
+    expected_payloads = []
+
+    for i in range(num_objects):
+        src_path = str(tmp_path / f"concurrent_src_{i}.object")
+        dst_path = str(tmp_path / f"concurrent_dst_{i}.object")
+        expected_data = np.arange(i * 100, (i + 1) * 100, dtype=np.int64).tobytes()
+        with open(src_path, "wb") as f:
+            f.write(expected_data)
+        source_paths.append(src_path)
+        dest_paths.append(dst_path)
+        expected_payloads.append(expected_data)
+
+    # When
+    first_round_futures = [service2.async_get(source_paths[i], addr1, dest_paths[i]) for i in range(num_objects)]
+    missing_future = service2.async_get(
+        str(tmp_path / "missing_src.object"),
+        addr1,
+        str(tmp_path / "missing_dst.object"),
+    )
+    with pytest.raises(RuntimeError, match="Received error message"):
+        missing_future.result(timeout=10)
+
+    second_round_dest_paths = [str(tmp_path / f"concurrent_dst_round2_{i}.object") for i in range(num_objects)]
+    second_round_futures = [
+        service2.async_get(source_paths[i], addr1, second_round_dest_paths[i]) for i in range(num_objects)
+    ]
+
+    # Then
+    for i in range(num_objects):
+        actual_result_1 = first_round_futures[i].result(timeout=10)
+        actual_result_2 = second_round_futures[i].result(timeout=10)
+        assert actual_result_1.success is True
+        assert actual_result_2.success is True
+
+        with open(dest_paths[i], "rb") as f:
+            actual_content_1 = f.read()
+        with open(second_round_dest_paths[i], "rb") as f:
+            actual_content_2 = f.read()
+
+        assert actual_content_1 == expected_payloads[i]
+        assert actual_content_2 == expected_payloads[i]

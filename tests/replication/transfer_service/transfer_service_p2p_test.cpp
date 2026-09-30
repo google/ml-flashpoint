@@ -30,6 +30,7 @@
 #include "absl/log/log_sink.h"
 #include "absl/log/log_sink_registry.h"
 #include "gtest/gtest.h"
+#include "net_util.h"
 #include "transfer_service.h"
 
 namespace ml_flashpoint::replication::transfer_service {
@@ -914,6 +915,77 @@ TEST(TransferServiceP2PTest, TimestampsAreRecorded) {
   }
   // We expect 3 tasks: Put, Get, RespondToGet
   EXPECT_EQ(timing_logs_count, 3) << "timing_logs_count: " << timing_logs_count;
+}
+
+// Verifies that handling a kGetObj request responds over the existing client
+// socket and never initiates an outbound connection to header.dest_address.
+TEST(TransferServiceP2PTest, GetObjDoesNotConnectToDestAddress) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize();
+  ASSERT_GT(port1, 0);
+
+  std::string expected_data = "ssrf_test_payload";
+  std::string source_obj_id = "ssrf_source_obj";
+  std::ofstream(source_obj_id) << expected_data;
+
+  int target_listener_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+  ASSERT_GE(target_listener_fd, 0);
+  sockaddr_in target_addr{};
+  target_addr.sin_family = AF_INET;
+  inet_pton(AF_INET, "127.0.0.1", &target_addr.sin_addr);
+  target_addr.sin_port = 0;
+  ASSERT_EQ(bind(target_listener_fd, reinterpret_cast<sockaddr*>(&target_addr),
+                 sizeof(target_addr)),
+            0);
+  socklen_t target_len = sizeof(target_addr);
+  ASSERT_EQ(getsockname(target_listener_fd,
+                        reinterpret_cast<sockaddr*>(&target_addr), &target_len),
+            0);
+  int target_port = ntohs(target_addr.sin_port);
+  ASSERT_EQ(listen(target_listener_fd, 1), 0);
+
+  int client_fd = socket(AF_INET, SOCK_STREAM, 0);
+  ASSERT_GE(client_fd, 0);
+  sockaddr_in serv_addr{};
+  serv_addr.sin_family = AF_INET;
+  serv_addr.sin_port = htons(port1);
+  inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr);
+  ASSERT_EQ(connect(client_fd, reinterpret_cast<sockaddr*>(&serv_addr),
+                    sizeof(serv_addr)),
+            0);
+
+  // When
+  ObjInfoHeader req_header;
+  req_header.type = MessageType::kGetObj;
+  snprintf(req_header.task_id, sizeof(req_header.task_id), "test_task_id");
+  snprintf(req_header.source_obj_id, sizeof(req_header.source_obj_id), "%s",
+           source_obj_id.c_str());
+  snprintf(req_header.dest_obj_id, sizeof(req_header.dest_obj_id),
+           "ssrf_dest_obj");
+  snprintf(req_header.dest_address, sizeof(req_header.dest_address),
+           "127.0.0.1:%d", target_port);
+  ASSERT_TRUE(SendAll(client_fd, &req_header, kHeaderSize).ok());
+
+  ObjInfoHeader resp_header;
+  ASSERT_TRUE(RecvHeader(client_fd, resp_header).ok());
+  std::string actual_data(resp_header.obj_size, '\0');
+  ASSERT_TRUE(
+      RecvAll(client_fd, actual_data.data(), resp_header.obj_size).ok());
+
+  ObjInfoHeader ack_header;
+  ack_header.type = MessageType::kAck;
+  ASSERT_TRUE(SendAll(client_fd, &ack_header, kHeaderSize).ok());
+
+  // Then
+  EXPECT_EQ(resp_header.type, MessageType::kRespondToGetObj);
+  EXPECT_EQ(actual_data, expected_data);
+  EXPECT_EQ(accept(target_listener_fd, nullptr, nullptr), -1);
+
+  close(client_fd);
+  close(target_listener_fd);
+  std::remove(source_obj_id.c_str());
+  service1.Shutdown();
 }
 
 }  // namespace

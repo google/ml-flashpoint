@@ -812,7 +812,7 @@ void TransferService::ExecuteGetTask(GetTask* task) {
   }
   metric_container.header_sent_time = absl::Now();
 
-  // Wait for the immediate response (ACK or ERROR)
+  // Wait for the response (RespondToGetObj or ERROR)
   ObjInfoHeader resp_header;
   if (!RecvHeader(conn.fd(), resp_header).ok()) {
     ReportResult(task->GetTaskId(), false,
@@ -821,15 +821,15 @@ void TransferService::ExecuteGetTask(GetTask* task) {
   }
 
   switch (resp_header.type) {
-    case MessageType::kAck:
-      LOG(INFO) << "Received ACK for GET request. Waiting for data transfer.";
+    case MessageType::kRespondToGetObj:
+      HandleDataReceive(conn.fd(), resp_header, true);
       break;
     case MessageType::kError:
       ReportResult(task->GetTaskId(), false, "Received error message");
       break;
+    case MessageType::kAck:
     case MessageType::kPutObj:
     case MessageType::kGetObj:
-    case MessageType::kRespondToGetObj:
       ReportResult(task->GetTaskId(), false,
                    "Received unexpected response for GET request");
       break;
@@ -842,16 +842,14 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
   LOG(INFO) << "Executing RespondToGetTask for task_id=" << task->GetTaskId()
             << ", source_obj_id=" << task->GetSourceObjId()
             << ", dest_obj_id=" << task->GetDestObjId()
-            << ", source_addr=" << task->GetSourceAddr()
-            << ", dest_addr=" << task->GetDestAddr();
+            << ", client_fd=" << task->GetClientFd();
 
-  auto conn_opt = GetConnectionFromPool(task->GetDestAddr());
-  if (!conn_opt) {
-    LOG(ERROR) << "Failed to get connection!";
-    ReportResult(task->GetTaskId(), false, "Failed to get connection");
+  int sockfd = task->GetClientFd();
+  if (sockfd < 0) {
+    LOG(ERROR) << "Invalid client_fd!";
+    ReportResult(task->GetTaskId(), false, "Invalid client_fd");
     return;
   }
-  ScopedConnection conn = std::move(conn_opt.value());
   metric_container.connection_acquired_time = absl::Now();
 
   // Open file as buffer object
@@ -862,6 +860,8 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
   if (buffer_data_ptr == nullptr) {
     LOG(ERROR) << "RespondToGetTask failed: Could not open buffer object for '"
                << task->GetSourceObjId() << "'";
+    SendErrorResponse(sockfd, task->GetTaskId().c_str(),
+                      task->GetSourceObjId().c_str());
     ReportResult(task->GetTaskId(), false, "Failed to create buffer object");
     return;
   }
@@ -883,7 +883,6 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
 
   header.type = MessageType::kRespondToGetObj;
   header.obj_size = size;
-  int sockfd = conn.fd();
 
   if (!SendAll(sockfd, &header, kHeaderSize).ok()) {
     LOG(ERROR) << "Failed to send kRespondToGetObj header";
@@ -987,16 +986,6 @@ void TransferService::HandleGetObjRequest(int client_fd,
     return;
   }
 
-  // Send ACK to confirm request is accepted, before async data transfer
-  ObjInfoHeader ack_header;
-  ack_header.type = MessageType::kAck;
-  snprintf(ack_header.task_id, sizeof(ack_header.task_id), "%s",
-           header.task_id);
-  if (!SendAll(client_fd, &ack_header, kHeaderSize).ok()) {
-    LOG(ERROR) << "Failed to send ACK for GET request " << header.source_obj_id;
-    return;  // Don't proceed if we can't even ACK
-  }
-
   auto metric_container = std::make_shared<RespondToGetTaskMetricContainer>();
   metric_container->task_id = header.task_id;
   metric_container->task_type = TaskMetricContainer::TaskType::kRespondToGet;
@@ -1009,18 +998,17 @@ void TransferService::HandleGetObjRequest(int client_fd,
   }
   metric_container->submit_time = absl::Now();
 
-  auto task = std::make_unique<RespondToGetTask>(
-      header.task_id, header.source_obj_id, header.dest_obj_id,
-      header.source_address, header.dest_address, metric_container);
+  RespondToGetTask task(header.task_id, header.source_obj_id,
+                        header.dest_obj_id, client_fd, metric_container);
 
   {
     std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
     // We don't have a promise for RespondToGetTask as it's triggered
     // remotely, but we want to track it.
-    pending_tasks_[task->GetTaskId()] = {nullptr, metric_container};
+    pending_tasks_[task.GetTaskId()] = {nullptr, metric_container};
   }
 
-  task_queue_.enqueue(std::move(task));
+  task.Execute(this);
 }
 
 void TransferService::UpdateTaskMetrics(

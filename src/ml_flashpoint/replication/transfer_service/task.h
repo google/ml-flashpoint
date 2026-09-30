@@ -167,13 +167,12 @@ class RespondToGetTask : public Task {
  public:
   RespondToGetTask(
       std::string task_id, std::string source_obj_id, std::string dest_obj_id,
-      std::string source_addr, std::string dest_addr,
+      int client_fd,
       std::shared_ptr<RespondToGetTaskMetricContainer> metric_container)
       : Task(std::move(task_id)),
         source_obj_id_(std::move(source_obj_id)),
         dest_obj_id_(std::move(dest_obj_id)),
-        source_addr_(std::move(source_addr)),
-        dest_addr_(std::move(dest_addr)),
+        client_fd_(client_fd),
         metric_container_(std::move(metric_container)) {}
 
   void Execute(TransferService* service) override;
@@ -183,14 +182,12 @@ class RespondToGetTask : public Task {
 
   const std::string& GetSourceObjId() const { return source_obj_id_; }
   const std::string& GetDestObjId() const { return dest_obj_id_; }
-  const std::string& GetSourceAddr() const { return source_addr_; }
-  const std::string& GetDestAddr() const { return dest_addr_; }
+  int GetClientFd() const { return client_fd_; }
 
  private:
   std::string source_obj_id_;
   std::string dest_obj_id_;
-  std::string source_addr_;
-  std::string dest_addr_;
+  int client_fd_;
   std::shared_ptr<RespondToGetTaskMetricContainer> metric_container_;
 };
 

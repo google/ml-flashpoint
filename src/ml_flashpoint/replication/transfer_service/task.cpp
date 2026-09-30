@@ -32,7 +32,7 @@ void GetTask::Execute(TransferService* service) {
 }
 
 void RespondToGetTask::Execute(TransferService* service) {
-  LOG(INFO) << "Executing RespondToGetTask to " << dest_addr_;
+  LOG(INFO) << "Executing RespondToGetTask on fd=" << client_fd_;
   service->ExecuteRespondToGetTask(this);
 }
 

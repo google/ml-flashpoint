@@ -223,6 +223,8 @@ void TransferService::Shutdown() {
   {
     std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
     for (auto const& [task_id, context] : pending_tasks_) {
+      // Remotely triggered tasks (RespondToGetTask) have no promise.
+      if (!context.promise) continue;
       try {
         context.promise->set_exception(std::make_exception_ptr(
             std::runtime_error("Service is shutting down")));

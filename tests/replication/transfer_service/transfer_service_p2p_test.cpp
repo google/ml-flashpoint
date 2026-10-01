@@ -12,24 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <netinet/in.h>
+#include <poll.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <future>
 #include <iostream>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "absl/log/log.h"
 #include "absl/log/log_sink.h"
 #include "absl/log/log_sink_registry.h"
 #include "gtest/gtest.h"
+#include "net_util.h"
+#include "protocol.h"
 #include "transfer_service.h"
 
 namespace ml_flashpoint::replication::transfer_service {
@@ -184,7 +194,8 @@ TEST(TransferServiceP2PTest, ShutdownInterruptsTransfer) {
     LOG(INFO) << "Transfer failed as expected after shutdown.";
   } catch (const std::runtime_error& e) {
     EXPECT_THAT(e.what(), testing::HasSubstr("Service is shutting down"));
-    LOG(INFO) << "Transfer threw exception as expected after shutdown: " << e.what();
+    LOG(INFO) << "Transfer threw exception as expected after shutdown: "
+              << e.what();
   }
 
   // Cleanup file if it was partially created
@@ -511,6 +522,424 @@ TEST(TransferServiceP2PTest, GetNonExistentObjectShouldFail) {
 
   service1.Shutdown();
   service2.Shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for driving a TransferService with a raw client socket, used by the
+// dest_address (SSRF) tests below.
+// ---------------------------------------------------------------------------
+
+// Connects a blocking TCP socket to 127.0.0.1:port. Returns -1 on failure.
+int ConnectToLocalPort(int port) {
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return -1;
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(port);
+  inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+  if (connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+    close(fd);
+    return -1;
+  }
+  return fd;
+}
+
+// Creates a blocking listener on 127.0.0.1 with an ephemeral port. Returns the
+// listener fd and sets `port` to the bound port, or returns -1 on failure.
+int ListenOnLocalEphemeralPort(int* port) {
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return -1;
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_port = 0;
+  inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+  socklen_t addr_len = sizeof(addr);
+  if (bind(fd, reinterpret_cast<sockaddr*>(&addr), addr_len) != 0 ||
+      getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &addr_len) != 0 ||
+      listen(fd, 16) != 0) {
+    close(fd);
+    return -1;
+  }
+  *port = ntohs(addr.sin_port);
+  return fd;
+}
+
+void WriteTestFile(const std::string& path, const std::string& data) {
+  std::ofstream out_file(path);
+  out_file << data;
+  out_file.close();
+}
+
+ObjInfoHeader BuildGetRequest(const std::string& task_id,
+                              const std::string& source_obj_id,
+                              const std::string& dest_obj_id,
+                              const std::string& dest_address) {
+  ObjInfoHeader request;
+  request.type = MessageType::kGetObj;
+  snprintf(request.task_id, sizeof(request.task_id), "%s", task_id.c_str());
+  snprintf(request.source_obj_id, sizeof(request.source_obj_id), "%s",
+           source_obj_id.c_str());
+  snprintf(request.dest_obj_id, sizeof(request.dest_obj_id), "%s",
+           dest_obj_id.c_str());
+  snprintf(request.dest_address, sizeof(request.dest_address), "%s",
+           dest_address.c_str());
+  return request;
+}
+
+// Sends `request` on `client_fd` and returns the immediate response header.
+ObjInfoHeader SendRequestAndRecvResponse(int client_fd,
+                                         const ObjInfoHeader& request) {
+  ObjInfoHeader response;
+  EXPECT_TRUE(SendAll(client_fd, &request, kHeaderSize).ok());
+  EXPECT_TRUE(RecvHeader(client_fd, response).ok());
+  return response;
+}
+
+// Waits for the service to connect to `listener`, then consumes exactly one
+// kRespondToGetObj exchange on the accepted connection: validates the header
+// and payload, and sends back a kAck so the responder completes cleanly.
+void ExpectGetResponseOnListener(int listener,
+                                 const std::string& expected_task_id,
+                                 const std::string& expected_data) {
+  pollfd pfd{listener, POLLIN, 0};
+  ASSERT_GT(poll(&pfd, 1, /*timeout_ms=*/5000), 0)
+      << "Service did not connect back to the requester's address";
+  int response_fd = accept(listener, nullptr, nullptr);
+  ASSERT_GE(response_fd, 0);
+
+  ObjInfoHeader response;
+  ASSERT_TRUE(RecvHeader(response_fd, response).ok());
+  EXPECT_EQ(response.type, MessageType::kRespondToGetObj);
+  EXPECT_EQ(response.obj_size, static_cast<ssize_t>(expected_data.size()));
+  EXPECT_STREQ(response.task_id, expected_task_id.c_str());
+
+  std::string actual_data(expected_data.size(), '\0');
+  ASSERT_TRUE(
+      RecvAll(response_fd, actual_data.data(), expected_data.size()).ok());
+  EXPECT_EQ(actual_data, expected_data);
+
+  ObjInfoHeader data_ack;
+  data_ack.type = MessageType::kAck;
+  EXPECT_TRUE(SendAll(response_fd, &data_ack, kHeaderSize).ok());
+  close(response_fd);
+}
+
+// Serves kRespondToGetObj exchanges arriving on `listener` (over any number
+// of connections) until `expected_count` have been handled or the deadline
+// passes. Returns the task_ids that were served.
+std::vector<std::string> ServeGetResponses(int listener, size_t expected_count,
+                                           const std::string& expected_data) {
+  std::vector<std::string> served_task_ids;
+  std::vector<pollfd> fds = {{listener, POLLIN, 0}};
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(10);
+
+  while (served_task_ids.size() < expected_count &&
+         std::chrono::steady_clock::now() < deadline) {
+    int ret = poll(fds.data(), fds.size(), /*timeout_ms=*/200);
+    if (ret <= 0) continue;
+
+    for (size_t i = 0; i < fds.size(); ++i) {
+      if (!(fds[i].revents & (POLLIN | POLLHUP | POLLERR))) continue;
+      if (fds[i].fd == listener) {
+        int accepted = accept(listener, nullptr, nullptr);
+        if (accepted >= 0) fds.push_back({accepted, POLLIN, 0});
+        continue;
+      }
+      ObjInfoHeader response;
+      if (!RecvHeader(fds[i].fd, response).ok()) {
+        close(fds[i].fd);
+        fds.erase(fds.begin() + i);
+        --i;
+        continue;
+      }
+      EXPECT_EQ(response.type, MessageType::kRespondToGetObj);
+      std::string actual_data(response.obj_size, '\0');
+      EXPECT_TRUE(
+          RecvAll(fds[i].fd, actual_data.data(), response.obj_size).ok());
+      EXPECT_EQ(actual_data, expected_data);
+      ObjInfoHeader data_ack;
+      data_ack.type = MessageType::kAck;
+      EXPECT_TRUE(SendAll(fds[i].fd, &data_ack, kHeaderSize).ok());
+      served_task_ids.push_back(response.task_id);
+    }
+  }
+  for (size_t i = 1; i < fds.size(); ++i) close(fds[i].fd);
+  return served_task_ids;
+}
+
+// ---------------------------------------------------------------------------
+// dest_address (SSRF) tests. A kGetObj request must never be able to direct
+// the responding service to connect to an arbitrary host; the response must
+// always go back to the address the request actually came from.
+// ---------------------------------------------------------------------------
+
+class SpoofedDestHostTest : public ::testing::TestWithParam<std::string> {};
+
+// The host portion of dest_address is ignored regardless of what it contains;
+// the response is delivered to the requester's real address.
+TEST_P(SpoofedDestHostTest, GetResponseGoesBackToRequester) {
+  // Given: a service that owns an object, and a "requester" listener that
+  // stands in for the requesting service's listening port.
+  TransferService service1(std::optional<std::string>("127.0.0.1"));
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const std::string data = "Hello, world!";
+  const std::string obj_id = "my_object_spoofed_dest";
+  WriteTestFile(obj_id, data);
+  int requester_port = 0;
+  int requester_listener = ListenOnLocalEphemeralPort(&requester_port);
+  ASSERT_GE(requester_listener, 0);
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When: a kGetObj names the spoofed host but the requester's real port.
+  const std::string spoofed_dest_address =
+      GetParam() + ":" + std::to_string(requester_port);
+  ObjInfoHeader ack = SendRequestAndRecvResponse(
+      client_fd, BuildGetRequest("spoofed_task", obj_id, obj_id + "_local",
+                                 spoofed_dest_address));
+
+  // Then: the request is accepted and the response arrives at 127.0.0.1.
+  EXPECT_EQ(ack.type, MessageType::kAck);
+  ASSERT_NO_FATAL_FAILURE(
+      ExpectGetResponseOnListener(requester_listener, "spoofed_task", data));
+
+  close(requester_listener);
+  close(client_fd);
+  std::remove(obj_id.c_str());
+  service1.Shutdown();
+}
+
+INSTANTIATE_TEST_SUITE_P(TransferServiceP2PTest, SpoofedDestHostTest,
+                         ::testing::Values("203.0.113.1",      // TEST-NET-3
+                                           "10.0.0.1",         // private
+                                           "169.254.169.254",  // metadata
+                                           "0.0.0.0", "255.255.255.255",
+                                           "not-a-host", "127.0.0.1",
+                                           /*empty host=*/""));
+
+class InvalidDestAddressTest : public ::testing::TestWithParam<std::string> {};
+
+// A dest_address without a usable port is rejected with kError before the
+// request is acknowledged, so no connection attempt is ever made.
+TEST_P(InvalidDestAddressTest, GetRequestIsRejected) {
+  // Given: a service that owns an object.
+  TransferService service1(std::optional<std::string>("127.0.0.1"));
+  int port1 = service1.Initialize();
+  ASSERT_GT(port1, 0);
+  const std::string obj_id = "my_object_invalid_dest";
+  WriteTestFile(obj_id, "data");
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When: a kGetObj is sent with the invalid dest_address.
+  ObjInfoHeader response = SendRequestAndRecvResponse(
+      client_fd,
+      BuildGetRequest("invalid_task", obj_id, obj_id + "_local", GetParam()));
+
+  // Then: the service replies with an error instead of an ACK.
+  EXPECT_EQ(response.type, MessageType::kError);
+  EXPECT_STREQ(response.task_id, "invalid_task");
+
+  close(client_fd);
+  std::remove(obj_id.c_str());
+  service1.Shutdown();
+}
+
+INSTANTIATE_TEST_SUITE_P(TransferServiceP2PTest, InvalidDestAddressTest,
+                         ::testing::Values("", "not-an-address", "127.0.0.1",
+                                           "127.0.0.1:", ":", "127.0.0.1:0",
+                                           "127.0.0.1:65536", "127.0.0.1:-1",
+                                           "127.0.0.1:abc", "127.0.0.1:12ab"));
+
+// A rejected request must not poison the connection: the same client socket
+// can still issue a valid request afterwards.
+TEST(TransferServiceP2PTest, GetRequestRejectionKeepsConnectionUsable) {
+  // Given: a service with an object, a requester listener and a client.
+  TransferService service1(std::optional<std::string>("127.0.0.1"));
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const std::string data = "still alive";
+  const std::string obj_id = "my_object_after_rejection";
+  WriteTestFile(obj_id, data);
+  int requester_port = 0;
+  int requester_listener = ListenOnLocalEphemeralPort(&requester_port);
+  ASSERT_GE(requester_listener, 0);
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When: an invalid request is followed by a valid one on the same socket.
+  ObjInfoHeader first = SendRequestAndRecvResponse(
+      client_fd,
+      BuildGetRequest("bad_task", obj_id, obj_id + "_local", "127.0.0.1:0"));
+  ObjInfoHeader second = SendRequestAndRecvResponse(
+      client_fd,
+      BuildGetRequest("good_task", obj_id, obj_id + "_local",
+                      "127.0.0.1:" + std::to_string(requester_port)));
+
+  // Then: the first is rejected, the second is served normally.
+  EXPECT_EQ(first.type, MessageType::kError);
+  EXPECT_STREQ(first.task_id, "bad_task");
+  EXPECT_EQ(second.type, MessageType::kAck);
+  ASSERT_NO_FATAL_FAILURE(
+      ExpectGetResponseOnListener(requester_listener, "good_task", data));
+
+  close(requester_listener);
+  close(client_fd);
+  std::remove(obj_id.c_str());
+  service1.Shutdown();
+}
+
+// A dest_address that fills the whole buffer without a NUL terminator is
+// handled safely (no over-read, no crash) and rejected.
+TEST(TransferServiceP2PTest, GetRequestWithUnterminatedDestAddressIsRejected) {
+  // Given: a service with an object and a connected client.
+  TransferService service1(std::optional<std::string>("127.0.0.1"));
+  int port1 = service1.Initialize();
+  ASSERT_GT(port1, 0);
+  const std::string obj_id = "my_object_unterminated_dest";
+  WriteTestFile(obj_id, "data");
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When: dest_address is 64 non-NUL bytes.
+  ObjInfoHeader request =
+      BuildGetRequest("unterminated_task", obj_id, obj_id + "_local", "");
+  std::memset(request.dest_address, 'A', sizeof(request.dest_address));
+  ObjInfoHeader response = SendRequestAndRecvResponse(client_fd, request);
+
+  // Then: the request is rejected and the service is still responsive.
+  EXPECT_EQ(response.type, MessageType::kError);
+  EXPECT_STREQ(response.task_id, "unterminated_task");
+  ObjInfoHeader probe = SendRequestAndRecvResponse(
+      client_fd, BuildGetRequest("probe_task", obj_id, obj_id + "_local",
+                                 "not-an-address"));
+  EXPECT_EQ(probe.type, MessageType::kError);
+  EXPECT_STREQ(probe.task_id, "probe_task");
+
+  close(client_fd);
+  std::remove(obj_id.c_str());
+  service1.Shutdown();
+}
+
+// Multiple concurrent clients all spoofing different hosts each get their
+// response delivered to the real requester address.
+TEST(TransferServiceP2PTest, ConcurrentSpoofedGetRequestsAllReturnToRequester) {
+  // Given: a service with an object, a shared requester listener, and
+  // several connected clients.
+  constexpr int kNumClients = 4;
+  TransferService service1(std::optional<std::string>("127.0.0.1"));
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/8,
+                                  /*conn_pool_per_peer=*/kNumClients);
+  ASSERT_GT(port1, 0);
+  const std::string data = "concurrent payload";
+  const std::string obj_id = "my_object_concurrent_spoof";
+  WriteTestFile(obj_id, data);
+  int requester_port = 0;
+  int requester_listener = ListenOnLocalEphemeralPort(&requester_port);
+  ASSERT_GE(requester_listener, 0);
+  std::vector<int> client_fds;
+  for (int i = 0; i < kNumClients; ++i) {
+    client_fds.push_back(ConnectToLocalPort(port1));
+    ASSERT_GE(client_fds.back(), 0);
+  }
+
+  // When: every client sends a spoofed kGetObj at the same time.
+  std::vector<std::string> expected_task_ids;
+  for (int i = 0; i < kNumClients; ++i) {
+    expected_task_ids.push_back("concurrent_task_" + std::to_string(i));
+  }
+  std::vector<std::thread> senders;
+  std::vector<ObjInfoHeader> acks(kNumClients);
+  for (int i = 0; i < kNumClients; ++i) {
+    senders.emplace_back([&, i] {
+      acks[i] = SendRequestAndRecvResponse(
+          client_fds[i],
+          BuildGetRequest(expected_task_ids[i], obj_id, obj_id + "_local",
+                          "10.0.0." + std::to_string(i + 1) + ":" +
+                              std::to_string(requester_port)));
+    });
+  }
+  std::vector<std::string> actual_task_ids =
+      ServeGetResponses(requester_listener, kNumClients, data);
+  for (auto& t : senders) t.join();
+
+  // Then: every request was ACKed and every response reached the requester.
+  for (const auto& ack : acks) EXPECT_EQ(ack.type, MessageType::kAck);
+  std::sort(actual_task_ids.begin(), actual_task_ids.end());
+  EXPECT_EQ(actual_task_ids, expected_task_ids);
+
+  close(requester_listener);
+  for (int fd : client_fds) close(fd);
+  std::remove(obj_id.c_str());
+  service1.Shutdown();
+}
+
+// Happy path through the public API: because the responder connects back to
+// the address the request came from, a Get succeeds even when the requesting
+// service advertises a local address that is not reachable.
+TEST(TransferServiceP2PTest, GetSucceedsWhenRequesterAdvertisesUnreachableIp) {
+  // Given: service1 owns an object; service2 advertises an unroutable IP.
+  TransferService service1(std::optional<std::string>("127.0.0.1"));
+  int port1 = service1.Initialize();
+  ASSERT_GT(port1, 0);
+  TransferService service2(std::optional<std::string>("203.0.113.5"));
+  int port2 = service2.Initialize();
+  ASSERT_GT(port2, 0);
+  const std::string data = "reachable after all";
+  const std::string obj_id = "my_object_unreachable_requester";
+  const std::string dest_obj_id = obj_id + "_local";
+  WriteTestFile(obj_id, data);
+
+  // When: service2 requests the object from service1 over loopback.
+  auto get_future = service2.AsyncGet(
+      obj_id, "127.0.0.1:" + std::to_string(port1), dest_obj_id);
+  TransferResult actual_result = get_future.get();
+
+  // Then: the transfer completes and the data is correct.
+  EXPECT_TRUE(actual_result.success);
+  VerifyFileContentAndRemove(dest_obj_id, data);
+
+  std::remove(obj_id.c_str());
+  service1.Shutdown();
+  service2.Shutdown();
+}
+
+// Shutting down while a remotely triggered RespondToGetTask is still trying
+// to connect back must not crash (such tasks have no promise to fail).
+TEST(TransferServiceP2PTest, ShutdownWithInFlightRespondToGetTaskIsSafe) {
+  // Given: a service with an object, and a requester port nobody listens on.
+  TransferService service1(std::optional<std::string>("127.0.0.1"));
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const std::string obj_id = "my_object_shutdown_in_flight";
+  WriteTestFile(obj_id, "data");
+  int closed_port = 0;
+  int tmp_listener = ListenOnLocalEphemeralPort(&closed_port);
+  ASSERT_GE(tmp_listener, 0);
+  close(tmp_listener);
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When: a GET is accepted (so a RespondToGetTask is queued and starts
+  // retrying the connection) and the service is shut down immediately.
+  ObjInfoHeader ack = SendRequestAndRecvResponse(
+      client_fd, BuildGetRequest("in_flight_task", obj_id, obj_id + "_local",
+                                 "127.0.0.1:" + std::to_string(closed_port)));
+  EXPECT_EQ(ack.type, MessageType::kAck);
+  service1.Shutdown();
+
+  // Then: the process is still alive and a new service can be started.
+  TransferService service2(std::optional<std::string>("127.0.0.1"));
+  EXPECT_GT(service2.Initialize(), 0);
+  service2.Shutdown();
+
+  close(client_fd);
+  std::remove(obj_id.c_str());
 }
 
 TEST(TransferServiceP2PTest, PutCreatesTemporaryFileAndRenames) {

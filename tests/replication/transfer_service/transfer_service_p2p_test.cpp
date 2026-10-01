@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <netinet/in.h>
+#include <poll.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include <cstdio>
@@ -30,6 +34,8 @@
 #include "absl/log/log_sink.h"
 #include "absl/log/log_sink_registry.h"
 #include "gtest/gtest.h"
+#include "net_util.h"
+#include "protocol.h"
 #include "transfer_service.h"
 
 namespace ml_flashpoint::replication::transfer_service {
@@ -184,7 +190,8 @@ TEST(TransferServiceP2PTest, ShutdownInterruptsTransfer) {
     LOG(INFO) << "Transfer failed as expected after shutdown.";
   } catch (const std::runtime_error& e) {
     EXPECT_THAT(e.what(), testing::HasSubstr("Service is shutting down"));
-    LOG(INFO) << "Transfer threw exception as expected after shutdown: " << e.what();
+    LOG(INFO) << "Transfer threw exception as expected after shutdown: "
+              << e.what();
   }
 
   // Cleanup file if it was partially created
@@ -511,6 +518,155 @@ TEST(TransferServiceP2PTest, GetNonExistentObjectShouldFail) {
 
   service1.Shutdown();
   service2.Shutdown();
+}
+
+// Connects a blocking TCP socket to 127.0.0.1:port. Returns -1 on failure.
+int ConnectToLocalPort(int port) {
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return -1;
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(port);
+  inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+  if (connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+    close(fd);
+    return -1;
+  }
+  return fd;
+}
+
+// Creates a blocking listener on 127.0.0.1 with an ephemeral port. Returns the
+// listener fd and sets `port` to the bound port, or returns -1 on failure.
+int ListenOnLocalEphemeralPort(int* port) {
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return -1;
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_port = 0;
+  inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+  socklen_t addr_len = sizeof(addr);
+  if (bind(fd, reinterpret_cast<sockaddr*>(&addr), addr_len) != 0 ||
+      getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &addr_len) != 0 ||
+      listen(fd, 1) != 0) {
+    close(fd);
+    return -1;
+  }
+  *port = ntohs(addr.sin_port);
+  return fd;
+}
+
+// SSRF regression test: a kGetObj request must not be able to
+// direct the responding service to connect to an arbitrary host. The response
+// must always go back to the address the request actually came from.
+TEST(TransferServiceP2PTest, GetResponseIgnoresSpoofedDestAddressHost) {
+  // Given: a service that owns an object, and a "requester" listener that
+  // stands in for the requesting service's listening port.
+  TransferService service1(std::optional<std::string>("127.0.0.1"));
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+
+  std::string data = "Hello, world!";
+  std::string obj_id = "my_object_spoofed_dest";
+  std::ofstream out_file(obj_id);
+  out_file << data;
+  out_file.close();
+
+  int requester_port = 0;
+  int requester_listener = ListenOnLocalEphemeralPort(&requester_port);
+  ASSERT_GE(requester_listener, 0);
+
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When: a kGetObj is sent whose dest_address names an unroutable host
+  // (TEST-NET-3) but the requester's real listening port.
+  ObjInfoHeader request;
+  request.type = MessageType::kGetObj;
+  snprintf(request.task_id, sizeof(request.task_id), "%s", "spoofed_task");
+  snprintf(request.source_obj_id, sizeof(request.source_obj_id), "%s",
+           obj_id.c_str());
+  snprintf(request.dest_obj_id, sizeof(request.dest_obj_id), "%s",
+           "my_object_spoofed_dest_local");
+  snprintf(request.dest_address, sizeof(request.dest_address), "203.0.113.1:%d",
+           requester_port);
+  ASSERT_TRUE(SendAll(client_fd, &request, kHeaderSize).ok());
+
+  ObjInfoHeader ack;
+  ASSERT_TRUE(RecvHeader(client_fd, ack).ok());
+  EXPECT_EQ(ack.type, MessageType::kAck);
+
+  // Then: the response connection arrives at the requester's real address,
+  // not at the spoofed host.
+  pollfd pfd{requester_listener, POLLIN, 0};
+  ASSERT_GT(poll(&pfd, 1, /*timeout_ms=*/5000), 0)
+      << "Service did not connect back to the requester's address";
+  sockaddr_in responder_addr{};
+  socklen_t responder_addr_len = sizeof(responder_addr);
+  int response_fd =
+      accept(requester_listener, reinterpret_cast<sockaddr*>(&responder_addr),
+             &responder_addr_len);
+  ASSERT_GE(response_fd, 0);
+
+  ObjInfoHeader response;
+  ASSERT_TRUE(RecvHeader(response_fd, response).ok());
+  EXPECT_EQ(response.type, MessageType::kRespondToGetObj);
+  EXPECT_EQ(response.obj_size, static_cast<ssize_t>(data.size()));
+  EXPECT_STREQ(response.task_id, "spoofed_task");
+
+  std::string received(data.size(), '\0');
+  ASSERT_TRUE(RecvAll(response_fd, received.data(), data.size()).ok());
+  EXPECT_EQ(received, data);
+
+  // Let the responder complete cleanly.
+  ObjInfoHeader data_ack;
+  data_ack.type = MessageType::kAck;
+  EXPECT_TRUE(SendAll(response_fd, &data_ack, kHeaderSize).ok());
+
+  close(response_fd);
+  close(requester_listener);
+  close(client_fd);
+  std::remove(obj_id.c_str());
+  service1.Shutdown();
+}
+
+// SSRF regression test: a kGetObj request with a malformed
+// dest_address is rejected before any connection attempt is made.
+TEST(TransferServiceP2PTest, GetRequestWithMalformedDestAddressIsRejected) {
+  // Given: a service that owns an object.
+  TransferService service1(std::optional<std::string>("127.0.0.1"));
+  int port1 = service1.Initialize();
+  ASSERT_GT(port1, 0);
+
+  std::string obj_id = "my_object_malformed_dest";
+  std::ofstream out_file(obj_id);
+  out_file << "data";
+  out_file.close();
+
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When: a kGetObj is sent with a dest_address that has no port.
+  ObjInfoHeader request;
+  request.type = MessageType::kGetObj;
+  snprintf(request.task_id, sizeof(request.task_id), "%s", "malformed_task");
+  snprintf(request.source_obj_id, sizeof(request.source_obj_id), "%s",
+           obj_id.c_str());
+  snprintf(request.dest_obj_id, sizeof(request.dest_obj_id), "%s",
+           "my_object_malformed_dest_local");
+  snprintf(request.dest_address, sizeof(request.dest_address), "%s",
+           "not-an-address");
+  ASSERT_TRUE(SendAll(client_fd, &request, kHeaderSize).ok());
+
+  // Then: the service replies with an error instead of an ACK.
+  ObjInfoHeader response;
+  ASSERT_TRUE(RecvHeader(client_fd, response).ok());
+  EXPECT_EQ(response.type, MessageType::kError);
+  EXPECT_STREQ(response.task_id, "malformed_task");
+
+  close(client_fd);
+  std::remove(obj_id.c_str());
+  service1.Shutdown();
 }
 
 TEST(TransferServiceP2PTest, PutCreatesTemporaryFileAndRenames) {

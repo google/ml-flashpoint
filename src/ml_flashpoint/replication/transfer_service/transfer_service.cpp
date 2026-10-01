@@ -39,6 +39,9 @@
 #include "absl/log/log.h"
 #include "absl/log/log_sink_registry.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/numbers.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/time/time.h"
 #include "buffer_object.h"
@@ -57,6 +60,46 @@ constexpr absl::Duration kThreadJoinTimeout = absl::Seconds(1);
 constexpr std::string_view kTempFileSuffix = ".tmp";
 
 static std::once_flag init_flag;
+
+namespace {
+
+// Builds the "host:port" address a kGetObj response should be sent to.
+//
+// The host is always taken from the actual peer of `client_fd`, never from the
+// request header, so a remote client cannot direct this service to connect to
+// (and send file contents to) an arbitrary address. Only the port is read from
+// `requested_dest_address` ("host:port"), as the requester's listening port
+// cannot be inferred from the incoming connection.
+absl::StatusOr<std::string> ResolveGetCallbackAddress(
+    int client_fd, const char* requested_dest_address) {
+  sockaddr_in peer_addr{};
+  socklen_t peer_addr_len = sizeof(peer_addr);
+  if (getpeername(client_fd, reinterpret_cast<sockaddr*>(&peer_addr),
+                  &peer_addr_len) != 0) {
+    return absl::ErrnoToStatus(errno, "Failed to get requester address");
+  }
+  char peer_ip[INET_ADDRSTRLEN];
+  if (inet_ntop(AF_INET, &peer_addr.sin_addr, peer_ip, sizeof(peer_ip)) ==
+      nullptr) {
+    return absl::ErrnoToStatus(errno, "Failed to format requester address");
+  }
+
+  std::string_view requested(requested_dest_address);
+  size_t colon_pos = requested.rfind(':');
+  if (colon_pos == std::string_view::npos) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Invalid dest_address format: ", requested));
+  }
+  int port = 0;
+  if (!absl::SimpleAtoi(requested.substr(colon_pos + 1), &port) || port <= 0 ||
+      port > 65535) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Invalid dest_address port: ", requested));
+  }
+  return absl::StrFormat("%s:%d", peer_ip, port);
+}
+
+}  // namespace
 
 TransferService::TransferService(
     const std::optional<std::string>& local_ip_address)
@@ -987,6 +1030,17 @@ void TransferService::HandleGetObjRequest(int client_fd,
     return;
   }
 
+  // Security: never trust the host in the requester-supplied `dest_address`
+  // (SSRF). Only connect back to the peer that actually sent this request; the
+  // header is used solely for the port it is listening on.
+  auto dest_address = ResolveGetCallbackAddress(client_fd, header.dest_address);
+  if (!dest_address.ok()) {
+    LOG(ERROR) << "Rejecting GET request for " << header.source_obj_id << ": "
+               << dest_address.status();
+    SendErrorResponse(client_fd, header.task_id, header.source_obj_id);
+    return;
+  }
+
   // Send ACK to confirm request is accepted, before async data transfer
   ObjInfoHeader ack_header;
   ack_header.type = MessageType::kAck;
@@ -1011,7 +1065,7 @@ void TransferService::HandleGetObjRequest(int client_fd,
 
   auto task = std::make_unique<RespondToGetTask>(
       header.task_id, header.source_obj_id, header.dest_obj_id,
-      header.source_address, header.dest_address, metric_container);
+      header.source_address, *dest_address, metric_container);
 
   {
     std::lock_guard<std::mutex> lock(pending_tasks_mutex_);

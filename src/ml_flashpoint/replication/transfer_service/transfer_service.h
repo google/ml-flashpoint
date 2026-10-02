@@ -37,6 +37,7 @@
 #include <shared_mutex>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "absl/status/statusor.h"
 #include "connection_pool.h"
@@ -66,7 +67,9 @@ class TransferService final {
   //
   // Args:
   //   listen_port: The port to listen on. If 0, an ephemeral port is chosen.
-  //   threads: The number of worker threads in the thread pool.
+  //   threads: The number of worker threads in *each* of the two thread pools
+  //            (outbound tasks and inbound epoll events), i.e. 2 * threads
+  //            workers in total.
   //   conn_pool_per_peer: The size of the connection pool for each peer.
   //   global_rank: The global rank of the process.
   //
@@ -161,8 +164,13 @@ class TransferService final {
   std::string local_address_;  // Local address used in data transfer.
   int global_rank_ = -1;
 
-  std::unique_ptr<ThreadPool> thread_pool_;
-  std::unique_ptr<ThreadPool> epoll_thread_pool_;
+  // Two separate pools are required. Outbound tasks (Put/Get) block a worker
+  // for the entire transfer, including waiting for the remote peer to respond.
+  // The peer can only respond if *its* inbound work is being serviced, so if
+  // inbound epoll work shared a pool with outbound tasks, two peers that
+  // saturate their pools with Gets to each other would deadlock.
+  std::unique_ptr<ThreadPool> thread_pool_;        // Outbound tasks.
+  std::unique_ptr<ThreadPool> epoll_thread_pool_;  // Inbound epoll events.
   std::thread epoll_thread_;
   std::thread task_queue_thread_;
   TaskQueue<TaskUniquePtr> task_queue_;
@@ -172,6 +180,12 @@ class TransferService final {
 
   std::map<std::string, std::shared_ptr<ConnectionPool>> connection_pools_;
   mutable std::shared_mutex connection_pools_mutex_;  // Guard connection_pools_
+
+  // Accepted (inbound) client sockets. Tracked so that Shutdown() can unblock
+  // workers that are blocked on one of them (e.g. a RespondToGetTask whose
+  // peer stopped reading) and so the sockets are closed on shutdown.
+  std::unordered_set<int> client_fds_;
+  std::mutex client_fds_mutex_;  // Guard client_fds_
 
   struct PendingTaskContext {
     std::shared_ptr<std::promise<TransferResult>> promise;

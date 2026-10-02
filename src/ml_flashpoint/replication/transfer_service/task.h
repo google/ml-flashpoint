@@ -163,6 +163,14 @@ class GetTask : public Task {
   std::shared_ptr<GetTaskMetricContainer> metric_container_;
 };
 
+// Serves a kGetObj request by streaming the object back over the connection
+// the request arrived on.
+//
+// `client_fd` is NOT owned by the task: it belongs to the epoll loop. The task
+// must therefore be executed synchronously from within ProcessIncomingData for
+// that fd (as HandleGetObjRequest does), i.e. while the fd is still disarmed
+// under EPOLLONESHOT and before any RemoveClient() can close and recycle it.
+// Never enqueue this task for deferred execution.
 class RespondToGetTask : public Task {
  public:
   RespondToGetTask(

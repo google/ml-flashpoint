@@ -1077,6 +1077,16 @@ std::shared_ptr<ConnectionPool> TransferService::GetOrCreateConnectionPool(
     return it->second;  // Double check
   }
 
+  // Shutdown() sets running_ to false before it shuts down and clears the
+  // pools. ThreadPool::stop() then runs every task that is still queued. If one
+  // of those tasks created a pool here, nothing would ever shut it down, and a
+  // task blocked on a peer that never answers would block Shutdown() forever.
+  if (!running_.load()) {
+    LOG(WARNING) << "Not creating connection pool for " << peer_addr
+                 << ": service is shutting down";
+    return nullptr;
+  }
+
   // Pool doesn't exist, create it dynamically
   auto new_pool = std::make_shared<ConnectionPool>(peer_host, peer_port,
                                                    conn_pool_size_per_peer_);

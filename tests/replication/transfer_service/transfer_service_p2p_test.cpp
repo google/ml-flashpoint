@@ -2137,5 +2137,43 @@ TEST(TransferServiceP2PTest, BidirectionalConcurrentGetAndPut) {
   service2.Shutdown();
 }
 
+// A peer whose kernel completes TCP handshakes but whose service never answers
+// (for example, a wedged rank) must not make Shutdown() hang. Shutdown() runs
+// the tasks that are still queued behind the workers, so those tasks must fail
+// fast instead of opening new connections to that peer.
+TEST(TransferServiceP2PTest,
+     ShutdownWithQueuedTasksAgainstSilentPeerCompletes) {
+  // Given
+  int silent_port = 0;
+  int silent_listener = ListenOnLocalEphemeralPort(&silent_port);
+  ASSERT_GE(silent_listener, 0);
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/2,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const std::string silent_addr = "127.0.0.1:" + std::to_string(silent_port);
+  constexpr int kNumTasks = 6;  // More than the 2 workers, so 4 stay queued.
+  std::vector<std::future<TransferResult>> futures;
+  for (int i = 0; i < kNumTasks; ++i) {
+    futures.push_back(service1.AsyncGet("silent_source_obj", silent_addr,
+                                        "silent_dest_" + std::to_string(i)));
+  }
+  // Let the first task connect and block waiting for a reply that never comes.
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+  // When
+  const bool actual_completed = ShutdownCompletesWithin(
+      service1, std::chrono::seconds(10), &silent_listener);
+
+  // Then
+  EXPECT_TRUE(actual_completed)
+      << "Shutdown() hung running queued tasks against a silent peer";
+  for (auto& future : futures) {
+    ASSERT_TRUE(FutureReadyWithin(future, std::chrono::seconds(5)));
+    EXPECT_THROW(future.get(), std::runtime_error);
+  }
+  if (silent_listener >= 0) close(silent_listener);
+}
+
 }  // namespace
 }  // namespace ml_flashpoint::replication::transfer_service

@@ -215,11 +215,11 @@ void TransferService::Shutdown() {
     epoll_thread_.join();
   }
 
-  // 6. Unblock any worker that is blocked on an accepted client socket (e.g. a
-  // RespondToGetTask whose peer stopped reading, or a kPutObj receive whose
-  // sender stalled). shutdown() makes their pending send/recv fail so the
-  // thread pools below can be joined. The fds are closed in step 9, once no
-  // worker can be using them anymore.
+  // 6. Unblock workers that are stuck on an accepted client socket, such as a
+  // RespondToGetTask whose peer stopped reading or a kPutObj receive whose
+  // sender stalled. shutdown() makes their pending send/recv fail, so the
+  // thread pools below can be joined. Step 9 closes the fds, after all
+  // workers have stopped.
   {
     std::lock_guard<std::mutex> lock(client_fds_mutex_);
     for (int fd : client_fds_) {
@@ -575,8 +575,8 @@ void TransferService::HandleNewConnection() {
       continue;
     }
 
-    // Register the client before arming it in epoll, so that a RemoveClient()
-    // triggered by an early event cannot race ahead of the registration.
+    // Register the client before arming it in epoll. Otherwise an early event
+    // could trigger RemoveClient() before the fd is in the registry.
     {
       std::lock_guard<std::mutex> lock(client_fds_mutex_);
       client_fds_.insert(conn_fd);
@@ -604,9 +604,9 @@ void TransferService::RemoveClient(int client_fd) {
   if (client_fd < 0) return;
   {
     // Only the caller that removes the fd from the registry closes it. This
-    // makes RemoveClient idempotent and prevents a double close (and closing
-    // an unrelated, reused fd) when Shutdown() and a worker both tear down
-    // the same connection.
+    // makes RemoveClient idempotent. Without it, Shutdown() and a worker could
+    // both close the same fd, and the second close could hit an unrelated fd
+    // that reused the number.
     std::lock_guard<std::mutex> lock(client_fds_mutex_);
     if (client_fds_.erase(client_fd) == 0) return;
   }
@@ -642,9 +642,9 @@ void TransferService::ProcessIncomingData(int client_fd) {
         HandleGetObjRequest(client_fd, header);
         break;
       case MessageType::kRespondToGetObj:
-        // Responses to kGetObj are read by ExecuteGetTask on the connection
-        // that sent the request. An unsolicited one arriving on the listener
-        // is a protocol violation; do not write its payload to disk.
+        // ExecuteGetTask reads kGetObj responses on the connection that sent
+        // the request. A response arriving on the listener is a protocol
+        // violation. Do not write its payload to disk.
         LOG(ERROR) << "Worker fd=" << client_fd
                    << ": Unsolicited kRespondToGetObj received for task "
                    << header.task_id << ". Closing connection.";
@@ -661,15 +661,15 @@ void TransferService::ProcessIncomingData(int client_fd) {
         ReportResult(header.task_id, false, "Received error message");
         break;
       default:
-        // The stream is desynced if we cannot interpret the header.
+        // We cannot parse this header, so the stream is out of sync.
         LOG(ERROR) << "Worker fd=" << client_fd << ": Unknown message type "
                    << static_cast<int>(header.type) << ". Closing connection.";
         keep_connection = false;
         break;
     }
   } catch (const std::exception& e) {
-    // A handler that throws leaves the connection in an unknown state; close
-    // it rather than leaving it registered in epoll but never re-armed.
+    // A handler that throws leaves the connection in an unknown state. Close
+    // it; otherwise it would stay registered in epoll but never be re-armed.
     LOG(ERROR) << "Worker fd=" << client_fd
                << ": Exception while handling message type="
                << static_cast<int>(header.type) << ": " << e.what();
@@ -792,9 +792,10 @@ void TransferService::HandleDataReceive(int client_fd,
   } catch (const std::exception& e) {
     LOG(ERROR) << "Failed to create buffer object for " << header.dest_obj_id
                << ": " << e.what();
-    // The sender is already streaming obj_size bytes on this connection. Drain
-    // them so the connection stays usable (pooled connections are never
-    // replaced), then tell the sender we failed so it does not wait for an ACK.
+    // The sender is already streaming obj_size bytes on this connection. Read
+    // and discard them so the connection stays in sync (the pool never
+    // replaces a closed connection). Then send kError so the sender does not
+    // wait for an ACK.
     absl::Status drain_status = RecvAndDiscard(client_fd, header.obj_size);
     if (!drain_status.ok()) {
       LOG(ERROR) << "Failed to drain undeliverable payload for "
@@ -905,14 +906,14 @@ void TransferService::ExecuteGetTask(GetTask* task) {
 
   switch (resp_header.type) {
     case MessageType::kRespondToGetObj: {
-      // Only obj_size is new information. The task already knows its own id
-      // and destination, so neither is taken from the peer: a mismatched
-      // task_id would otherwise leave this task pending forever, and a
-      // different dest_obj_id would let the peer choose where we write.
+      // Use the task's own task_id and dest_obj_id, not the peer's. Only
+      // obj_size is new information. If we used the peer's task_id, a
+      // mismatch would leave this task pending forever. If we used the peer's
+      // dest_obj_id, the peer could choose where we write.
       if (task->GetTaskId() != resp_header.task_id) {
         LOG(WARNING) << "GetTask " << task->GetTaskId()
-                     << ": response carries task_id '" << resp_header.task_id
-                     << "'; completing the local task regardless.";
+                     << ": response has task_id '" << resp_header.task_id
+                     << "'; ignoring it.";
       }
       ObjInfoHeader local_header = resp_header;
       snprintf(local_header.task_id, sizeof(local_header.task_id), "%s",
@@ -922,11 +923,11 @@ void TransferService::ExecuteGetTask(GetTask* task) {
       try {
         HandleDataReceive(conn.fd(), local_header, true);
       } catch (const std::exception& e) {
-        // HandleDataReceive reports expected failures (e.g. the destination
-        // file cannot be created) itself and keeps the connection aligned.
-        // This is a last-resort net: an exception escaping a worker thread is
-        // swallowed by the thread pool, which would leave the caller's future
-        // pending forever.
+        // HandleDataReceive handles expected failures itself (for example,
+        // the destination file cannot be created) and keeps the connection in
+        // sync. This catch is a last resort: the thread pool swallows any
+        // exception that escapes a worker, which would leave the caller's
+        // future pending forever.
         LOG(ERROR) << "GetTask " << task->GetTaskId()
                    << " failed while receiving data: " << e.what();
         ReportResult(task->GetTaskId(), false,
@@ -962,9 +963,10 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
   }
   metric_container.connection_acquired_time = absl::Now();
 
-  // Open file as buffer object. The constructor throws if the object cannot be
-  // opened (unreadable, a directory, or an empty file), so the requester must
-  // be told explicitly; it is blocked waiting for our response on this socket.
+  // Open the file as a buffer object. The constructor throws if the object
+  // cannot be opened (unreadable, a directory, or an empty file). The
+  // requester is blocked waiting for our response on this socket, so we must
+  // tell it about the failure.
   std::optional<BufferObject> buffer_obj;
   try {
     buffer_obj.emplace(task->GetSourceObjId());
@@ -1093,9 +1095,9 @@ void TransferService::HandleGetObjRequest(int client_fd,
   LOG(INFO) << "Handling get object request for requested_obj_id: "
             << header.source_obj_id;
 
-  // Non-throwing overload: stat errors other than "not found" (e.g. a name
-  // that is too long, or an unreadable path component) must also produce a
-  // kError for the requester rather than an exception that drops the socket.
+  // Use the non-throwing overload. A stat error other than "not found" (for
+  // example, a name that is too long) must also send kError to the requester
+  // instead of throwing and dropping the socket.
   std::error_code ec;
   if (!std::filesystem::exists(header.source_obj_id, ec)) {
     LOG(ERROR) << "Object not found: " << header.source_obj_id

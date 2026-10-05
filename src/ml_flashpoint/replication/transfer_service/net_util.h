@@ -54,10 +54,10 @@ absl::Status RecvAll(int sockfd, void* data_ptr, ssize_t data_size);
 
 // Receives and discards exactly data_size bytes from the socket.
 //
-// Used when a receiver cannot store a payload that the peer is already
-// sending (e.g. the destination file cannot be created): draining it keeps the
-// connection's message stream aligned so the connection stays usable, which
-// matters because pooled connections are never replaced once closed.
+// Call this when the peer is already sending a payload that the receiver
+// cannot store (for example, the destination file cannot be created). Reading
+// the payload keeps the message stream in sync, so the connection can be
+// reused. This matters because the pool never replaces a closed connection.
 //
 // Args:
 //   sockfd: The socket file descriptor.

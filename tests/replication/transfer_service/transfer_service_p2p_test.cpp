@@ -935,8 +935,8 @@ TEST(TransferServiceP2PTest, TimestampsAreRecorded) {
 // ---------------------------------------------------------------------------
 
 // Connects a blocking TCP socket to 127.0.0.1:port. Returns -1 on failure.
-// A positive `rcvbuf_bytes` shrinks SO_RCVBUF before connecting, so that a
-// peer writing to this socket fills the pipe quickly and blocks in send().
+// A positive `rcvbuf_bytes` shrinks SO_RCVBUF before connecting, so a peer
+// that writes to this socket fills the buffers quickly and blocks in send().
 int ConnectToLocalPort(int port, int rcvbuf_bytes = 0) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
@@ -1005,9 +1005,9 @@ ObjInfoHeader SendRequestAndRecvResponse(int client_fd,
   return response;
 }
 
-// Reads the payload announced by a kRespondToGetObj `response` from `fd` and
-// acknowledges it so the responder completes. Returns the payload, or an empty
-// string if `response` is not a kRespondToGetObj with a payload.
+// Reads the payload that a kRespondToGetObj `response` announced from `fd`,
+// then sends kAck so the responder can finish. Returns the payload, or an
+// empty string if `response` is not a kRespondToGetObj with a payload.
 std::string RecvGetPayloadAndAck(int fd, const ObjInfoHeader& response) {
   if (response.type != MessageType::kRespondToGetObj ||
       response.obj_size <= 0) {
@@ -1028,7 +1028,7 @@ bool ListenerStaysIdle(int listener, int timeout_ms) {
 }
 
 // Returns true if the peer closes `fd` (EOF or reset) within `timeout_ms`.
-// Any data still arriving before the close is drained and ignored.
+// Data that arrives before the close is read and ignored.
 bool PeerClosed(int fd, int timeout_ms) {
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
@@ -1044,10 +1044,10 @@ bool PeerClosed(int fd, int timeout_ms) {
   }
 }
 
-// Runs `service.Shutdown()` on a helper thread and returns true if it completes
-// within `timeout`. If it does not, `*blocking_fd` is closed (and set to -1) to
-// release whichever worker Shutdown() is stuck behind, so that the thread can
-// still be joined and the test fails cleanly instead of hanging.
+// Runs `service.Shutdown()` on a helper thread and returns true if it finishes
+// within `timeout`. If it does not, closes `*blocking_fd` (and sets it to -1)
+// to release the worker that Shutdown() is waiting for, so the thread can be
+// joined and the test fails instead of hanging.
 bool ShutdownCompletesWithin(TransferService& service,
                              std::chrono::milliseconds timeout,
                              int* blocking_fd) {
@@ -1067,9 +1067,9 @@ bool ShutdownCompletesWithin(TransferService& service,
   return completed;
 }
 
-// Reads a header from `fd` if one starts arriving within `timeout_ms`. Returns
-// false on timeout or read failure, so that a stalled or crashed worker fails
-// the test instead of hanging it.
+// Reads a header from `fd` if one starts to arrive within `timeout_ms`.
+// Returns false on timeout or read failure, so a stalled or crashed worker
+// fails the test instead of hanging it.
 bool RecvHeaderWithin(int fd, ObjInfoHeader* header, int timeout_ms) {
   pollfd pfd{fd, POLLIN, 0};
   if (poll(&pfd, 1, timeout_ms) <= 0) return false;
@@ -1095,9 +1095,9 @@ ObjInfoHeader BuildPutRequest(const std::string& task_id,
   return request;
 }
 
-// Stands in for a misbehaving peer: accepts one connection, reads one kGetObj
-// request and answers it with whatever `respond` writes to the socket. Every
-// wait is bounded so the helper thread always terminates.
+// A fake peer. It accepts one connection, reads one kGetObj request, and
+// answers with whatever `respond` writes to the socket. Every wait has a
+// timeout, so the helper thread always exits.
 class FakeGetResponder {
  public:
   explicit FakeGetResponder(std::function<void(int fd)> respond)
@@ -1210,9 +1210,9 @@ TEST(TransferServiceP2PTest, GetObjDoesNotConnectToDestAddress) {
 
 class SpoofedDestAddressTest : public ::testing::TestWithParam<std::string> {};
 
-// Whatever dest_address a kGetObj request carries (other hosts, metadata IP,
-// garbage, invalid or missing port), the object is streamed back over the
-// request's own socket and no outbound connection is ever attempted.
+// The service sends the object back on the request's own socket and never
+// opens an outbound connection, whatever dest_address the kGetObj request
+// carries (other hosts, metadata IP, garbage, invalid or missing port).
 TEST_P(SpoofedDestAddressTest, GetResponseGoesBackOnRequestSocket) {
   // Given
   TransferService service1("127.0.0.1");
@@ -1227,8 +1227,8 @@ TEST_P(SpoofedDestAddressTest, GetResponseGoesBackOnRequestSocket) {
   ASSERT_GE(target_listener_fd, 0);
   int client_fd = ConnectToLocalPort(port1);
   ASSERT_GE(client_fd, 0);
-  // "{port}" stands in for a real, listening port so that a regression to
-  // connecting back would be observable on target_listener_fd.
+  // "{port}" is replaced with a real listening port, so if the service ever
+  // connects back again, target_listener_fd will see it.
   std::string dest_address = GetParam();
   const size_t placeholder = dest_address.find("{port}");
   if (placeholder != std::string::npos) {
@@ -1263,8 +1263,8 @@ INSTANTIATE_TEST_SUITE_P(
                       "not-a-host:{port}", "127.0.0.1:0", "127.0.0.1:65536",
                       "127.0.0.1:abc", ":", ""));
 
-// Address fields that fill their whole buffer without a NUL terminator are
-// handled safely (no over-read) and the request is served like any other.
+// Address fields that fill their whole buffer with no NUL terminator do not
+// cause an over-read, and the request is served like any other.
 TEST(TransferServiceP2PTest, GetRequestWithUnterminatedAddressFieldsIsServed) {
   // Given
   TransferService service1("127.0.0.1");
@@ -1296,9 +1296,9 @@ TEST(TransferServiceP2PTest, GetRequestWithUnterminatedAddressFieldsIsServed) {
   service1.Shutdown();
 }
 
-// An object that exists but cannot be opened (empty file, directory) yields a
-// kError on the request socket rather than an exception that would orphan the
-// connection and hang the requester, and the socket stays usable afterwards.
+// An object that exists but cannot be opened (empty file, directory) gets a
+// kError on the request socket. Before, the exception orphaned the connection
+// and hung the requester. The socket stays usable afterwards.
 TEST(TransferServiceP2PTest,
      GetRequestForUnopenableObjectReturnsErrorOnSameSocket) {
   // Given
@@ -1345,8 +1345,8 @@ TEST(TransferServiceP2PTest,
   service1.Shutdown();
 }
 
-// An inbound kRespondToGetObj that no GetTask is waiting for must not act as
-// an arbitrary file write: the connection is closed and nothing is written.
+// An inbound kRespondToGetObj that no GetTask is waiting for must not write a
+// file. The service closes the connection and writes nothing.
 TEST(TransferServiceP2PTest,
      UnsolicitedRespondToGetObjClosesConnectionWithoutWritingFile) {
   // Given
@@ -1380,7 +1380,7 @@ TEST(TransferServiceP2PTest,
   service1.Shutdown();
 }
 
-// A header with an unknown message type leaves the stream desynchronised, so
+// A header with an unknown message type leaves the stream out of sync, so
 // the service closes the connection instead of guessing.
 TEST(TransferServiceP2PTest, UnknownMessageTypeClosesConnection) {
   // Given
@@ -1404,9 +1404,9 @@ TEST(TransferServiceP2PTest, UnknownMessageTypeClosesConnection) {
   service1.Shutdown();
 }
 
-// Shutdown() must neither crash on the promise-less RespondToGetTask nor hang
-// behind a responder that is blocked waiting for the requester's final ACK on
-// an accepted socket.
+// Shutdown() must not crash on a RespondToGetTask (which has no promise) and
+// must not hang while a responder waits for the requester's final ACK on an
+// accepted socket.
 TEST(TransferServiceP2PTest, ShutdownWhileResponderWaitsForAckIsSafe) {
   // Given
   TransferService service1("127.0.0.1");
@@ -1425,7 +1425,7 @@ TEST(TransferServiceP2PTest, ShutdownWhileResponderWaitsForAckIsSafe) {
   std::string actual_data(actual_response.obj_size, '\0');
   ASSERT_TRUE(
       RecvAll(client_fd, actual_data.data(), actual_response.obj_size).ok());
-  // Deliberately no ACK: the responder is now blocked in RecvHeader.
+  // No ACK on purpose: the responder is now blocked in RecvHeader.
 
   // When
   const bool actual_completed =
@@ -1445,8 +1445,9 @@ TEST(TransferServiceP2PTest, ShutdownWhileResponderWaitsForAckIsSafe) {
   std::remove(source_obj_id.c_str());
 }
 
-// Shutdown() must not hang behind a responder whose peer has stopped reading,
-// i.e. a worker blocked in send() on an accepted socket with a full buffer.
+// Shutdown() must not hang while a responder's peer has stopped reading, that
+// is, while a worker is blocked in send() on an accepted socket with a full
+// buffer.
 TEST(TransferServiceP2PTest, ShutdownWhilePeerIsNotReadingGetResponseIsSafe) {
   // Given
   TransferService service1("127.0.0.1");
@@ -1462,8 +1463,8 @@ TEST(TransferServiceP2PTest, ShutdownWhilePeerIsNotReadingGetResponseIsSafe) {
   ObjInfoHeader request = BuildGetRequest("not_reading_task", source_obj_id,
                                           "shutdown_not_reading_dest_obj", "");
   ASSERT_TRUE(SendAll(client_fd, &request, kHeaderSize).ok());
-  // Wait until the response starts arriving, then let the responder fill the
-  // socket buffers and block, without ever reading from client_fd.
+  // Wait until the response starts to arrive, then let the responder fill the
+  // socket buffers and block. Never read from client_fd.
   pollfd pfd{client_fd, POLLIN, 0};
   ASSERT_GT(poll(&pfd, 1, /*timeout_ms=*/5000), 0);
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -1479,9 +1480,9 @@ TEST(TransferServiceP2PTest, ShutdownWhilePeerIsNotReadingGetResponseIsSafe) {
   std::remove(source_obj_id.c_str());
 }
 
-// Happy path through the public API: because the response travels back over
-// the request's own connection, a Get succeeds even when the requesting
-// service advertises a local address that is not reachable.
+// Happy path through the public API. The response comes back on the request's
+// own connection, so a Get succeeds even when the requesting service
+// advertises a local address that is not reachable.
 TEST(TransferServiceP2PTest, GetSucceedsWhenRequesterAdvertisesUnreachableIp) {
   // Given
   TransferService service1("127.0.0.1");
@@ -1511,8 +1512,9 @@ TEST(TransferServiceP2PTest, GetSucceedsWhenRequesterAdvertisesUnreachableIp) {
   service2.Shutdown();
 }
 
-// Several kGetObj requests issued back-to-back on one accepted socket are each
-// answered on that socket, in order, with the matching task_id and payload.
+// Several kGetObj requests sent back-to-back on one accepted socket are
+// answered on that socket, in order, each with the matching task_id and
+// payload.
 TEST(TransferServiceP2PTest, SequentialGetRequestsOnOneSocketAreServedInOrder) {
   // Given
   TransferService service1("127.0.0.1");
@@ -1558,9 +1560,9 @@ TEST(TransferServiceP2PTest, SequentialGetRequestsOnOneSocketAreServedInOrder) {
   service1.Shutdown();
 }
 
-// Because a kGetObj response now occupies an inbound worker for the whole
-// transfer, more simultaneous requests than inbound workers must still all be
-// served (queued behind each other) rather than dropped or deadlocked.
+// A kGetObj response now holds an inbound worker for the whole transfer. When
+// there are more concurrent requests than inbound workers, all of them must
+// still be served (they queue behind each other), not dropped or deadlocked.
 TEST(TransferServiceP2PTest, ConcurrentGetRequestsBeyondThreadCountAreServed) {
   // Given
   TransferService service1("127.0.0.1");
@@ -1615,9 +1617,9 @@ TEST(TransferServiceP2PTest, ConcurrentGetRequestsBeyondThreadCountAreServed) {
   service1.Shutdown();
 }
 
-// A requester that disconnects while its response is still being streamed must
-// only fail its own request: with a single inbound worker, the next client's
-// request proves the worker was released promptly and the service is healthy.
+// A requester that disconnects while its response is still streaming must only
+// fail its own request. With a single inbound worker, the next client's
+// request proves the worker was released quickly and the service is healthy.
 TEST(TransferServiceP2PTest, ResponderSurvivesClientDisconnectMidResponse) {
   // Given
   TransferService service1("127.0.0.1");
@@ -1636,8 +1638,8 @@ TEST(TransferServiceP2PTest, ResponderSurvivesClientDisconnectMidResponse) {
   ObjInfoHeader large_request = BuildGetRequest(
       "mid_response_leaving_task", large_obj_id, "mid_response_dest_obj", "");
   ASSERT_TRUE(SendAll(leaving_fd, &large_request, kHeaderSize).ok());
-  // Let the response start flowing and the responder block in send() on the
-  // full socket buffers, then walk away with most of the payload unread.
+  // Let the response start to flow and the responder block in send() on the
+  // full socket buffers. Then close with most of the payload unread.
   pollfd pfd{leaving_fd, POLLIN, 0};
   ASSERT_GT(poll(&pfd, 1, /*timeout_ms=*/5000), 0);
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -1666,7 +1668,7 @@ TEST(TransferServiceP2PTest, ResponderSurvivesClientDisconnectMidResponse) {
 }
 
 // A requester that reads the whole response but closes instead of sending the
-// final ACK must not pin the inbound worker: the next client is still served.
+// final ACK must not hold the inbound worker. The next client is still served.
 TEST(TransferServiceP2PTest, ResponderSurvivesClientClosingInsteadOfAck) {
   // Given
   TransferService service1("127.0.0.1");
@@ -1711,9 +1713,9 @@ TEST(TransferServiceP2PTest, ResponderSurvivesClientClosingInsteadOfAck) {
 
 class InvalidGetRequestTest : public ::testing::TestWithParam<std::string> {};
 
-// A kGetObj naming an object that cannot be served (empty id, unknown id, or an
-// id that fills its whole field without a terminator) is answered with a kError
-// carrying the request's task_id, and the same socket then serves a valid GET.
+// A kGetObj for an object that cannot be served (empty id, unknown id, or an id
+// that fills its whole field with no terminator) gets a kError with the
+// request's task_id. The same socket then serves a valid GET.
 TEST_P(InvalidGetRequestTest, RepliesWithErrorAndKeepsSocketUsable) {
   // Given
   TransferService service1("127.0.0.1");
@@ -1758,8 +1760,8 @@ INSTANTIATE_TEST_SUITE_P(TransferServiceP2PTest, InvalidGetRequestTest,
                                            "{unterminated}"));
 
 // When the receiver cannot create the destination of an inbound kPutObj, it
-// drains the payload the sender is already streaming and answers kError, so the
-// connection stays aligned and the next request on it is served normally.
+// reads and discards the payload the sender is already streaming and answers
+// kError. The connection stays in sync and serves the next request normally.
 TEST(TransferServiceP2PTest,
      PutToUncreatableDestinationRepliesWithErrorAndKeepsSocketUsable) {
   // Given
@@ -1768,8 +1770,8 @@ TEST(TransferServiceP2PTest,
                                   /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   const std::string undeliverable_payload(256 * 1024, 'U');
-  // A regular file as a path component makes the destination uncreatable
-  // (missing directories alone would simply be created).
+  // A regular file as a path component makes the destination impossible to
+  // create. A missing directory would not: BufferObject creates those.
   const std::string not_a_dir = "put_not_a_dir";
   WriteTestFile(not_a_dir, "regular file");
   const std::string uncreatable_dest = not_a_dir + "/uncreatable_dest_obj";
@@ -1813,8 +1815,8 @@ TEST(TransferServiceP2PTest,
 }
 
 // Through the public API, an AsyncPut whose destination cannot be created on
-// the peer fails with an error (not a hang), and the single pooled connection
-// it used is still good for the next AsyncPut.
+// the peer fails with an error instead of hanging. The single pooled
+// connection it used still works for the next AsyncPut.
 TEST(TransferServiceP2PTest,
      PutFailsCleanlyAndReusesConnectionWhenDestinationCannotBeCreated) {
   // Given
@@ -1858,8 +1860,9 @@ TEST(TransferServiceP2PTest,
 }
 
 // Through the public API, an AsyncGet whose local destination cannot be created
-// fails with an error (not a hang), the responder is told so it does not wait
-// for an ACK, and the single pooled connection is still good for the next Get.
+// fails with an error instead of hanging. The responder is told, so it does
+// not wait for an ACK, and the single pooled connection still works for the
+// next Get.
 TEST(TransferServiceP2PTest,
      GetFailsCleanlyAndReusesConnectionWhenDestinationCannotBeCreated) {
   // Given
@@ -1909,9 +1912,9 @@ TEST(TransferServiceP2PTest,
 class MalformedGetResponseTest : public ::testing::TestWithParam<std::string> {
 };
 
-// Whatever a misbehaving peer sends back for a GET (zero-size response, wrong
-// message type, a bare ACK, a payload shorter than announced, or nothing at
-// all), the requester's future resolves with an error instead of hanging.
+// The requester's future fails with an error instead of hanging, whatever a bad
+// peer sends back for a GET: a zero-size response, the wrong message type, a
+// bare ACK, a payload shorter than announced, or nothing at all.
 TEST_P(MalformedGetResponseTest, RequesterFutureFailsInsteadOfHanging) {
   // Given
   const std::string scenario = GetParam();
@@ -1967,9 +1970,9 @@ INSTANTIATE_TEST_SUITE_P(TransferServiceP2PTest, MalformedGetResponseTest,
                            return info.param;
                          });
 
-// A peer that answers a GET correctly but names a different dest_obj_id (and
-// task_id) in its response must not redirect where the payload is written nor
-// which task it completes: the file lands at the requester's own destination.
+// A peer that answers a GET correctly but puts a different dest_obj_id (and
+// task_id) in its response must not change where the payload is written or
+// which task completes. The file lands at the requester's own destination.
 TEST(TransferServiceP2PTest, GetWritesToLocalDestinationNotToPeerNamedPath) {
   // Given
   const std::string expected_data = "payload written where the caller asked";

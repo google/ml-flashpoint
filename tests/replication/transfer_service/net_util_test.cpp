@@ -121,8 +121,8 @@ TEST_F(SendRecvTest, RecvAll_IncompleteRead) {
   EXPECT_EQ(recv_status.code(), absl::StatusCode::kUnavailable);
 }
 
-// RecvAndDiscard consumes exactly the requested byte count, leaving whatever
-// follows on the stream intact and in order.
+// RecvAndDiscard consumes exactly the requested number of bytes. The bytes
+// after them stay on the stream, intact and in order.
 TEST_F(SendRecvTest, RecvAndDiscard_SkipsExactlyRequestedBytes) {
   // Given
   const std::string discarded_data = "discard-me";
@@ -163,14 +163,15 @@ TEST_F(SendRecvTest, RecvAndDiscard_ZeroBytesIsNoOp) {
   EXPECT_EQ(actual_data, expected_data);
 }
 
-// Payloads larger than the internal scratch buffer are drained in multiple
-// chunks, still stopping exactly at the requested byte count.
+// A payload larger than the internal scratch buffer is read in several
+// chunks and still stops exactly at the requested byte count.
 TEST_F(SendRecvTest, RecvAndDiscard_DrainsPayloadLargerThanChunkSize) {
   // Given
   const std::string discarded_data(1024 * 1024, 'd');
   const std::string expected_data = "trailer";
-  // Sent from a helper thread: the payload exceeds the socketpair buffers, so
-  // SendAll only completes once the receiver starts draining.
+  // A helper thread sends the data because the payload is larger than the
+  // socketpair buffers: SendAll cannot finish until the receiver starts
+  // reading.
   std::thread writer_thread([this, &discarded_data, &expected_data]() {
     ASSERT_TRUE(
         SendAll(fds_[0], discarded_data.data(), discarded_data.size()).ok());
@@ -191,8 +192,8 @@ TEST_F(SendRecvTest, RecvAndDiscard_DrainsPayloadLargerThanChunkSize) {
   EXPECT_EQ(actual_data, expected_data);
 }
 
-// If the peer closes before the requested byte count arrives, RecvAndDiscard
-// reports the same kUnavailable error as RecvAll instead of spinning.
+// If the peer closes before all requested bytes arrive, RecvAndDiscard
+// returns the same kUnavailable error as RecvAll instead of looping forever.
 TEST_F(SendRecvTest, RecvAndDiscard_FailsOnEof) {
   // Given
   const std::string partial_data = "short";

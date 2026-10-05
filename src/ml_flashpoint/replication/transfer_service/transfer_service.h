@@ -164,11 +164,11 @@ class TransferService final {
   std::string local_address_;  // Local address used in data transfer.
   int global_rank_ = -1;
 
-  // Two separate pools are required. Outbound tasks (Put/Get) block a worker
-  // for the entire transfer, including waiting for the remote peer to respond.
-  // The peer can only respond if *its* inbound work is being serviced, so if
-  // inbound epoll work shared a pool with outbound tasks, two peers that
-  // saturate their pools with Gets to each other would deadlock.
+  // Two separate pools are required. An outbound task (Put/Get) blocks a
+  // worker for the whole transfer, including the wait for the peer's
+  // response. The peer can only respond if its own inbound work is running.
+  // If inbound and outbound work shared one pool, two peers that fill their
+  // pools with Gets to each other would deadlock.
   std::unique_ptr<ThreadPool> thread_pool_;        // Outbound tasks.
   std::unique_ptr<ThreadPool> epoll_thread_pool_;  // Inbound epoll events.
   std::thread epoll_thread_;
@@ -181,9 +181,9 @@ class TransferService final {
   std::map<std::string, std::shared_ptr<ConnectionPool>> connection_pools_;
   mutable std::shared_mutex connection_pools_mutex_;  // Guard connection_pools_
 
-  // Accepted (inbound) client sockets. Tracked so that Shutdown() can unblock
-  // workers that are blocked on one of them (e.g. a RespondToGetTask whose
-  // peer stopped reading) and so the sockets are closed on shutdown.
+  // Accepted (inbound) client sockets. Shutdown() uses this set to unblock
+  // workers stuck on one of them (for example, a RespondToGetTask whose peer
+  // stopped reading) and to close the sockets.
   std::unordered_set<int> client_fds_;
   std::mutex client_fds_mutex_;  // Guard client_fds_
 

@@ -29,6 +29,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
@@ -785,10 +786,29 @@ void TransferService::HandleDataReceive(int client_fd,
   }
   std::string tmp_obj_id =
       std::string(header.dest_obj_id) + std::string(kTempFileSuffix);
-  BufferObject buffer_obj(tmp_obj_id, header.obj_size,
-                          /*overwrite=*/true);
+  std::optional<BufferObject> buffer_obj;
+  try {
+    buffer_obj.emplace(tmp_obj_id, header.obj_size, /*overwrite=*/true);
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "Failed to create buffer object for " << header.dest_obj_id
+               << ": " << e.what();
+    // The sender is already streaming obj_size bytes on this connection. Drain
+    // them so the connection stays usable (pooled connections are never
+    // replaced), then tell the sender we failed so it does not wait for an ACK.
+    absl::Status drain_status = RecvAndDiscard(client_fd, header.obj_size);
+    if (!drain_status.ok()) {
+      LOG(ERROR) << "Failed to drain undeliverable payload for "
+                 << header.dest_obj_id << ": " << drain_status;
+    }
+    if (is_respond_get_task) {
+      ReportResult(header.task_id, false,
+                   std::string("Failed to create buffer object: ") + e.what());
+    }
+    SendErrorResponse(client_fd, header.task_id, header.dest_obj_id);
+    return;
+  }
   LOG(INFO) << "Successfully created buffer object";
-  void* receiver_data_ptr = buffer_obj.get_data_ptr();
+  void* receiver_data_ptr = buffer_obj->get_data_ptr();
 
   if (!RecvAll(client_fd, receiver_data_ptr, header.obj_size).ok()) {
     LOG(ERROR) << "Failed to receive data for " << header.dest_obj_id;
@@ -801,7 +821,7 @@ void TransferService::HandleDataReceive(int client_fd,
 
   // Close the buffer object to ensure data is flushed and the file descriptor
   // is released before renaming.
-  buffer_obj.close();
+  buffer_obj->close();
 
   // Rename the temporary file to the final destination.
   if (rename(tmp_obj_id.c_str(), header.dest_obj_id) != 0) {
@@ -884,23 +904,36 @@ void TransferService::ExecuteGetTask(GetTask* task) {
   }
 
   switch (resp_header.type) {
-    case MessageType::kRespondToGetObj:
+    case MessageType::kRespondToGetObj: {
+      // Only obj_size is new information. The task already knows its own id
+      // and destination, so neither is taken from the peer: a mismatched
+      // task_id would otherwise leave this task pending forever, and a
+      // different dest_obj_id would let the peer choose where we write.
+      if (task->GetTaskId() != resp_header.task_id) {
+        LOG(WARNING) << "GetTask " << task->GetTaskId()
+                     << ": response carries task_id '" << resp_header.task_id
+                     << "'; completing the local task regardless.";
+      }
+      ObjInfoHeader local_header = resp_header;
+      snprintf(local_header.task_id, sizeof(local_header.task_id), "%s",
+               task->GetTaskId().c_str());
+      snprintf(local_header.dest_obj_id, sizeof(local_header.dest_obj_id), "%s",
+               task->GetDestObjId().c_str());
       try {
-        HandleDataReceive(conn.fd(), resp_header, true);
+        HandleDataReceive(conn.fd(), local_header, true);
       } catch (const std::exception& e) {
-        // Typically BufferObject failing to create the destination file. The
-        // payload is still in flight on this connection, so it must not be
-        // reused as-is: shut it down so the next user fails fast instead of
-        // parsing stale payload bytes as a header.
-        // TODO: Let ScopedConnection discard a broken connection instead of
-        // returning it to the pool.
+        // HandleDataReceive reports expected failures (e.g. the destination
+        // file cannot be created) itself and keeps the connection aligned.
+        // This is a last-resort net: an exception escaping a worker thread is
+        // swallowed by the thread pool, which would leave the caller's future
+        // pending forever.
         LOG(ERROR) << "GetTask " << task->GetTaskId()
                    << " failed while receiving data: " << e.what();
-        shutdown(conn.fd(), SHUT_RDWR);
         ReportResult(task->GetTaskId(), false,
                      std::string("Failed to receive data: ") + e.what());
       }
       break;
+    }
     case MessageType::kError:
       ReportResult(task->GetTaskId(), false, "Received error message");
       break;
@@ -1060,8 +1093,13 @@ void TransferService::HandleGetObjRequest(int client_fd,
   LOG(INFO) << "Handling get object request for requested_obj_id: "
             << header.source_obj_id;
 
-  if (!std::filesystem::exists(header.source_obj_id)) {
-    PLOG(ERROR) << "Object not found: " << header.source_obj_id;
+  // Non-throwing overload: stat errors other than "not found" (e.g. a name
+  // that is too long, or an unreadable path component) must also produce a
+  // kError for the requester rather than an exception that drops the socket.
+  std::error_code ec;
+  if (!std::filesystem::exists(header.source_obj_id, ec)) {
+    LOG(ERROR) << "Object not found: " << header.source_obj_id
+               << (ec ? ": " + ec.message() : "");
     SendErrorResponse(client_fd, header.task_id, header.source_obj_id);
     return;
   }

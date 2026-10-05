@@ -22,6 +22,7 @@
 #include <sys/stat.h>
 
 #include <array>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -767,12 +768,24 @@ void TransferService::HandleDataReceive(int client_fd,
                                         const ObjInfoHeader& header,
                                         bool is_respond_get_task) {
   LOG(INFO) << "Handling data receive for filename: " << header.dest_obj_id;
-  if (header.obj_size <= 0) {
-    LOG(ERROR) << "Invalid obj_size received: " << header.obj_size;
+
+  // Every failure before the ACK ends the same way: reply kError so the sender
+  // stops waiting for an ACK, and, when this is the receiving half of a local
+  // Get, resolve the caller's future. The connection is left open and stays
+  // usable: the branches before the payload either have nothing to read or
+  // drain it first, and RecvAll only fails once the connection is already
+  // broken. The caller decides what happens to the connection next.
+  auto fail = [&](const std::string& message) {
+    LOG(ERROR) << "HandleDataReceive for " << header.dest_obj_id << ": "
+               << message;
     if (is_respond_get_task) {
-      ReportResult(header.task_id, false, "Invalid obj_size received");
+      ReportResult(header.task_id, false, message);
     }
     SendErrorResponse(client_fd, header.task_id, header.dest_obj_id);
+  };
+
+  if (header.obj_size <= 0) {
+    fail("Invalid obj_size received: " + std::to_string(header.obj_size));
     return;
   }
   if (is_respond_get_task) {
@@ -786,37 +799,24 @@ void TransferService::HandleDataReceive(int client_fd,
   }
   std::string tmp_obj_id =
       std::string(header.dest_obj_id) + std::string(kTempFileSuffix);
+  // BufferObject's constructor throws when it cannot create the file.
   std::optional<BufferObject> buffer_obj;
   try {
     buffer_obj.emplace(tmp_obj_id, header.obj_size, /*overwrite=*/true);
   } catch (const std::exception& e) {
-    LOG(ERROR) << "Failed to create buffer object for " << header.dest_obj_id
-               << ": " << e.what();
     // The sender is already streaming obj_size bytes on this connection. Read
-    // and discard them so the connection stays in sync (the pool never
-    // replaces a closed connection). Then send kError so the sender does not
-    // wait for an ACK.
-    absl::Status drain_status = RecvAndDiscard(client_fd, header.obj_size);
-    if (!drain_status.ok()) {
-      LOG(ERROR) << "Failed to drain undeliverable payload for "
-                 << header.dest_obj_id << ": " << drain_status;
-    }
-    if (is_respond_get_task) {
-      ReportResult(header.task_id, false,
-                   std::string("Failed to create buffer object: ") + e.what());
-    }
-    SendErrorResponse(client_fd, header.task_id, header.dest_obj_id);
+    // and discard them so the connection stays in sync and can be reused (the
+    // pool never replaces a closed connection). If the drain fails, the peer
+    // is gone, and the kError send inside fail() logs that.
+    RecvAndDiscard(client_fd, header.obj_size).IgnoreError();
+    fail(std::string("Failed to create buffer object: ") + e.what());
     return;
   }
   LOG(INFO) << "Successfully created buffer object";
   void* receiver_data_ptr = buffer_obj->get_data_ptr();
 
   if (!RecvAll(client_fd, receiver_data_ptr, header.obj_size).ok()) {
-    LOG(ERROR) << "Failed to receive data for " << header.dest_obj_id;
-    if (is_respond_get_task) {
-      ReportResult(header.task_id, false, "Failed to receive data");
-    }
-    SendErrorResponse(client_fd, header.task_id, header.dest_obj_id);
+    fail("Failed to receive data");
     return;
   }
 
@@ -826,12 +826,8 @@ void TransferService::HandleDataReceive(int client_fd,
 
   // Rename the temporary file to the final destination.
   if (rename(tmp_obj_id.c_str(), header.dest_obj_id) != 0) {
-    PLOG(ERROR) << "Failed to rename temporary file " << tmp_obj_id << " to "
-                << header.dest_obj_id;
-    if (is_respond_get_task) {
-      ReportResult(header.task_id, false, "Failed to rename temporary file");
-    }
-    SendErrorResponse(client_fd, header.task_id, header.dest_obj_id);
+    fail("Failed to rename temporary file " + tmp_obj_id + " to " +
+         header.dest_obj_id + ": " + std::strerror(errno));
     return;
   }
   if (is_respond_get_task) {

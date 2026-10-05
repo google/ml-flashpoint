@@ -22,11 +22,13 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <iostream>
 #include <mutex>
@@ -1065,6 +1067,76 @@ bool ShutdownCompletesWithin(TransferService& service,
   return completed;
 }
 
+// Reads a header from `fd` if one starts arriving within `timeout_ms`. Returns
+// false on timeout or read failure, so that a stalled or crashed worker fails
+// the test instead of hanging it.
+bool RecvHeaderWithin(int fd, ObjInfoHeader* header, int timeout_ms) {
+  pollfd pfd{fd, POLLIN, 0};
+  if (poll(&pfd, 1, timeout_ms) <= 0) return false;
+  return RecvHeader(fd, *header).ok();
+}
+
+// Returns true if `future` becomes ready within `timeout`.
+template <typename T>
+bool FutureReadyWithin(const std::future<T>& future,
+                       std::chrono::milliseconds timeout) {
+  return future.wait_for(timeout) == std::future_status::ready;
+}
+
+ObjInfoHeader BuildPutRequest(const std::string& task_id,
+                              const std::string& dest_obj_id,
+                              ssize_t obj_size) {
+  ObjInfoHeader request;
+  request.type = MessageType::kPutObj;
+  snprintf(request.task_id, sizeof(request.task_id), "%s", task_id.c_str());
+  snprintf(request.dest_obj_id, sizeof(request.dest_obj_id), "%s",
+           dest_obj_id.c_str());
+  request.obj_size = obj_size;
+  return request;
+}
+
+// Stands in for a misbehaving peer: accepts one connection, reads one kGetObj
+// request and answers it with whatever `respond` writes to the socket. Every
+// wait is bounded so the helper thread always terminates.
+class FakeGetResponder {
+ public:
+  explicit FakeGetResponder(std::function<void(int fd)> respond)
+      : respond_(std::move(respond)) {
+    listener_fd_ = ListenOnLocalEphemeralPort(&port_);
+    thread_ = std::thread([this]() { Serve(); });
+  }
+
+  ~FakeGetResponder() {
+    thread_.join();
+    if (listener_fd_ >= 0) close(listener_fd_);
+  }
+
+  std::string address() const { return "127.0.0.1:" + std::to_string(port_); }
+  bool received_request() const { return received_request_; }
+
+ private:
+  void Serve() {
+    if (listener_fd_ < 0) return;
+    pollfd pfd{listener_fd_, POLLIN, 0};
+    if (poll(&pfd, 1, /*timeout_ms=*/5000) <= 0) return;
+    int client_fd = accept(listener_fd_, nullptr, nullptr);
+    if (client_fd < 0) return;
+    ObjInfoHeader request;
+    if (RecvHeaderWithin(client_fd, &request, /*timeout_ms=*/5000) &&
+        request.type == MessageType::kGetObj) {
+      received_request_ = true;
+      respond_(client_fd);
+    }
+    close(client_fd);
+  }
+
+  std::function<void(int fd)> respond_;
+  int listener_fd_ = -1;
+  int port_ = 0;
+  std::atomic<bool> received_request_{false};
+  std::thread thread_;
+};
+
 // Verifies that handling a kGetObj request responds over the existing client
 // socket and never initiates an outbound connection to header.dest_address.
 TEST(TransferServiceP2PTest, GetObjDoesNotConnectToDestAddress) {
@@ -1436,6 +1508,511 @@ TEST(TransferServiceP2PTest, GetSucceedsWhenRequesterAdvertisesUnreachableIp) {
 
   std::remove(source_obj_id.c_str());
   service1.Shutdown();
+  service2.Shutdown();
+}
+
+// Several kGetObj requests issued back-to-back on one accepted socket are each
+// answered on that socket, in order, with the matching task_id and payload.
+TEST(TransferServiceP2PTest, SequentialGetRequestsOnOneSocketAreServedInOrder) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const int kNumRequests = 3;
+  std::vector<std::string> source_obj_ids;
+  std::vector<std::string> expected_payloads;
+  for (int i = 0; i < kNumRequests; ++i) {
+    source_obj_ids.push_back("sequential_source_obj_" + std::to_string(i));
+    expected_payloads.push_back("sequential_payload_" + std::to_string(i) +
+                                std::string(4096 * (i + 1), 'a' + i));
+    WriteTestFile(source_obj_ids[i], expected_payloads[i]);
+  }
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When
+  std::vector<ObjInfoHeader> actual_responses;
+  std::vector<std::string> actual_payloads;
+  for (int i = 0; i < kNumRequests; ++i) {
+    actual_responses.push_back(SendRequestAndRecvResponse(
+        client_fd,
+        BuildGetRequest("sequential_task_" + std::to_string(i),
+                        source_obj_ids[i], "sequential_dest_obj", "")));
+    actual_payloads.push_back(
+        RecvGetPayloadAndAck(client_fd, actual_responses.back()));
+  }
+
+  // Then
+  for (int i = 0; i < kNumRequests; ++i) {
+    EXPECT_EQ(actual_responses[i].type, MessageType::kRespondToGetObj);
+    EXPECT_EQ(std::string(actual_responses[i].task_id),
+              "sequential_task_" + std::to_string(i));
+    EXPECT_EQ(actual_payloads[i], expected_payloads[i]);
+  }
+
+  close(client_fd);
+  for (const auto& source_obj_id : source_obj_ids) {
+    std::remove(source_obj_id.c_str());
+  }
+  service1.Shutdown();
+}
+
+// Because a kGetObj response now occupies an inbound worker for the whole
+// transfer, more simultaneous requests than inbound workers must still all be
+// served (queued behind each other) rather than dropped or deadlocked.
+TEST(TransferServiceP2PTest, ConcurrentGetRequestsBeyondThreadCountAreServed) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/2,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const int kNumClients = 8;
+  std::vector<std::string> source_obj_ids(kNumClients);
+  std::vector<std::string> expected_payloads(kNumClients);
+  for (int i = 0; i < kNumClients; ++i) {
+    source_obj_ids[i] = "oversubscribed_source_obj_" + std::to_string(i);
+    expected_payloads[i] = "oversubscribed_payload_" + std::to_string(i) +
+                           std::string(64 * 1024, 'A' + i);
+    WriteTestFile(source_obj_ids[i], expected_payloads[i]);
+  }
+  std::vector<MessageType> actual_types(kNumClients, MessageType::kError);
+  std::vector<std::string> actual_payloads(kNumClients);
+  // Not vector<bool>: its packed elements cannot be written concurrently.
+  std::vector<int> actual_responded(kNumClients, 0);
+
+  // When
+  std::vector<std::thread> clients;
+  for (int i = 0; i < kNumClients; ++i) {
+    clients.emplace_back([&, i]() {
+      int client_fd = ConnectToLocalPort(port1);
+      if (client_fd < 0) return;
+      ObjInfoHeader request =
+          BuildGetRequest("oversubscribed_task_" + std::to_string(i),
+                          source_obj_ids[i], "oversubscribed_dest_obj", "");
+      ObjInfoHeader response;
+      if (SendAll(client_fd, &request, kHeaderSize).ok() &&
+          RecvHeaderWithin(client_fd, &response, /*timeout_ms=*/10000)) {
+        actual_responded[i] = 1;
+        actual_types[i] = response.type;
+        actual_payloads[i] = RecvGetPayloadAndAck(client_fd, response);
+      }
+      close(client_fd);
+    });
+  }
+  for (auto& client : clients) client.join();
+
+  // Then
+  for (int i = 0; i < kNumClients; ++i) {
+    EXPECT_TRUE(actual_responded[i]) << "client " << i << " got no response";
+    EXPECT_EQ(actual_types[i], MessageType::kRespondToGetObj) << "client " << i;
+    EXPECT_EQ(actual_payloads[i], expected_payloads[i]) << "client " << i;
+  }
+
+  for (const auto& source_obj_id : source_obj_ids) {
+    std::remove(source_obj_id.c_str());
+  }
+  service1.Shutdown();
+}
+
+// A requester that disconnects while its response is still being streamed must
+// only fail its own request: with a single inbound worker, the next client's
+// request proves the worker was released promptly and the service is healthy.
+TEST(TransferServiceP2PTest, ResponderSurvivesClientDisconnectMidResponse) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/1,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  // Large enough to exceed any socket buffer autotuning on loopback.
+  const std::string large_data(16 * 1024 * 1024, 'L');
+  const std::string large_obj_id = "mid_response_large_source_obj";
+  const std::string expected_data = "served after the disconnect";
+  const std::string small_obj_id = "mid_response_small_source_obj";
+  WriteTestFile(large_obj_id, large_data);
+  WriteTestFile(small_obj_id, expected_data);
+  int leaving_fd = ConnectToLocalPort(port1, /*rcvbuf_bytes=*/4096);
+  ASSERT_GE(leaving_fd, 0);
+  ObjInfoHeader large_request = BuildGetRequest(
+      "mid_response_leaving_task", large_obj_id, "mid_response_dest_obj", "");
+  ASSERT_TRUE(SendAll(leaving_fd, &large_request, kHeaderSize).ok());
+  // Let the response start flowing and the responder block in send() on the
+  // full socket buffers, then walk away with most of the payload unread.
+  pollfd pfd{leaving_fd, POLLIN, 0};
+  ASSERT_GT(poll(&pfd, 1, /*timeout_ms=*/5000), 0);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  // When
+  close(leaving_fd);
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+  ObjInfoHeader request = BuildGetRequest(
+      "mid_response_next_task", small_obj_id, "mid_response_dest_obj", "");
+  ASSERT_TRUE(SendAll(client_fd, &request, kHeaderSize).ok());
+  ObjInfoHeader actual_response;
+  const bool actual_responded =
+      RecvHeaderWithin(client_fd, &actual_response, /*timeout_ms=*/10000);
+
+  // Then
+  ASSERT_TRUE(actual_responded)
+      << "the single inbound worker is still stuck on the departed client";
+  EXPECT_EQ(actual_response.type, MessageType::kRespondToGetObj);
+  EXPECT_EQ(RecvGetPayloadAndAck(client_fd, actual_response), expected_data);
+
+  close(client_fd);
+  std::remove(large_obj_id.c_str());
+  std::remove(small_obj_id.c_str());
+  service1.Shutdown();
+}
+
+// A requester that reads the whole response but closes instead of sending the
+// final ACK must not pin the inbound worker: the next client is still served.
+TEST(TransferServiceP2PTest, ResponderSurvivesClientClosingInsteadOfAck) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/1,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const std::string expected_data = "no_ack_then_next_payload";
+  const std::string source_obj_id = "no_ack_next_source_obj";
+  WriteTestFile(source_obj_id, expected_data);
+  int leaving_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(leaving_fd, 0);
+  ObjInfoHeader first_response = SendRequestAndRecvResponse(
+      leaving_fd,
+      BuildGetRequest("no_ack_leaving_task", source_obj_id, "no_ack_dest", ""));
+  ASSERT_EQ(first_response.type, MessageType::kRespondToGetObj);
+  std::string first_payload(first_response.obj_size, '\0');
+  ASSERT_TRUE(
+      RecvAll(leaving_fd, first_payload.data(), first_response.obj_size).ok());
+
+  // When
+  close(leaving_fd);  // Deliberately no ACK.
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+  ObjInfoHeader request =
+      BuildGetRequest("no_ack_next_task", source_obj_id, "no_ack_dest", "");
+  ASSERT_TRUE(SendAll(client_fd, &request, kHeaderSize).ok());
+  ObjInfoHeader actual_response;
+  const bool actual_responded =
+      RecvHeaderWithin(client_fd, &actual_response, /*timeout_ms=*/10000);
+
+  // Then
+  EXPECT_EQ(first_payload, expected_data);
+  ASSERT_TRUE(actual_responded)
+      << "the single inbound worker is still waiting for the departed ACK";
+  EXPECT_EQ(actual_response.type, MessageType::kRespondToGetObj);
+  EXPECT_EQ(RecvGetPayloadAndAck(client_fd, actual_response), expected_data);
+
+  close(client_fd);
+  std::remove(source_obj_id.c_str());
+  service1.Shutdown();
+}
+
+class InvalidGetRequestTest : public ::testing::TestWithParam<std::string> {};
+
+// A kGetObj naming an object that cannot be served (empty id, unknown id, or an
+// id that fills its whole field without a terminator) is answered with a kError
+// carrying the request's task_id, and the same socket then serves a valid GET.
+TEST_P(InvalidGetRequestTest, RepliesWithErrorAndKeepsSocketUsable) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const std::string expected_data = "valid_after_invalid_request";
+  const std::string valid_obj_id = "invalid_request_valid_source_obj";
+  WriteTestFile(valid_obj_id, expected_data);
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+  ObjInfoHeader invalid_request =
+      BuildGetRequest("invalid_task", GetParam(), "invalid_dest_obj", "");
+  if (GetParam() == "{unterminated}") {
+    std::memset(invalid_request.source_obj_id, 'A',
+                sizeof(invalid_request.source_obj_id));
+  }
+
+  // When
+  ObjInfoHeader actual_error_response =
+      SendRequestAndRecvResponse(client_fd, invalid_request);
+  ObjInfoHeader actual_valid_response = SendRequestAndRecvResponse(
+      client_fd,
+      BuildGetRequest("valid_task", valid_obj_id, "invalid_request_dest", ""));
+  std::string actual_data =
+      RecvGetPayloadAndAck(client_fd, actual_valid_response);
+
+  // Then
+  EXPECT_EQ(actual_error_response.type, MessageType::kError);
+  EXPECT_STREQ(actual_error_response.task_id, "invalid_task");
+  EXPECT_EQ(actual_valid_response.type, MessageType::kRespondToGetObj);
+  EXPECT_STREQ(actual_valid_response.task_id, "valid_task");
+  EXPECT_EQ(actual_data, expected_data);
+
+  close(client_fd);
+  std::remove(valid_obj_id.c_str());
+  service1.Shutdown();
+}
+
+INSTANTIATE_TEST_SUITE_P(TransferServiceP2PTest, InvalidGetRequestTest,
+                         ::testing::Values("", "non_existent_source_obj",
+                                           "{unterminated}"));
+
+// When the receiver cannot create the destination of an inbound kPutObj, it
+// drains the payload the sender is already streaming and answers kError, so the
+// connection stays aligned and the next request on it is served normally.
+TEST(TransferServiceP2PTest,
+     PutToUncreatableDestinationRepliesWithErrorAndKeepsSocketUsable) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const std::string undeliverable_payload(256 * 1024, 'U');
+  // A regular file as a path component makes the destination uncreatable
+  // (missing directories alone would simply be created).
+  const std::string not_a_dir = "put_not_a_dir";
+  WriteTestFile(not_a_dir, "regular file");
+  const std::string uncreatable_dest = not_a_dir + "/uncreatable_dest_obj";
+  const std::string expected_data = "delivered_after_undeliverable_put";
+  const std::string dest_obj_id = "uncreatable_then_valid_dest_obj";
+  std::remove(dest_obj_id.c_str());
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When
+  ObjInfoHeader uncreatable_request = BuildPutRequest(
+      "uncreatable_task", uncreatable_dest, undeliverable_payload.size());
+  ASSERT_TRUE(SendAll(client_fd, &uncreatable_request, kHeaderSize).ok());
+  ASSERT_TRUE(SendAll(client_fd, undeliverable_payload.data(),
+                      undeliverable_payload.size())
+                  .ok());
+  ObjInfoHeader actual_error_response;
+  const bool actual_error_responded =
+      RecvHeaderWithin(client_fd, &actual_error_response, /*timeout_ms=*/10000);
+  ObjInfoHeader valid_request =
+      BuildPutRequest("valid_put_task", dest_obj_id, expected_data.size());
+  ASSERT_TRUE(SendAll(client_fd, &valid_request, kHeaderSize).ok());
+  ASSERT_TRUE(
+      SendAll(client_fd, expected_data.data(), expected_data.size()).ok());
+  ObjInfoHeader actual_ack_response;
+  const bool actual_ack_responded =
+      RecvHeaderWithin(client_fd, &actual_ack_response, /*timeout_ms=*/10000);
+
+  // Then
+  ASSERT_TRUE(actual_error_responded);
+  EXPECT_EQ(actual_error_response.type, MessageType::kError);
+  EXPECT_STREQ(actual_error_response.task_id, "uncreatable_task");
+  ASSERT_TRUE(actual_ack_responded);
+  EXPECT_EQ(actual_ack_response.type, MessageType::kAck);
+  EXPECT_TRUE(std::filesystem::is_regular_file(not_a_dir));
+  VerifyFileContentAndRemove(dest_obj_id, expected_data);
+
+  close(client_fd);
+  std::remove(not_a_dir.c_str());
+  service1.Shutdown();
+}
+
+// Through the public API, an AsyncPut whose destination cannot be created on
+// the peer fails with an error (not a hang), and the single pooled connection
+// it used is still good for the next AsyncPut.
+TEST(TransferServiceP2PTest,
+     PutFailsCleanlyAndReusesConnectionWhenDestinationCannotBeCreated) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  TransferService service2("127.0.0.1");
+  int port2 = service2.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port2, 0);
+  const std::string peer1_addr = "127.0.0.1:" + std::to_string(port1);
+  std::string undeliverable_payload(256 * 1024, 'U');
+  std::string expected_data = "put_after_uncreatable_destination";
+  const std::string not_a_dir = "api_put_not_a_dir";
+  WriteTestFile(not_a_dir, "regular file");
+  const std::string dest_obj_id = "api_put_uncreatable_then_valid_dest_obj";
+
+  // When
+  std::future<TransferResult> failed_future = service2.AsyncPut(
+      undeliverable_payload.data(), undeliverable_payload.size(), peer1_addr,
+      not_a_dir + "/uncreatable_dest_obj");
+  const bool actual_failed_ready =
+      FutureReadyWithin(failed_future, std::chrono::seconds(10));
+  std::future<TransferResult> valid_future = service2.AsyncPut(
+      expected_data.data(), expected_data.size(), peer1_addr, dest_obj_id);
+  const bool actual_valid_ready =
+      FutureReadyWithin(valid_future, std::chrono::seconds(10));
+
+  // Then
+  ASSERT_TRUE(actual_failed_ready) << "AsyncPut hung instead of failing";
+  EXPECT_THROW(failed_future.get(), std::runtime_error);
+  ASSERT_TRUE(actual_valid_ready) << "pooled connection unusable after error";
+  EXPECT_TRUE(valid_future.get().success);
+  EXPECT_TRUE(std::filesystem::is_regular_file(not_a_dir));
+  VerifyFileContentAndRemove(dest_obj_id, expected_data);
+
+  std::remove(not_a_dir.c_str());
+  service1.Shutdown();
+  service2.Shutdown();
+}
+
+// Through the public API, an AsyncGet whose local destination cannot be created
+// fails with an error (not a hang), the responder is told so it does not wait
+// for an ACK, and the single pooled connection is still good for the next Get.
+TEST(TransferServiceP2PTest,
+     GetFailsCleanlyAndReusesConnectionWhenDestinationCannotBeCreated) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  TransferService service2("127.0.0.1");
+  int port2 = service2.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port2, 0);
+  const std::string peer1_addr = "127.0.0.1:" + std::to_string(port1);
+  const std::string large_obj_id = "api_get_uncreatable_large_source_obj";
+  const std::string source_obj_id = "api_get_uncreatable_valid_source_obj";
+  const std::string not_a_dir = "api_get_not_a_dir";
+  const std::string dest_obj_id = "api_get_uncreatable_then_valid_dest_obj";
+  const std::string expected_data = "get_after_uncreatable_destination";
+  WriteTestFile(large_obj_id, std::string(256 * 1024, 'U'));
+  WriteTestFile(source_obj_id, expected_data);
+  WriteTestFile(not_a_dir, "regular file");
+
+  // When
+  std::future<TransferResult> failed_future = service2.AsyncGet(
+      large_obj_id, peer1_addr, not_a_dir + "/uncreatable_dest_obj");
+  const bool actual_failed_ready =
+      FutureReadyWithin(failed_future, std::chrono::seconds(10));
+  std::future<TransferResult> valid_future =
+      service2.AsyncGet(source_obj_id, peer1_addr, dest_obj_id);
+  const bool actual_valid_ready =
+      FutureReadyWithin(valid_future, std::chrono::seconds(10));
+
+  // Then
+  ASSERT_TRUE(actual_failed_ready) << "AsyncGet hung instead of failing";
+  EXPECT_THROW(failed_future.get(), std::runtime_error);
+  ASSERT_TRUE(actual_valid_ready) << "pooled connection unusable after error";
+  EXPECT_TRUE(valid_future.get().success);
+  EXPECT_TRUE(std::filesystem::is_regular_file(not_a_dir));
+  VerifyFileContentAndRemove(dest_obj_id, expected_data);
+
+  std::remove(large_obj_id.c_str());
+  std::remove(source_obj_id.c_str());
+  std::remove(not_a_dir.c_str());
+  service1.Shutdown();
+  service2.Shutdown();
+}
+
+class MalformedGetResponseTest : public ::testing::TestWithParam<std::string> {
+};
+
+// Whatever a misbehaving peer sends back for a GET (zero-size response, wrong
+// message type, a bare ACK, a payload shorter than announced, or nothing at
+// all), the requester's future resolves with an error instead of hanging.
+TEST_P(MalformedGetResponseTest, RequesterFutureFailsInsteadOfHanging) {
+  // Given
+  const std::string scenario = GetParam();
+  const std::string dest_obj_id = "malformed_response_dest_obj";
+  FakeGetResponder responder([&scenario](int fd) {
+    ObjInfoHeader response;
+    if (scenario == "close_without_response") return;
+    if (scenario == "zero_size_response") {
+      response.type = MessageType::kRespondToGetObj;
+      response.obj_size = 0;
+    } else if (scenario == "wrong_type_response") {
+      response.type = MessageType::kPutObj;
+    } else if (scenario == "ack_response") {
+      response.type = MessageType::kAck;
+    } else if (scenario == "truncated_payload") {
+      response.type = MessageType::kRespondToGetObj;
+      response.obj_size = 1024;
+    }
+    snprintf(response.task_id, sizeof(response.task_id), "ignored");
+    SendAll(fd, &response, kHeaderSize).IgnoreError();
+    if (scenario == "truncated_payload") {
+      const std::string partial(16, 'p');
+      SendAll(fd, partial.data(), partial.size()).IgnoreError();
+    }
+  });
+  TransferService service2("127.0.0.1");
+  int port2 = service2.Initialize(/*listen_port=*/0, /*threads=*/2,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port2, 0);
+
+  // When
+  std::future<TransferResult> actual_future =
+      service2.AsyncGet("any_source_obj", responder.address(), dest_obj_id);
+  const bool actual_ready =
+      FutureReadyWithin(actual_future, std::chrono::seconds(10));
+
+  // Then
+  ASSERT_TRUE(actual_ready) << "AsyncGet hung on scenario " << scenario;
+  EXPECT_THROW(actual_future.get(), std::runtime_error);
+  EXPECT_TRUE(responder.received_request());
+  EXPECT_FALSE(std::filesystem::exists(dest_obj_id));
+
+  std::remove((dest_obj_id + ".tmp").c_str());
+  service2.Shutdown();
+}
+
+INSTANTIATE_TEST_SUITE_P(TransferServiceP2PTest, MalformedGetResponseTest,
+                         ::testing::Values("zero_size_response",
+                                           "wrong_type_response",
+                                           "ack_response", "truncated_payload",
+                                           "close_without_response"),
+                         [](const ::testing::TestParamInfo<std::string>& info) {
+                           return info.param;
+                         });
+
+// A peer that answers a GET correctly but names a different dest_obj_id (and
+// task_id) in its response must not redirect where the payload is written nor
+// which task it completes: the file lands at the requester's own destination.
+TEST(TransferServiceP2PTest, GetWritesToLocalDestinationNotToPeerNamedPath) {
+  // Given
+  const std::string expected_data = "payload written where the caller asked";
+  const std::string dest_obj_id = "peer_redirect_requested_dest_obj";
+  const std::string redirected_obj_id = "peer_redirect_peer_named_obj";
+  std::remove(dest_obj_id.c_str());
+  std::remove(redirected_obj_id.c_str());
+  std::promise<MessageType> ack_promise;
+  std::future<MessageType> ack_future = ack_promise.get_future();
+  FakeGetResponder responder([&](int fd) {
+    ObjInfoHeader response;
+    response.type = MessageType::kRespondToGetObj;
+    response.obj_size = expected_data.size();
+    snprintf(response.task_id, sizeof(response.task_id), "peer_chosen_task");
+    snprintf(response.dest_obj_id, sizeof(response.dest_obj_id), "%s",
+             redirected_obj_id.c_str());
+    SendAll(fd, &response, kHeaderSize).IgnoreError();
+    SendAll(fd, expected_data.data(), expected_data.size()).IgnoreError();
+    ObjInfoHeader ack;
+    ack_promise.set_value(RecvHeaderWithin(fd, &ack, /*timeout_ms=*/5000)
+                              ? ack.type
+                              : MessageType::kError);
+  });
+  TransferService service2("127.0.0.1");
+  int port2 = service2.Initialize(/*listen_port=*/0, /*threads=*/2,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port2, 0);
+
+  // When
+  std::future<TransferResult> actual_future =
+      service2.AsyncGet("any_source_obj", responder.address(), dest_obj_id);
+  const bool actual_ready =
+      FutureReadyWithin(actual_future, std::chrono::seconds(10));
+
+  // Then
+  ASSERT_TRUE(actual_ready) << "AsyncGet hung on a redirecting responder";
+  EXPECT_TRUE(actual_future.get().success);
+  ASSERT_TRUE(FutureReadyWithin(ack_future, std::chrono::seconds(5)));
+  EXPECT_EQ(ack_future.get(), MessageType::kAck);
+  VerifyFileContentAndRemove(dest_obj_id, expected_data);
+  EXPECT_FALSE(std::filesystem::exists(redirected_obj_id));
+  EXPECT_FALSE(std::filesystem::exists(redirected_obj_id + ".tmp"));
+
   service2.Shutdown();
 }
 

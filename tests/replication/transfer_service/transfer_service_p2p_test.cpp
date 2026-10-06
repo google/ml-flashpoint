@@ -1404,6 +1404,92 @@ TEST(TransferServiceP2PTest, UnknownMessageTypeClosesConnection) {
   service1.Shutdown();
 }
 
+// The listener only receives requests. A bare kAck is a reply that no worker
+// on this side is waiting for, so the service closes the connection.
+TEST(TransferServiceP2PTest, UnsolicitedAckOnListenerClosesConnection) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+  ObjInfoHeader header;
+  header.type = MessageType::kAck;
+  snprintf(header.task_id, sizeof(header.task_id), "unsolicited_ack_task");
+
+  // When
+  ASSERT_TRUE(SendAll(client_fd, &header, kHeaderSize).ok());
+
+  // Then
+  EXPECT_TRUE(PeerClosed(client_fd, /*timeout_ms=*/5000));
+
+  close(client_fd);
+  service1.Shutdown();
+}
+
+// A kError that arrives on the listener must not fail a local task, even when
+// it names the task_id of a Get that is in flight. Only the reply read on the
+// request socket may complete a task. The service closes the rogue connection
+// and the Get still completes.
+TEST(TransferServiceP2PTest, UnsolicitedErrorOnListenerDoesNotFailLocalTask) {
+  // Given
+  const std::string expected_data = "payload delivered after a forged kError";
+  const std::string dest_obj_id = "forged_error_dest_obj";
+  std::remove(dest_obj_id.c_str());
+  int peer_port = 0;
+  int peer_listener = ListenOnLocalEphemeralPort(&peer_port);
+  ASSERT_GE(peer_listener, 0);
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/2,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  std::future<TransferResult> actual_future = service1.AsyncGet(
+      "any_source_obj", "127.0.0.1:" + std::to_string(peer_port), dest_obj_id);
+  // Act as the peer: accept the request and learn its task_id.
+  pollfd peer_pfd{peer_listener, POLLIN, 0};
+  ASSERT_GT(poll(&peer_pfd, 1, /*timeout_ms=*/5000), 0);
+  int request_fd = accept(peer_listener, nullptr, nullptr);
+  ASSERT_GE(request_fd, 0);
+  ObjInfoHeader request;
+  ASSERT_TRUE(RecvHeaderWithin(request_fd, &request, /*timeout_ms=*/5000));
+  ASSERT_EQ(request.type, MessageType::kGetObj);
+
+  // When: send kError for that task on a new connection to the listener.
+  int rogue_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(rogue_fd, 0);
+  ObjInfoHeader forged_error;
+  forged_error.type = MessageType::kError;
+  snprintf(forged_error.task_id, sizeof(forged_error.task_id), "%s",
+           request.task_id);
+  ASSERT_TRUE(SendAll(rogue_fd, &forged_error, kHeaderSize).ok());
+
+  // Then: the rogue connection is closed and the task is still pending.
+  EXPECT_TRUE(PeerClosed(rogue_fd, /*timeout_ms=*/5000));
+  EXPECT_FALSE(
+      FutureReadyWithin(actual_future, std::chrono::milliseconds(300)));
+
+  // The real reply on the request socket completes the task.
+  ObjInfoHeader response;
+  response.type = MessageType::kRespondToGetObj;
+  response.obj_size = expected_data.size();
+  snprintf(response.task_id, sizeof(response.task_id), "%s", request.task_id);
+  ASSERT_TRUE(SendAll(request_fd, &response, kHeaderSize).ok());
+  ASSERT_TRUE(
+      SendAll(request_fd, expected_data.data(), expected_data.size()).ok());
+  ObjInfoHeader ack;
+  ASSERT_TRUE(RecvHeaderWithin(request_fd, &ack, /*timeout_ms=*/5000));
+  EXPECT_EQ(ack.type, MessageType::kAck);
+  ASSERT_TRUE(FutureReadyWithin(actual_future, std::chrono::seconds(5)));
+  EXPECT_TRUE(actual_future.get().success);
+  VerifyFileContentAndRemove(dest_obj_id, expected_data);
+
+  close(rogue_fd);
+  close(request_fd);
+  close(peer_listener);
+  service1.Shutdown();
+}
+
 // Shutdown() must not crash on a RespondToGetTask (which has no promise) and
 // must not hang while a responder waits for the requester's final ACK on an
 // accepted socket.

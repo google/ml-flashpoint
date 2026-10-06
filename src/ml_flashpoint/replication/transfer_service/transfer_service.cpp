@@ -673,23 +673,18 @@ bool TransferService::DispatchMessage(int client_fd,
       HandleGetObjRequest(client_fd, header);
       return true;
     case MessageType::kRespondToGetObj:
-      // ExecuteGetTask reads kGetObj responses on the connection that sent
-      // the request. A response arriving on the listener is a protocol
-      // violation. Do not write its payload to disk.
-      LOG(ERROR) << "Worker fd=" << client_fd
-                 << ": Unsolicited kRespondToGetObj received for task "
+    case MessageType::kAck:
+    case MessageType::kError:
+      // The listener only receives requests. Replies are read by the worker
+      // that owns the request socket (ExecutePutTask, ExecuteGetTask, and
+      // ExecuteRespondToGetTask for the final ACK). A reply arriving here is a
+      // protocol violation, so close the connection and do not act on it: a
+      // kRespondToGetObj payload must not be written to disk, and a kError
+      // must not fail a local task by task_id.
+      LOG(ERROR) << "Worker fd=" << client_fd << ": Unsolicited reply (type "
+                 << static_cast<int>(header.type) << ") received for task "
                  << header.task_id << ". Closing connection.";
       return false;
-    case MessageType::kAck:
-      LOG(ERROR) << "Worker fd=" << client_fd
-                 << ": Unexpected kAck message received for task "
-                 << header.task_id;
-      return true;
-    case MessageType::kError:
-      LOG(ERROR) << "Worker fd=" << client_fd
-                 << ": Error message received for task " << header.task_id;
-      ReportResult(header.task_id, false, "Received error message");
-      return true;
   }
   // The type byte comes from the network, so it can hold any uint8_t value,
   // not only the enumerators above. We cannot parse this header, so the

@@ -135,6 +135,10 @@ class TransferService final {
   void ProcessEpollEventsLoop();
   void HandleNewConnection();
   void ProcessIncomingData(int client_fd);
+  // Routes one received header to its handler. Returns true when the
+  // connection can carry another message afterwards, false when it must be
+  // closed.
+  bool DispatchMessage(int client_fd, const ObjInfoHeader& header);
   void RemoveClient(int client_fd);
   std::shared_ptr<ConnectionPool> GetOrCreateConnectionPool(
       const std::string& peer_addr);

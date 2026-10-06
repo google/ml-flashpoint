@@ -633,48 +633,15 @@ void TransferService::ProcessIncomingData(int client_fd) {
             << ": Received header type=" << static_cast<int>(header.type)
             << ", dest_obj_id=" << header.dest_obj_id;
 
-  bool keep_connection = true;
+  bool keep_connection = false;
   try {
-    switch (header.type) {
-      case MessageType::kPutObj:
-        HandleDataReceive(client_fd, header, false);
-        break;
-      case MessageType::kGetObj:
-        HandleGetObjRequest(client_fd, header);
-        break;
-      case MessageType::kRespondToGetObj:
-        // ExecuteGetTask reads kGetObj responses on the connection that sent
-        // the request. A response arriving on the listener is a protocol
-        // violation. Do not write its payload to disk.
-        LOG(ERROR) << "Worker fd=" << client_fd
-                   << ": Unsolicited kRespondToGetObj received for task "
-                   << header.task_id << ". Closing connection.";
-        keep_connection = false;
-        break;
-      case MessageType::kAck:
-        LOG(ERROR) << "Worker fd=" << client_fd
-                   << ": Unexpected kAck message received for task "
-                   << header.task_id;
-        break;
-      case MessageType::kError:
-        LOG(ERROR) << "Worker fd=" << client_fd
-                   << ": Error message received for task " << header.task_id;
-        ReportResult(header.task_id, false, "Received error message");
-        break;
-      default:
-        // We cannot parse this header, so the stream is out of sync.
-        LOG(ERROR) << "Worker fd=" << client_fd << ": Unknown message type "
-                   << static_cast<int>(header.type) << ". Closing connection.";
-        keep_connection = false;
-        break;
-    }
+    keep_connection = DispatchMessage(client_fd, header);
   } catch (const std::exception& e) {
     // A handler that throws leaves the connection in an unknown state. Close
     // it; otherwise it would stay registered in epoll but never be re-armed.
     LOG(ERROR) << "Worker fd=" << client_fd
                << ": Exception while handling message type="
                << static_cast<int>(header.type) << ": " << e.what();
-    keep_connection = false;
   }
 
   if (!keep_connection) {
@@ -692,6 +659,44 @@ void TransferService::ProcessIncomingData(int client_fd) {
       RemoveClient(client_fd);
     }
   }
+}
+
+bool TransferService::DispatchMessage(int client_fd,
+                                      const ObjInfoHeader& header) {
+  // No default case on purpose: with -Wswitch the compiler reports a new
+  // MessageType that is not handled here.
+  switch (header.type) {
+    case MessageType::kPutObj:
+      HandleDataReceive(client_fd, header, false);
+      return true;
+    case MessageType::kGetObj:
+      HandleGetObjRequest(client_fd, header);
+      return true;
+    case MessageType::kRespondToGetObj:
+      // ExecuteGetTask reads kGetObj responses on the connection that sent
+      // the request. A response arriving on the listener is a protocol
+      // violation. Do not write its payload to disk.
+      LOG(ERROR) << "Worker fd=" << client_fd
+                 << ": Unsolicited kRespondToGetObj received for task "
+                 << header.task_id << ". Closing connection.";
+      return false;
+    case MessageType::kAck:
+      LOG(ERROR) << "Worker fd=" << client_fd
+                 << ": Unexpected kAck message received for task "
+                 << header.task_id;
+      return true;
+    case MessageType::kError:
+      LOG(ERROR) << "Worker fd=" << client_fd
+                 << ": Error message received for task " << header.task_id;
+      ReportResult(header.task_id, false, "Received error message");
+      return true;
+  }
+  // The type byte comes from the network, so it can hold any uint8_t value,
+  // not only the enumerators above. We cannot parse this header, so the
+  // stream is out of sync.
+  LOG(ERROR) << "Worker fd=" << client_fd << ": Unknown message type "
+             << static_cast<int>(header.type) << ". Closing connection.";
+  return false;
 }
 
 void TransferService::ExecutePutTask(PutTask* task) {

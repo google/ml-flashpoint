@@ -183,8 +183,6 @@ void TransferService::Shutdown() {
   {
     std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
     for (auto const& [task_id, context] : pending_tasks_) {
-      // Remotely triggered tasks (RespondToGetTask) have no promise.
-      if (!context.promise) continue;
       try {
         context.promise->set_exception(std::make_exception_ptr(
             std::runtime_error("Service is shutting down")));
@@ -503,21 +501,28 @@ void TransferService::ProcessEpollEventsLoop() {
   LOG(INFO) << "Epoll processing loop finished.";
 }
 
+// Logs the outcome of a task. Local tasks (Put, Get) and remotely triggered
+// ones (RespondToGet) share this format, so log consumers parse them alike.
+static void LogTaskResult(const std::string& task_id,
+                          const TaskMetricContainer& metrics, bool success,
+                          const std::string& message) {
+  LOG(INFO) << "TransferService::report_result: task_id=" << task_id
+            << ", task_type=" << TaskTypeToString(metrics.task_type)
+            << ", data_size=" << metrics.data_size << ", success=" << success
+            << ", message=" << message << ", timing=" << metrics.ToString();
+}
+
 void TransferService::ReportResult(std::string task_id, bool success,
                                    const std::string& message) {
   std::shared_ptr<std::promise<TransferResult>> promise;
-  std::string timing_message = "";
-  std::string task_type = "";
-  size_t data_size = 0;
+  std::shared_ptr<TaskMetricContainer> metric_container;
 
   {
     std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
     auto it = pending_tasks_.find(task_id);
     if (it != pending_tasks_.end()) {
       promise = it->second.promise;
-      timing_message = it->second.metric_container->ToString();
-      task_type = TaskTypeToString(it->second.metric_container->task_type);
-      data_size = it->second.metric_container->data_size;
+      metric_container = it->second.metric_container;
       pending_tasks_.erase(it);
     } else {
       LOG(WARNING) << "No promise found for task_id: " << task_id;
@@ -525,10 +530,7 @@ void TransferService::ReportResult(std::string task_id, bool success,
     }
   }
 
-  LOG(INFO) << "TransferService::report_result: task_id=" << task_id
-            << ", task_type=" << task_type << ", data_size=" << data_size
-            << ", success=" << success << ", message=" << message
-            << ", timing=" << timing_message;
+  LogTaskResult(task_id, *metric_container, success, message);
 
   if (promise) {
     TransferResult result;
@@ -961,10 +963,18 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
             << ", dest_obj_id=" << task->GetDestObjId()
             << ", client_fd=" << task->GetClientFd();
 
+  // The task_id is the peer's, and the peer learned ours from the request
+  // header, so it may be the id of a local Get that is in flight. This task
+  // therefore has no entry in pending_tasks_ and must not call ReportResult:
+  // that would complete, or drop, the local task's promise.
+  auto finish = [&](bool success, const std::string& message) {
+    LogTaskResult(task->GetTaskId(), metric_container, success, message);
+  };
+
   int sockfd = task->GetClientFd();
   if (sockfd < 0) {
     LOG(ERROR) << "Invalid client_fd!";
-    ReportResult(task->GetTaskId(), false, "Invalid client_fd");
+    finish(false, "Invalid client_fd");
     return;
   }
   metric_container.connection_acquired_time = absl::Now();
@@ -981,7 +991,7 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
                << task->GetSourceObjId() << "': " << e.what();
     SendErrorResponse(sockfd, task->GetTaskId().c_str(),
                       task->GetSourceObjId().c_str());
-    ReportResult(task->GetTaskId(), false, "Failed to open buffer object");
+    finish(false, "Failed to open buffer object");
     return;
   }
   void* buffer_data_ptr = buffer_obj->get_data_ptr();
@@ -1007,14 +1017,14 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
 
   if (!SendAll(sockfd, &header, kHeaderSize).ok()) {
     LOG(ERROR) << "Failed to send kRespondToGetObj header";
-    ReportResult(task->GetTaskId(), false, "Failed to send header");
+    finish(false, "Failed to send header");
     return;
   }
   metric_container.header_sent_time = absl::Now();
 
   if (!SendAll(sockfd, buffer_data_ptr, size).ok()) {
     LOG(ERROR) << "Failed to send buffer data";
-    ReportResult(task->GetTaskId(), false, "Failed to send data");
+    finish(false, "Failed to send data");
     return;
   }
   metric_container.data_sent_time = absl::Now();
@@ -1022,18 +1032,17 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
   ObjInfoHeader ack_header;
   if (!RecvHeader(sockfd, ack_header).ok()) {
     LOG(ERROR) << "Failed to receive ACK";
-    ReportResult(task->GetTaskId(), false, "Failed to receive ACK");
+    finish(false, "Failed to receive ACK");
     return;
   }
 
   if (ack_header.type != MessageType::kAck) {
     LOG(ERROR) << "Failed to receive ACK for RespondToGetObj";
-    ReportResult(task->GetTaskId(), false, "Received unexpected ACK");
+    finish(false, "Received unexpected ACK");
     return;
   }
   metric_container.finish_time = absl::Now();
-  ReportResult(task->GetTaskId(), true,
-               "RespondToGetTask completed successfully");
+  finish(true, "RespondToGetTask completed successfully");
 }
 
 std::optional<ScopedConnection> TransferService::GetConnectionFromPool(
@@ -1136,14 +1145,8 @@ void TransferService::HandleGetObjRequest(int client_fd,
 
   RespondToGetTask task(header.task_id, header.source_obj_id,
                         header.dest_obj_id, client_fd, metric_container);
-
-  {
-    std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
-    // We don't have a promise for RespondToGetTask as it's triggered
-    // remotely, but we want to track it.
-    pending_tasks_[task.GetTaskId()] = {nullptr, metric_container};
-  }
-
+  // Not registered in pending_tasks_: the task_id is the peer's and could
+  // name a local task. ExecuteRespondToGetTask logs its own outcome.
   task.Execute(this);
 }
 

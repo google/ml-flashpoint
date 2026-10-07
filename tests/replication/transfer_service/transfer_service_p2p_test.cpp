@@ -1490,8 +1490,76 @@ TEST(TransferServiceP2PTest, UnsolicitedErrorOnListenerDoesNotFailLocalTask) {
   service1.Shutdown();
 }
 
-// Shutdown() must not crash on a RespondToGetTask (which has no promise) and
-// must not hang while a responder waits for the requester's final ACK on an
+// A kGetObj that reaches the listener naming the task_id of a local Get in
+// flight is served like any other request and must not touch the local task.
+// The responder runs under the peer's task_id, so it has to stay out of the
+// local task bookkeeping: the local future stays pending until the real reply
+// arrives on the request socket.
+TEST(TransferServiceP2PTest, GetRequestNamingLocalTaskIdDoesNotTouchLocalTask) {
+  // Given
+  const std::string expected_data = "payload delivered after a colliding Get";
+  const std::string expected_served_data = "object served to the rogue peer";
+  const std::string dest_obj_id = "colliding_get_dest_obj";
+  const std::string served_obj_id = "colliding_get_served_source_obj";
+  std::remove(dest_obj_id.c_str());
+  WriteTestFile(served_obj_id, expected_served_data);
+  int peer_port = 0;
+  int peer_listener = ListenOnLocalEphemeralPort(&peer_port);
+  ASSERT_GE(peer_listener, 0);
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/2,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  std::future<TransferResult> actual_future = service1.AsyncGet(
+      "any_source_obj", "127.0.0.1:" + std::to_string(peer_port), dest_obj_id);
+  // Act as the peer: accept the request and learn its task_id.
+  pollfd peer_pfd{peer_listener, POLLIN, 0};
+  ASSERT_GT(poll(&peer_pfd, 1, /*timeout_ms=*/5000), 0);
+  int request_fd = accept(peer_listener, nullptr, nullptr);
+  ASSERT_GE(request_fd, 0);
+  ObjInfoHeader request;
+  ASSERT_TRUE(RecvHeaderWithin(request_fd, &request, /*timeout_ms=*/5000));
+  ASSERT_EQ(request.type, MessageType::kGetObj);
+
+  // When: send a kGetObj for that task_id on a new connection to the listener.
+  int rogue_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(rogue_fd, 0);
+  ObjInfoHeader actual_response = SendRequestAndRecvResponse(
+      rogue_fd, BuildGetRequest(request.task_id, served_obj_id,
+                                "colliding_get_rogue_dest_obj", ""));
+  std::string actual_served_data =
+      RecvGetPayloadAndAck(rogue_fd, actual_response);
+
+  // Then: the rogue request is served and the local task is still pending.
+  EXPECT_EQ(actual_response.type, MessageType::kRespondToGetObj);
+  EXPECT_EQ(actual_served_data, expected_served_data);
+  EXPECT_FALSE(
+      FutureReadyWithin(actual_future, std::chrono::milliseconds(300)));
+
+  // The real reply on the request socket completes the task.
+  ObjInfoHeader response;
+  response.type = MessageType::kRespondToGetObj;
+  response.obj_size = expected_data.size();
+  snprintf(response.task_id, sizeof(response.task_id), "%s", request.task_id);
+  ASSERT_TRUE(SendAll(request_fd, &response, kHeaderSize).ok());
+  ASSERT_TRUE(
+      SendAll(request_fd, expected_data.data(), expected_data.size()).ok());
+  ObjInfoHeader ack;
+  ASSERT_TRUE(RecvHeaderWithin(request_fd, &ack, /*timeout_ms=*/5000));
+  EXPECT_EQ(ack.type, MessageType::kAck);
+  ASSERT_TRUE(FutureReadyWithin(actual_future, std::chrono::seconds(5)));
+  EXPECT_TRUE(actual_future.get().success);
+  VerifyFileContentAndRemove(dest_obj_id, expected_data);
+
+  close(rogue_fd);
+  close(request_fd);
+  close(peer_listener);
+  std::remove(served_obj_id.c_str());
+  service1.Shutdown();
+}
+
+// Shutdown() must not crash while a RespondToGetTask is in flight and must
+// not hang while that responder waits for the requester's final ACK on an
 // accepted socket.
 TEST(TransferServiceP2PTest, ShutdownWhileResponderWaitsForAckIsSafe) {
   // Given

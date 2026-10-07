@@ -813,9 +813,19 @@ void TransferService::HandleDataReceive(int client_fd,
       std::string(header.dest_obj_id) + std::string(kTempFileSuffix);
   // BufferObject's constructor throws when it cannot create the file.
   std::optional<BufferObject> buffer_obj;
+  // Every failure from here on removes the temporary file. obj_size is the
+  // peer's number, so a transfer that stops early would otherwise leave a
+  // sparse file of that apparent size behind. The constructor can also throw
+  // after it created the file (for example when mmap fails), so this runs on
+  // that path too; removing a file that was never created is harmless.
+  auto remove_tmp = [&]() {
+    buffer_obj.reset();
+    std::remove(tmp_obj_id.c_str());
+  };
   try {
     buffer_obj.emplace(tmp_obj_id, header.obj_size, /*overwrite=*/true);
   } catch (const std::exception& e) {
+    remove_tmp();
     // The sender is already streaming obj_size bytes on this connection. Read
     // and discard them so the connection stays in sync and can be reused (the
     // pool never replaces a closed connection). If the drain fails, the peer
@@ -828,6 +838,7 @@ void TransferService::HandleDataReceive(int client_fd,
   void* receiver_data_ptr = buffer_obj->get_data_ptr();
 
   if (!RecvAll(client_fd, receiver_data_ptr, header.obj_size).ok()) {
+    remove_tmp();
     fail("Failed to receive data");
     return;
   }
@@ -838,8 +849,10 @@ void TransferService::HandleDataReceive(int client_fd,
 
   // Rename the temporary file to the final destination.
   if (rename(tmp_obj_id.c_str(), header.dest_obj_id) != 0) {
+    const std::string rename_error = std::strerror(errno);
+    remove_tmp();
     fail("Failed to rename temporary file " + tmp_obj_id + " to " +
-         header.dest_obj_id + ": " + std::strerror(errno));
+         header.dest_obj_id + ": " + rename_error);
     return;
   }
   if (is_respond_get_task) {

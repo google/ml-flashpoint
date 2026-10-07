@@ -711,8 +711,8 @@ TEST(TransferServiceP2PTest, PutFailsInRenameWhenTargetExistAsADirectory) {
                 testing::HasSubstr("Received error from destination"));
   }
 
-  // Cleanup
-  remove((obj_id + ".tmp").c_str());  // Remove temporary file if created
+  // The receiver removes its temporary file when the rename fails.
+  EXPECT_FALSE(std::filesystem::exists(obj_id + ".tmp"));
   rmdir(target_dir.c_str());
 
   service1.Shutdown();
@@ -845,7 +845,8 @@ TEST(TransferServiceP2PTest, GetFailsInRenameWhenTargetExistAsADirectory) {
 
   // Cleanup
   std::remove(obj_id.c_str());
-  remove((dest_obj_id + ".tmp").c_str());
+  // The requester removes its temporary file when the rename fails.
+  EXPECT_FALSE(std::filesystem::exists(dest_obj_id + ".tmp"));
   rmdir(target_dir.c_str());
 
   service1.Shutdown();
@@ -1964,6 +1965,44 @@ TEST(TransferServiceP2PTest, ReplyHeadersCarryNoBytesAfterTerminators) {
   service1.Shutdown();
 }
 
+// A kPutObj whose sender stops before obj_size bytes arrived must not leave
+// the temporary file behind. obj_size is the peer's number, so without this
+// cleanup a peer could leave a sparse file of any apparent size on disk.
+TEST(TransferServiceP2PTest, TruncatedPutLeavesNoTemporaryFile) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/2,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const std::string dest_obj_id = "truncated_put_dest_obj";
+  const std::string tmp_obj_id = dest_obj_id + ".tmp";
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+  ObjInfoHeader request = BuildPutRequest("truncated_put_task", dest_obj_id,
+                                          /*obj_size=*/16 * 1024 * 1024);
+  const std::string partial(16, 'p');
+
+  // When: announce 16 MiB, send 16 bytes, then signal EOF. The read side
+  // stays open so the receiver's kError can be observed.
+  ASSERT_TRUE(SendAll(client_fd, &request, kHeaderSize).ok());
+  ASSERT_TRUE(SendAll(client_fd, partial.data(), partial.size()).ok());
+  ASSERT_EQ(shutdown(client_fd, SHUT_WR), 0);
+  ObjInfoHeader actual_response;
+  const bool actual_replied =
+      RecvHeaderWithin(client_fd, &actual_response, /*timeout_ms=*/5000);
+
+  // Then: the receiver reports the failure and leaves no file behind. The
+  // temporary file is removed before kError is sent, so no waiting is needed.
+  ASSERT_TRUE(actual_replied);
+  EXPECT_EQ(actual_response.type, MessageType::kError);
+  EXPECT_FALSE(std::filesystem::exists(tmp_obj_id));
+  EXPECT_FALSE(std::filesystem::exists(dest_obj_id));
+
+  close(client_fd);
+  std::remove(tmp_obj_id.c_str());  // Keep the directory clean on failure.
+  service1.Shutdown();
+}
+
 // When the receiver cannot create the destination of an inbound kPutObj, it
 // reads and discards the payload the sender is already streaming and answers
 // kError. The connection stays in sync and serves the next request normally.
@@ -2161,8 +2200,9 @@ TEST_P(MalformedGetResponseTest, RequesterFutureFailsInsteadOfHanging) {
   EXPECT_THROW(actual_future.get(), std::runtime_error);
   EXPECT_TRUE(responder.received_request());
   EXPECT_FALSE(std::filesystem::exists(dest_obj_id));
+  // No temporary file either, including after a truncated payload.
+  EXPECT_FALSE(std::filesystem::exists(dest_obj_id + ".tmp"));
 
-  std::remove((dest_obj_id + ".tmp").c_str());
   service2.Shutdown();
 }
 

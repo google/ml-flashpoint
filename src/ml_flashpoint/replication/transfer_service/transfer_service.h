@@ -173,6 +173,12 @@ class TransferService final {
   // response. The peer can only respond if its own inbound work is running.
   // If inbound and outbound work shared one pool, two peers that fill their
   // pools with Gets to each other would deadlock.
+  //
+  // Trade-off: an inbound worker is also held for the whole transfer it
+  // serves, including the wait for the requester's final ACK, and the socket
+  // calls have no timeout. A peer that stops reading or writing holds that
+  // worker until it disconnects or Shutdown() runs. Both pools have `threads`
+  // workers, so the service runs twice that many worker threads.
   std::unique_ptr<ThreadPool> thread_pool_;        // Outbound tasks.
   std::unique_ptr<ThreadPool> epoll_thread_pool_;  // Inbound epoll events.
   std::thread epoll_thread_;

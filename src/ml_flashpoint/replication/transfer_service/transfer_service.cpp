@@ -675,8 +675,9 @@ void TransferService::ProcessIncomingData(int client_fd) {
 
 bool TransferService::DispatchMessage(int client_fd,
                                       const ObjInfoHeader& header) {
-  // No default case on purpose: with -Wswitch the compiler reports a new
-  // MessageType that is not handled here.
+  // No default case on purpose, so that a new MessageType that is not handled
+  // here is reported by -Wswitch (part of -Wall; the project does not enable
+  // it yet) instead of being silently routed to the unknown-type path.
   switch (header.type) {
     case MessageType::kPutObj:
       HandleDataReceive(client_fd, header, false);

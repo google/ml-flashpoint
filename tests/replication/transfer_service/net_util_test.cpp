@@ -171,11 +171,12 @@ TEST_F(SendRecvTest, RecvAndDiscard_DrainsPayloadLargerThanChunkSize) {
   const std::string expected_data = "trailer";
   // A helper thread sends the data because the payload is larger than the
   // socketpair buffers: SendAll cannot finish until the receiver starts
-  // reading.
+  // reading. EXPECT rather than ASSERT: gtest's fatal assertions only return
+  // from the current function, which off the main thread is the lambda.
   std::thread writer_thread([this, &discarded_data, &expected_data]() {
-    ASSERT_TRUE(
+    EXPECT_TRUE(
         SendAll(fds_[0], discarded_data.data(), discarded_data.size()).ok());
-    ASSERT_TRUE(
+    EXPECT_TRUE(
         SendAll(fds_[0], expected_data.data(), expected_data.size()).ok());
   });
   std::string actual_data(expected_data.size(), '\0');

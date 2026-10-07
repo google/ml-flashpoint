@@ -1095,6 +1095,16 @@ ObjInfoHeader BuildPutRequest(const std::string& task_id,
   return request;
 }
 
+// Returns true if every byte after the first NUL in `field` is zero, that is,
+// if the field carries nothing but its string.
+template <size_t N>
+bool TailIsZero(const char (&field)[N]) {
+  for (size_t i = strnlen(field, N); i < N; ++i) {
+    if (field[i] != '\0') return false;
+  }
+  return true;
+}
+
 // A fake peer. It accepts one connection, reads one kGetObj request, and
 // answers with whatever `respond` writes to the socket. Every wait has a
 // timeout, so the helper thread always exits.
@@ -1912,6 +1922,47 @@ TEST_P(InvalidGetRequestTest, RepliesWithErrorAndKeepsSocketUsable) {
 INSTANTIATE_TEST_SUITE_P(TransferServiceP2PTest, InvalidGetRequestTest,
                          ::testing::Values("", "non_existent_source_obj",
                                            "{unterminated}"));
+
+// Headers go on the wire whole, so the bytes after each string's terminator
+// must be zero in every reply. Otherwise a reply would carry whatever the
+// worker's stack held before, such as fragments of other peers' headers.
+TEST(TransferServiceP2PTest, ReplyHeadersCarryNoBytesAfterTerminators) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/2,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const std::string source_obj_id = "clean_header_source_obj";
+  WriteTestFile(source_obj_id, "clean header payload");
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When: one request that fails (kError) and one that succeeds
+  // (kRespondToGetObj), on the same socket.
+  ObjInfoHeader actual_error = SendRequestAndRecvResponse(
+      client_fd,
+      BuildGetRequest("clean_header_task", "missing_clean_header_obj",
+                      "clean_header_dest_obj", ""));
+  ObjInfoHeader actual_response = SendRequestAndRecvResponse(
+      client_fd, BuildGetRequest("clean_header_task", source_obj_id,
+                                 "clean_header_dest_obj", ""));
+  RecvGetPayloadAndAck(client_fd, actual_response);
+
+  // Then
+  ASSERT_EQ(actual_error.type, MessageType::kError);
+  ASSERT_EQ(actual_response.type, MessageType::kRespondToGetObj);
+  for (const ObjInfoHeader* header : {&actual_error, &actual_response}) {
+    EXPECT_TRUE(TailIsZero(header->source_obj_id));
+    EXPECT_TRUE(TailIsZero(header->dest_obj_id));
+    EXPECT_TRUE(TailIsZero(header->source_address));
+    EXPECT_TRUE(TailIsZero(header->dest_address));
+    EXPECT_TRUE(TailIsZero(header->task_id));
+  }
+
+  close(client_fd);
+  std::remove(source_obj_id.c_str());
+  service1.Shutdown();
+}
 
 // When the receiver cannot create the destination of an inbound kPutObj, it
 // reads and discards the payload the sender is already streaming and answers

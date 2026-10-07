@@ -41,22 +41,19 @@ enum class MessageType : uint8_t {
 // string null terminator character.
 constexpr char kNullTerm = '\0';
 
+// The whole struct goes on the wire, so every byte is zero-initialized. The
+// bytes after each string's terminator are sent too; if they were left
+// uninitialized, every message would leak the worker's stack to the peer.
 struct ObjInfoHeader {
-  MessageType type;
-  char source_obj_id[1024];
-  char dest_obj_id[1024];
-  char source_address[64];
-  char dest_address[64];
-  char task_id[64];
-  ssize_t obj_size;
+  MessageType type = MessageType::kAck;
+  char source_obj_id[1024] = {};
+  char dest_obj_id[1024] = {};
+  char source_address[64] = {};
+  char dest_address[64] = {};
+  char task_id[64] = {};
+  ssize_t obj_size = 0;
 
-  ObjInfoHeader() : type(MessageType::kAck), obj_size(0) {
-    source_obj_id[0] = kNullTerm;
-    dest_obj_id[0] = kNullTerm;
-    source_address[0] = kNullTerm;
-    dest_address[0] = kNullTerm;
-    task_id[0] = kNullTerm;
-  }
+  ObjInfoHeader() = default;
 
   // Ensure all char arrays are null-terminated to prevent buffer over-read
   // segfaults when they are converted to std::string or used in logging.

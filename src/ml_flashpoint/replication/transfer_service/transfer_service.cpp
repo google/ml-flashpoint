@@ -228,7 +228,11 @@ void TransferService::Shutdown() {
     }
   }
 
-  // 7. Clean up connection pools.
+  // 7. Shut down the connection pools. This wakes workers that are waiting
+  // for a connection and shuts down the sockets that workers are using, so
+  // their pending send/recv fail. The pools must stay alive until step 8 has
+  // joined the workers: a worker that holds a ScopedConnection returns it to
+  // its pool through a raw pointer when it finishes. Step 9 destroys them.
   {
     std::unique_lock write_lock(connection_pools_mutex_);
     for (auto const& [peer_addr, pool] : connection_pools_) {
@@ -236,10 +240,10 @@ void TransferService::Shutdown() {
         pool->Shutdown();
       }
     }
-    connection_pools_.clear();
   }
 
-  // 8. Stop the thread pools.
+  // 8. Stop the thread pools. This runs the tasks that are still queued and
+  // joins every worker.
   if (thread_pool_) {
     thread_pool_->stop();
   }
@@ -247,7 +251,13 @@ void TransferService::Shutdown() {
     epoll_thread_pool_->stop();
   }
 
-  // 9. Close any accepted client sockets that are still open.
+  // 9. Destroy the connection pools. No worker can touch them anymore.
+  {
+    std::unique_lock write_lock(connection_pools_mutex_);
+    connection_pools_.clear();
+  }
+
+  // 10. Close any accepted client sockets that are still open.
   {
     std::lock_guard<std::mutex> lock(client_fds_mutex_);
     for (int fd : client_fds_) {
@@ -256,7 +266,7 @@ void TransferService::Shutdown() {
     client_fds_.clear();
   }
 
-  // 10. Clean up epoll fd.
+  // 11. Clean up epoll fd.
   if (epoll_fd_ != -1) {
     if (close(epoll_fd_) == -1) {
       PLOG(WARNING) << "Failed to close epoll_fd";
@@ -1073,9 +1083,9 @@ std::shared_ptr<ConnectionPool> TransferService::GetOrCreateConnectionPool(
     return it->second;  // Double check
   }
 
-  // Shutdown() sets running_ to false before it shuts down and clears the
-  // pools. ThreadPool::stop() then runs every task that is still queued. If one
-  // of those tasks created a pool here, nothing would ever shut it down, and a
+  // Shutdown() sets running_ to false before it shuts down the pools.
+  // ThreadPool::stop() then runs every task that is still queued. If one of
+  // those tasks created a pool here, nothing would ever shut it down, and a
   // task blocked on a peer that never answers would block Shutdown() forever.
   if (!running_.load()) {
     LOG(WARNING) << "Not creating connection pool for " << peer_addr

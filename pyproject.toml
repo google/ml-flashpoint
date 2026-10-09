@@ -67,6 +67,20 @@ nemo = [
     "ml_flashpoint[pytorch]",
     "nemo_toolkit[all]==2.4.0",
 ]
+# An extra for users who want to use this library with its Megatron Bridge adapter.
+# Installed via: `pip install ml-flashpoint[megatron-bridge]`
+megatron-bridge = [
+    "megatron-bridge==0.6.0",
+    "ml_flashpoint[megatron,pytorch]",
+]
+# An extra for users who want to use this library with NeMo RL.
+# NeMo RL itself is not on PyPI as an installable distribution (the PyPI
+# `nemo-rl` entry is a placeholder); it is installed from source, so this extra
+# only pulls the Megatron Bridge stack that the NeMo RL adapter builds on.
+# Installed via: `pip install ml-flashpoint[nemo-rl]`
+nemo-rl = [
+    "ml_flashpoint[megatron-bridge]",
+]
 
 # An extra for generating the documentation site.
 # Installed via: `pip install ml-flashpoint[docs]`
@@ -106,9 +120,7 @@ dev-nemo = [
 # Defines a "dev-nemo-rl" extra for NeMo RL development (typically uses Python 3.12+).
 # Installed via: `pip install -e .[dev-nemo-rl]`
 dev-nemo-rl = [
-    "ml-flashpoint[dev-nemo]",
-    # TODO: uncomment below and remove line above when nemo-rl profile is added
-    #"ml-flashpoint[dev-base,nemo-rl]",
+    "ml-flashpoint[dev-base,nemo-rl,docs]",
 ]
 
 # Defines a "dev" extra for setting up a development environment.

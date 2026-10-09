@@ -21,6 +21,7 @@ nav:
   - "Home": README.md
   - "Getting Started": user-guide.md
   - "Overview": overview.md
+  - "Checkpoint Timing Experiment": checkpoint-timing-experiment.md
   # Keep Troubleshooting at the end.
   - "Troubleshooting": troubleshooting.md
 

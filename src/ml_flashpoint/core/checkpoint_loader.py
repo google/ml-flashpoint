@@ -54,6 +54,63 @@ M = TypeVar("M")
 _LOGGER = get_logger(__name__)
 
 
+# Allowlist of (module, name) pairs for safe metadata deserialization.
+# Replaces insecure pickle.load() to prevent arbitrary code execution when loading
+# .metadata files from untrusted sources (e.g., peer nodes, shared storage).
+# See CWE-502: Deserialization of Untrusted Data.
+_SAFE_METADATA_UNPICKLE_ALLOWLIST: frozenset[Tuple[str, str]] = frozenset(
+    [
+        # torch.distributed.checkpoint.metadata classes
+        ("torch.distributed.checkpoint.metadata", "Metadata"),
+        ("torch.distributed.checkpoint.metadata", "MetadataIndex"),
+        ("torch.distributed.checkpoint.metadata", "TensorStorageMetadata"),
+        ("torch.distributed.checkpoint.metadata", "BytesStorageMetadata"),
+        ("torch.distributed.checkpoint.metadata", "StorageMeta"),
+        ("torch.distributed.checkpoint.metadata", "TensorProperties"),
+        ("torch.distributed.checkpoint.metadata", "ChunkStorageMetadata"),
+        ("torch.distributed.checkpoint.metadata", "_MEM_FORMAT_ENCODING"),
+        # torch.serialization
+        ("torch.serialization", "_get_layout"),
+        # torch types
+        ("torch", "Size"),
+        ("torch", "float32"),
+        ("torch", "float16"),
+        ("torch", "float64"),
+        ("torch", "bfloat16"),
+        ("torch", "int8"),
+        ("torch", "uint8"),
+        ("torch", "int16"),
+        ("torch", "int32"),
+        ("torch", "int64"),
+        ("torch", "bool"),
+        ("torch", "complex64"),
+        ("torch", "complex128"),
+        ("torch", "strided"),
+        ("torch", "sparse_coo"),
+        ("torch", "sparse_csr"),
+        ("torch", "sparse_bsr"),
+        ("torch", "sparse_csc"),
+        ("torch", "sparse_bsc"),
+        ("torch", "jagged"),
+    ]
+)
+
+
+class _RestrictedMetadataUnpickler(pickle.Unpickler):
+    """Unpickler that only allows deserializing PyTorch checkpoint Metadata classes.
+
+    Prevents arbitrary code execution from malicious pickle payloads (CWE-502).
+    """
+
+    def find_class(self, module: str, name: str) -> type:
+        key = (module, name)
+        if key not in _SAFE_METADATA_UNPICKLE_ALLOWLIST:
+            raise pickle.UnpicklingError(
+                f"Unsafe deserialization blocked: ({module!r}, {name!r}) is not in the allowlist. "
+                "Metadata files must only contain PyTorch checkpoint metadata structures."
+            )
+        return super().find_class(module, name)
+
 class MLFlashpointCheckpointLoader(abc.ABC):
     """
     This is the main interface for loading checkpoints, providing functionality for the different
@@ -169,7 +226,7 @@ class DefaultMLFlashpointCheckpointLoader(MLFlashpointCheckpointLoader):
         metadata_path = Path(checkpoint_id.data) / object_name
         try:
             with open(metadata_path, "rb") as f:
-                return pickle.load(f)
+                return _RestrictedMetadataUnpickler(f).load()
         except Exception:
             _LOGGER.exception("Error reading metadata from '%s'", metadata_path)
             raise

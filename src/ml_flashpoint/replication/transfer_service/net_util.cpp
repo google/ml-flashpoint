@@ -22,8 +22,10 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <array>
 #include <memory>
+#include <vector>
 
 #include "absl/cleanup/cleanup.h"
 #include "absl/log/log.h"
@@ -177,6 +179,22 @@ absl::Status RecvAll(int sockfd, void* data_ptr, ssize_t data_size) {
       }
       return absl::ErrnoToStatus(errno, "Recv failed");
     }
+  }
+  return absl::OkStatus();
+}
+
+absl::Status RecvAndDiscard(int sockfd, ssize_t data_size) {
+  constexpr ssize_t kDiscardChunkSize = 64 * 1024;
+  std::vector<char> scratch(static_cast<size_t>(
+      std::min<ssize_t>(std::max<ssize_t>(data_size, 1), kDiscardChunkSize)));
+  ssize_t remaining_bytes = data_size;
+  while (remaining_bytes > 0) {
+    ssize_t chunk = std::min(remaining_bytes, kDiscardChunkSize);
+    absl::Status status = RecvAll(sockfd, scratch.data(), chunk);
+    if (!status.ok()) {
+      return status;
+    }
+    remaining_bytes -= chunk;
   }
   return absl::OkStatus();
 }

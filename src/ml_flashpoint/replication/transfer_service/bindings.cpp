@@ -38,7 +38,10 @@ PYBIND11_MODULE(transfer_service_ext, m) {
       .def("initialize", &TransferService::Initialize, py::arg("listen_port"),
            py::arg("threads") = 16, py::arg("conn_pool_per_peer") = 16,
            py::arg("global_rank") = -1,
-           "Initializes and starts the C++ transfer service.")
+           "Initializes and starts the C++ transfer service. `threads` is the "
+           "size of each of the two worker pools, one for outbound tasks "
+           "(async_put/async_get) and one for inbound requests from peers, so "
+           "the service runs 2 * threads worker threads.")
 
       .def("shutdown", &TransferService::Shutdown,
            "Stops the C++ transer service.")

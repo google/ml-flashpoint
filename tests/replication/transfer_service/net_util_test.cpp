@@ -121,6 +121,95 @@ TEST_F(SendRecvTest, RecvAll_IncompleteRead) {
   EXPECT_EQ(recv_status.code(), absl::StatusCode::kUnavailable);
 }
 
+// RecvAndDiscard consumes exactly the requested number of bytes. The bytes
+// after them stay on the stream, intact and in order.
+TEST_F(SendRecvTest, RecvAndDiscard_SkipsExactlyRequestedBytes) {
+  // Given
+  const std::string discarded_data = "discard-me";
+  const std::string expected_data = "keep-me";
+  ASSERT_TRUE(
+      SendAll(fds_[0], discarded_data.data(), discarded_data.size()).ok());
+  ASSERT_TRUE(
+      SendAll(fds_[0], expected_data.data(), expected_data.size()).ok());
+  std::string actual_data(expected_data.size(), '\0');
+
+  // When
+  absl::Status discard_status = RecvAndDiscard(fds_[1], discarded_data.size());
+  absl::Status recv_status =
+      RecvAll(fds_[1], actual_data.data(), actual_data.size());
+
+  // Then
+  EXPECT_TRUE(discard_status.ok());
+  EXPECT_TRUE(recv_status.ok());
+  EXPECT_EQ(actual_data, expected_data);
+}
+
+// Discarding zero bytes succeeds without consuming anything from the stream.
+TEST_F(SendRecvTest, RecvAndDiscard_ZeroBytesIsNoOp) {
+  // Given
+  const std::string expected_data = "untouched";
+  ASSERT_TRUE(
+      SendAll(fds_[0], expected_data.data(), expected_data.size()).ok());
+  std::string actual_data(expected_data.size(), '\0');
+
+  // When
+  absl::Status discard_status = RecvAndDiscard(fds_[1], 0);
+  absl::Status recv_status =
+      RecvAll(fds_[1], actual_data.data(), actual_data.size());
+
+  // Then
+  EXPECT_TRUE(discard_status.ok());
+  EXPECT_TRUE(recv_status.ok());
+  EXPECT_EQ(actual_data, expected_data);
+}
+
+// A payload larger than the internal scratch buffer is read in several
+// chunks and still stops exactly at the requested byte count.
+TEST_F(SendRecvTest, RecvAndDiscard_DrainsPayloadLargerThanChunkSize) {
+  // Given
+  const std::string discarded_data(1024 * 1024, 'd');
+  const std::string expected_data = "trailer";
+  // A helper thread sends the data because the payload is larger than the
+  // socketpair buffers: SendAll cannot finish until the receiver starts
+  // reading. EXPECT rather than ASSERT: gtest's fatal assertions only return
+  // from the current function, which off the main thread is the lambda.
+  std::thread writer_thread([this, &discarded_data, &expected_data]() {
+    EXPECT_TRUE(
+        SendAll(fds_[0], discarded_data.data(), discarded_data.size()).ok());
+    EXPECT_TRUE(
+        SendAll(fds_[0], expected_data.data(), expected_data.size()).ok());
+  });
+  std::string actual_data(expected_data.size(), '\0');
+
+  // When
+  absl::Status discard_status = RecvAndDiscard(fds_[1], discarded_data.size());
+  absl::Status recv_status =
+      RecvAll(fds_[1], actual_data.data(), actual_data.size());
+  writer_thread.join();
+
+  // Then
+  EXPECT_TRUE(discard_status.ok());
+  EXPECT_TRUE(recv_status.ok());
+  EXPECT_EQ(actual_data, expected_data);
+}
+
+// If the peer closes before all requested bytes arrive, RecvAndDiscard
+// returns the same kUnavailable error as RecvAll instead of looping forever.
+TEST_F(SendRecvTest, RecvAndDiscard_FailsOnEof) {
+  // Given
+  const std::string partial_data = "short";
+  ASSERT_TRUE(SendAll(fds_[0], partial_data.data(), partial_data.size()).ok());
+  close(fds_[0]);
+
+  // When
+  absl::Status discard_status =
+      RecvAndDiscard(fds_[1], partial_data.size() + 5);
+
+  // Then
+  EXPECT_FALSE(discard_status.ok());
+  EXPECT_EQ(discard_status.code(), absl::StatusCode::kUnavailable);
+}
+
 TEST_F(SendRecvTest, RecvHeader_Basic) {
   // Given
   ObjInfoHeader sent_header;

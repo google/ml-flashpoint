@@ -22,6 +22,7 @@
 #include <sys/stat.h>
 
 #include <array>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -29,6 +30,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
@@ -123,8 +125,9 @@ int TransferService::Initialize(int listen_port, int threads,
       absl::StrFormat("%s:%d", local_ip_address.value(), listen_port_);
   LOG(INFO) << "Listening on " << local_address_;
 
-  // Create the thread pool.
+  // Create the thread pools for outbound tasks and inbound epoll events.
   thread_pool_ = std::make_unique<ThreadPool>(threads_);
+  epoll_thread_pool_ = std::make_unique<ThreadPool>(threads_);
 
   // Create epoll instance.
   epoll_fd_ = epoll_create1(0);
@@ -211,7 +214,23 @@ void TransferService::Shutdown() {
     epoll_thread_.join();
   }
 
-  // 6. Clean up connection pools.
+  // 6. Unblock workers that are stuck on an accepted client socket, such as a
+  // RespondToGetTask whose peer stopped reading or a kPutObj receive whose
+  // sender stalled. shutdown() makes their pending send/recv fail, so the
+  // thread pools below can be joined. Step 9 closes the fds, after all
+  // workers have stopped.
+  {
+    std::lock_guard<std::mutex> lock(client_fds_mutex_);
+    for (int fd : client_fds_) {
+      shutdown(fd, SHUT_RDWR);
+    }
+  }
+
+  // 7. Shut down the connection pools. This wakes workers that are waiting
+  // for a connection and shuts down the sockets that workers are using, so
+  // their pending send/recv fail. The pools must stay alive until step 8 has
+  // joined the workers: a worker that holds a ScopedConnection returns it to
+  // its pool through a raw pointer when it finishes. Step 9 destroys them.
   {
     std::unique_lock write_lock(connection_pools_mutex_);
     for (auto const& [peer_addr, pool] : connection_pools_) {
@@ -219,15 +238,33 @@ void TransferService::Shutdown() {
         pool->Shutdown();
       }
     }
-    connection_pools_.clear();
   }
 
-  // 7. Stop the thread pool.
+  // 8. Stop the thread pools. This runs the tasks that are still queued and
+  // joins every worker.
   if (thread_pool_) {
     thread_pool_->stop();
   }
+  if (epoll_thread_pool_) {
+    epoll_thread_pool_->stop();
+  }
 
-  // 8. Clean up epoll fd.
+  // 9. Destroy the connection pools. No worker can touch them anymore.
+  {
+    std::unique_lock write_lock(connection_pools_mutex_);
+    connection_pools_.clear();
+  }
+
+  // 10. Close any accepted client sockets that are still open.
+  {
+    std::lock_guard<std::mutex> lock(client_fds_mutex_);
+    for (int fd : client_fds_) {
+      close(fd);
+    }
+    client_fds_.clear();
+  }
+
+  // 11. Clean up epoll fd.
   if (epoll_fd_ != -1) {
     if (close(epoll_fd_) == -1) {
       PLOG(WARNING) << "Failed to close epoll_fd";
@@ -428,7 +465,7 @@ void TransferService::ProcessEpollEventsLoop() {
           running_.store(false);
           break;
         }
-        thread_pool_->enqueue([this]() { this->HandleNewConnection(); });
+        epoll_thread_pool_->enqueue([this]() { this->HandleNewConnection(); });
       } else {
         if ((current_events & EPOLLERR) || (current_events & EPOLLHUP)) {
           if (current_events & EPOLLERR) {
@@ -439,7 +476,7 @@ void TransferService::ProcessEpollEventsLoop() {
             LOG(INFO) << "Epoll HUP event (EPOLLHUP) on client fd="
                       << current_fd << ". Closing.";
           }
-          thread_pool_->enqueue(
+          epoll_thread_pool_->enqueue(
               [this, current_fd]() { this->RemoveClient(current_fd); });
           continue;
         }
@@ -448,8 +485,8 @@ void TransferService::ProcessEpollEventsLoop() {
           LOG(INFO) << "Epoll loop: Dispatching incoming data "
                        "processing for fd="
                     << current_fd;
-          thread_pool_->enqueue(&TransferService::ProcessIncomingData, this,
-                                current_fd);
+          epoll_thread_pool_->enqueue(&TransferService::ProcessIncomingData,
+                                      this, current_fd);
         } else {
           LOG(WARNING) << "Epoll loop: Unhandled event flags=" << current_events
                        << " on client fd=" << current_fd;
@@ -464,21 +501,28 @@ void TransferService::ProcessEpollEventsLoop() {
   LOG(INFO) << "Epoll processing loop finished.";
 }
 
+// Logs the outcome of a task. Local tasks (Put, Get) and remotely triggered
+// ones (RespondToGet) share this format, so log consumers parse them alike.
+static void LogTaskResult(const std::string& task_id,
+                          const TaskMetricContainer& metrics, bool success,
+                          const std::string& message) {
+  LOG(INFO) << "TransferService::report_result: task_id=" << task_id
+            << ", task_type=" << TaskTypeToString(metrics.task_type)
+            << ", data_size=" << metrics.data_size << ", success=" << success
+            << ", message=" << message << ", timing=" << metrics.ToString();
+}
+
 void TransferService::ReportResult(std::string task_id, bool success,
                                    const std::string& message) {
   std::shared_ptr<std::promise<TransferResult>> promise;
-  std::string timing_message = "";
-  std::string task_type = "";
-  size_t data_size = 0;
+  std::shared_ptr<TaskMetricContainer> metric_container;
 
   {
     std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
     auto it = pending_tasks_.find(task_id);
     if (it != pending_tasks_.end()) {
       promise = it->second.promise;
-      timing_message = it->second.metric_container->ToString();
-      task_type = TaskTypeToString(it->second.metric_container->task_type);
-      data_size = it->second.metric_container->data_size;
+      metric_container = it->second.metric_container;
       pending_tasks_.erase(it);
     } else {
       LOG(WARNING) << "No promise found for task_id: " << task_id;
@@ -486,10 +530,7 @@ void TransferService::ReportResult(std::string task_id, bool success,
     }
   }
 
-  LOG(INFO) << "TransferService::report_result: task_id=" << task_id
-            << ", task_type=" << task_type << ", data_size=" << data_size
-            << ", success=" << success << ", message=" << message
-            << ", timing=" << timing_message;
+  LogTaskResult(task_id, *metric_container, success, message);
 
   if (promise) {
     TransferResult result;
@@ -547,6 +588,13 @@ void TransferService::HandleNewConnection() {
       continue;
     }
 
+    // Register the client before arming it in epoll. Otherwise an early event
+    // could trigger RemoveClient() before the fd is in the registry.
+    {
+      std::lock_guard<std::mutex> lock(client_fds_mutex_);
+      client_fds_.insert(conn_fd);
+    }
+
     // Add the new client to epoll.
     struct epoll_event event;
     event.events =
@@ -554,7 +602,7 @@ void TransferService::HandleNewConnection() {
     event.data.fd = conn_fd;
     if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, conn_fd, &event) == -1) {
       PLOG(ERROR) << "Failed to add client fd to epoll";
-      close(conn_fd);
+      RemoveClient(conn_fd);
       continue;
     }
 
@@ -567,6 +615,14 @@ void TransferService::HandleNewConnection() {
 
 void TransferService::RemoveClient(int client_fd) {
   if (client_fd < 0) return;
+  {
+    // Only the caller that removes the fd from the registry closes it. This
+    // makes RemoveClient idempotent. Without it, Shutdown() and a worker could
+    // both close the same fd, and the second close could hit an unrelated fd
+    // that reused the number.
+    std::lock_guard<std::mutex> lock(client_fds_mutex_);
+    if (client_fds_.erase(client_fd) == 0) return;
+  }
   if (epoll_fd_ >= 0) {
     epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, client_fd, nullptr);
   }
@@ -589,27 +645,15 @@ void TransferService::ProcessIncomingData(int client_fd) {
             << ": Received header type=" << static_cast<int>(header.type)
             << ", dest_obj_id=" << header.dest_obj_id;
 
-  bool keep_connection = true;
-  switch (header.type) {
-    case MessageType::kPutObj:
-      HandleDataReceive(client_fd, header, false);
-      break;
-    case MessageType::kRespondToGetObj:
-      HandleDataReceive(client_fd, header, true);
-      break;
-    case MessageType::kGetObj:
-      HandleGetObjRequest(client_fd, header);
-      break;
-    case MessageType::kAck:
-      LOG(ERROR) << "Worker fd=" << client_fd
-                 << ": Unexpected kAck message received for task "
-                 << header.task_id;
-      break;
-    case MessageType::kError:
-      LOG(ERROR) << "Worker fd=" << client_fd
-                 << ": Error message received for task " << header.task_id;
-      ReportResult(header.task_id, false, "Received error message");
-      break;
+  bool keep_connection = false;
+  try {
+    keep_connection = DispatchMessage(client_fd, header);
+  } catch (const std::exception& e) {
+    // A handler that throws leaves the connection in an unknown state. Close
+    // it; otherwise it would stay registered in epoll but never be re-armed.
+    LOG(ERROR) << "Worker fd=" << client_fd
+               << ": Exception while handling message type="
+               << static_cast<int>(header.type) << ": " << e.what();
   }
 
   if (!keep_connection) {
@@ -627,6 +671,40 @@ void TransferService::ProcessIncomingData(int client_fd) {
       RemoveClient(client_fd);
     }
   }
+}
+
+bool TransferService::DispatchMessage(int client_fd,
+                                      const ObjInfoHeader& header) {
+  // No default case on purpose, so that a new MessageType that is not handled
+  // here is reported by -Wswitch (part of -Wall; the project does not enable
+  // it yet) instead of being silently routed to the unknown-type path.
+  switch (header.type) {
+    case MessageType::kPutObj:
+      HandleDataReceive(client_fd, header, false);
+      return true;
+    case MessageType::kGetObj:
+      HandleGetObjRequest(client_fd, header);
+      return true;
+    case MessageType::kRespondToGetObj:
+    case MessageType::kAck:
+    case MessageType::kError:
+      // The listener only receives requests. Replies are read by the worker
+      // that owns the request socket (ExecutePutTask, ExecuteGetTask, and
+      // ExecuteRespondToGetTask for the final ACK). A reply arriving here is a
+      // protocol violation, so close the connection and do not act on it: a
+      // kRespondToGetObj payload must not be written to disk, and a kError
+      // must not fail a local task by task_id.
+      LOG(ERROR) << "Worker fd=" << client_fd << ": Unsolicited reply (type "
+                 << static_cast<int>(header.type) << ") received for task "
+                 << header.task_id << ". Closing connection.";
+      return false;
+  }
+  // The type byte comes from the network, so it can hold any uint8_t value,
+  // not only the enumerators above. We cannot parse this header, so the
+  // stream is out of sync.
+  LOG(ERROR) << "Worker fd=" << client_fd << ": Unknown message type "
+             << static_cast<int>(header.type) << ". Closing connection.";
+  return false;
 }
 
 void TransferService::ExecutePutTask(PutTask* task) {
@@ -703,12 +781,24 @@ void TransferService::HandleDataReceive(int client_fd,
                                         const ObjInfoHeader& header,
                                         bool is_respond_get_task) {
   LOG(INFO) << "Handling data receive for filename: " << header.dest_obj_id;
-  if (header.obj_size <= 0) {
-    LOG(ERROR) << "Invalid obj_size received: " << header.obj_size;
+
+  // Every failure before the ACK ends the same way: reply kError so the sender
+  // stops waiting for an ACK, and, when this is the receiving half of a local
+  // Get, resolve the caller's future. The connection is left open and stays
+  // usable: the branches before the payload either have nothing to read or
+  // drain it first, and RecvAll only fails once the connection is already
+  // broken. The caller decides what happens to the connection next.
+  auto fail = [&](const std::string& message) {
+    LOG(ERROR) << "HandleDataReceive for " << header.dest_obj_id << ": "
+               << message;
     if (is_respond_get_task) {
-      ReportResult(header.task_id, false, "Invalid obj_size received");
+      ReportResult(header.task_id, false, message);
     }
     SendErrorResponse(client_fd, header.task_id, header.dest_obj_id);
+  };
+
+  if (header.obj_size <= 0) {
+    fail("Invalid obj_size received: " + std::to_string(header.obj_size));
     return;
   }
   if (is_respond_get_task) {
@@ -722,32 +812,48 @@ void TransferService::HandleDataReceive(int client_fd,
   }
   std::string tmp_obj_id =
       std::string(header.dest_obj_id) + std::string(kTempFileSuffix);
-  BufferObject buffer_obj(tmp_obj_id, header.obj_size,
-                          /*overwrite=*/true);
+  // BufferObject's constructor throws when it cannot create the file.
+  std::optional<BufferObject> buffer_obj;
+  // Every failure from here on removes the temporary file. obj_size is the
+  // peer's number, so a transfer that stops early would otherwise leave a
+  // sparse file of that apparent size behind. The constructor can also throw
+  // after it created the file (for example when mmap fails), so this runs on
+  // that path too; removing a file that was never created is harmless.
+  auto remove_tmp = [&]() {
+    buffer_obj.reset();
+    std::remove(tmp_obj_id.c_str());
+  };
+  try {
+    buffer_obj.emplace(tmp_obj_id, header.obj_size, /*overwrite=*/true);
+  } catch (const std::exception& e) {
+    remove_tmp();
+    // The sender is already streaming obj_size bytes on this connection. Read
+    // and discard them so the connection stays in sync and can be reused (the
+    // pool never replaces a closed connection). If the drain fails, the peer
+    // is gone, and the kError send inside fail() logs that.
+    RecvAndDiscard(client_fd, header.obj_size).IgnoreError();
+    fail(std::string("Failed to create buffer object: ") + e.what());
+    return;
+  }
   LOG(INFO) << "Successfully created buffer object";
-  void* receiver_data_ptr = buffer_obj.get_data_ptr();
+  void* receiver_data_ptr = buffer_obj->get_data_ptr();
 
   if (!RecvAll(client_fd, receiver_data_ptr, header.obj_size).ok()) {
-    LOG(ERROR) << "Failed to receive data for " << header.dest_obj_id;
-    if (is_respond_get_task) {
-      ReportResult(header.task_id, false, "Failed to receive data");
-    }
-    SendErrorResponse(client_fd, header.task_id, header.dest_obj_id);
+    remove_tmp();
+    fail("Failed to receive data");
     return;
   }
 
   // Close the buffer object to ensure data is flushed and the file descriptor
   // is released before renaming.
-  buffer_obj.close();
+  buffer_obj->close();
 
   // Rename the temporary file to the final destination.
   if (rename(tmp_obj_id.c_str(), header.dest_obj_id) != 0) {
-    PLOG(ERROR) << "Failed to rename temporary file " << tmp_obj_id << " to "
-                << header.dest_obj_id;
-    if (is_respond_get_task) {
-      ReportResult(header.task_id, false, "Failed to rename temporary file");
-    }
-    SendErrorResponse(client_fd, header.task_id, header.dest_obj_id);
+    const std::string rename_error = std::strerror(errno);
+    remove_tmp();
+    fail("Failed to rename temporary file " + tmp_obj_id + " to " +
+         header.dest_obj_id + ": " + rename_error);
     return;
   }
   if (is_respond_get_task) {
@@ -812,7 +918,7 @@ void TransferService::ExecuteGetTask(GetTask* task) {
   }
   metric_container.header_sent_time = absl::Now();
 
-  // Wait for the immediate response (ACK or ERROR)
+  // Wait for the response (RespondToGetObj or ERROR)
   ObjInfoHeader resp_header;
   if (!RecvHeader(conn.fd(), resp_header).ok()) {
     ReportResult(task->GetTaskId(), false,
@@ -821,15 +927,42 @@ void TransferService::ExecuteGetTask(GetTask* task) {
   }
 
   switch (resp_header.type) {
-    case MessageType::kAck:
-      LOG(INFO) << "Received ACK for GET request. Waiting for data transfer.";
+    case MessageType::kRespondToGetObj: {
+      // Use the task's own task_id and dest_obj_id, not the peer's. Only
+      // obj_size is new information. If we used the peer's task_id, a
+      // mismatch would leave this task pending forever. If we used the peer's
+      // dest_obj_id, the peer could choose where we write.
+      if (task->GetTaskId() != resp_header.task_id) {
+        LOG(WARNING) << "GetTask " << task->GetTaskId()
+                     << ": response has task_id '" << resp_header.task_id
+                     << "'; ignoring it.";
+      }
+      ObjInfoHeader local_header = resp_header;
+      snprintf(local_header.task_id, sizeof(local_header.task_id), "%s",
+               task->GetTaskId().c_str());
+      snprintf(local_header.dest_obj_id, sizeof(local_header.dest_obj_id), "%s",
+               task->GetDestObjId().c_str());
+      try {
+        HandleDataReceive(conn.fd(), local_header, true);
+      } catch (const std::exception& e) {
+        // HandleDataReceive handles expected failures itself (for example,
+        // the destination file cannot be created) and keeps the connection in
+        // sync. This catch is a last resort: the thread pool swallows any
+        // exception that escapes a worker, which would leave the caller's
+        // future pending forever.
+        LOG(ERROR) << "GetTask " << task->GetTaskId()
+                   << " failed while receiving data: " << e.what();
+        ReportResult(task->GetTaskId(), false,
+                     std::string("Failed to receive data: ") + e.what());
+      }
       break;
+    }
     case MessageType::kError:
       ReportResult(task->GetTaskId(), false, "Received error message");
       break;
+    case MessageType::kAck:
     case MessageType::kPutObj:
     case MessageType::kGetObj:
-    case MessageType::kRespondToGetObj:
       ReportResult(task->GetTaskId(), false,
                    "Received unexpected response for GET request");
       break;
@@ -842,29 +975,41 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
   LOG(INFO) << "Executing RespondToGetTask for task_id=" << task->GetTaskId()
             << ", source_obj_id=" << task->GetSourceObjId()
             << ", dest_obj_id=" << task->GetDestObjId()
-            << ", source_addr=" << task->GetSourceAddr()
-            << ", dest_addr=" << task->GetDestAddr();
+            << ", client_fd=" << task->GetClientFd();
 
-  auto conn_opt = GetConnectionFromPool(task->GetDestAddr());
-  if (!conn_opt) {
-    LOG(ERROR) << "Failed to get connection!";
-    ReportResult(task->GetTaskId(), false, "Failed to get connection");
+  // The task_id is the peer's, and the peer learned ours from the request
+  // header, so it may be the id of a local Get that is in flight. This task
+  // therefore has no entry in pending_tasks_ and must not call ReportResult:
+  // that would complete, or drop, the local task's promise.
+  auto finish = [&](bool success, const std::string& message) {
+    LogTaskResult(task->GetTaskId(), metric_container, success, message);
+  };
+
+  int sockfd = task->GetClientFd();
+  if (sockfd < 0) {
+    LOG(ERROR) << "Invalid client_fd!";
+    finish(false, "Invalid client_fd");
     return;
   }
-  ScopedConnection conn = std::move(conn_opt.value());
   metric_container.connection_acquired_time = absl::Now();
 
-  // Open file as buffer object
-  BufferObject buffer_obj(task->GetSourceObjId());
-  void* buffer_data_ptr = buffer_obj.get_data_ptr();
-  size_t size = buffer_obj.get_capacity();
-
-  if (buffer_data_ptr == nullptr) {
+  // Open the file as a buffer object. The constructor throws if the object
+  // cannot be opened (unreadable, a directory, or an empty file). The
+  // requester is blocked waiting for our response on this socket, so we must
+  // tell it about the failure.
+  std::optional<BufferObject> buffer_obj;
+  try {
+    buffer_obj.emplace(task->GetSourceObjId());
+  } catch (const std::exception& e) {
     LOG(ERROR) << "RespondToGetTask failed: Could not open buffer object for '"
-               << task->GetSourceObjId() << "'";
-    ReportResult(task->GetTaskId(), false, "Failed to create buffer object");
+               << task->GetSourceObjId() << "': " << e.what();
+    SendErrorResponse(sockfd, task->GetTaskId().c_str(),
+                      task->GetSourceObjId().c_str());
+    finish(false, "Failed to open buffer object");
     return;
   }
+  void* buffer_data_ptr = buffer_obj->get_data_ptr();
+  size_t size = buffer_obj->get_capacity();
 
   ObjInfoHeader header;
 
@@ -883,18 +1028,17 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
 
   header.type = MessageType::kRespondToGetObj;
   header.obj_size = size;
-  int sockfd = conn.fd();
 
   if (!SendAll(sockfd, &header, kHeaderSize).ok()) {
     LOG(ERROR) << "Failed to send kRespondToGetObj header";
-    ReportResult(task->GetTaskId(), false, "Failed to send header");
+    finish(false, "Failed to send header");
     return;
   }
   metric_container.header_sent_time = absl::Now();
 
   if (!SendAll(sockfd, buffer_data_ptr, size).ok()) {
     LOG(ERROR) << "Failed to send buffer data";
-    ReportResult(task->GetTaskId(), false, "Failed to send data");
+    finish(false, "Failed to send data");
     return;
   }
   metric_container.data_sent_time = absl::Now();
@@ -902,18 +1046,17 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
   ObjInfoHeader ack_header;
   if (!RecvHeader(sockfd, ack_header).ok()) {
     LOG(ERROR) << "Failed to receive ACK";
-    ReportResult(task->GetTaskId(), false, "Failed to receive ACK");
+    finish(false, "Failed to receive ACK");
     return;
   }
 
   if (ack_header.type != MessageType::kAck) {
     LOG(ERROR) << "Failed to receive ACK for RespondToGetObj";
-    ReportResult(task->GetTaskId(), false, "Received unexpected ACK");
+    finish(false, "Received unexpected ACK");
     return;
   }
   metric_container.finish_time = absl::Now();
-  ReportResult(task->GetTaskId(), true,
-               "RespondToGetTask completed successfully");
+  finish(true, "RespondToGetTask completed successfully");
 }
 
 std::optional<ScopedConnection> TransferService::GetConnectionFromPool(
@@ -963,6 +1106,16 @@ std::shared_ptr<ConnectionPool> TransferService::GetOrCreateConnectionPool(
     return it->second;  // Double check
   }
 
+  // Shutdown() sets running_ to false before it shuts down the pools.
+  // ThreadPool::stop() then runs every task that is still queued. If one of
+  // those tasks created a pool here, nothing would ever shut it down, and a
+  // task blocked on a peer that never answers would block Shutdown() forever.
+  if (!running_.load()) {
+    LOG(WARNING) << "Not creating connection pool for " << peer_addr
+                 << ": service is shutting down";
+    return nullptr;
+  }
+
   // Pool doesn't exist, create it dynamically
   auto new_pool = std::make_shared<ConnectionPool>(peer_host, peer_port,
                                                    conn_pool_size_per_peer_);
@@ -981,20 +1134,15 @@ void TransferService::HandleGetObjRequest(int client_fd,
   LOG(INFO) << "Handling get object request for requested_obj_id: "
             << header.source_obj_id;
 
-  if (!std::filesystem::exists(header.source_obj_id)) {
-    PLOG(ERROR) << "Object not found: " << header.source_obj_id;
+  // Use the non-throwing overload. A stat error other than "not found" (for
+  // example, a name that is too long) must also send kError to the requester
+  // instead of throwing and dropping the socket.
+  std::error_code ec;
+  if (!std::filesystem::exists(header.source_obj_id, ec)) {
+    LOG(ERROR) << "Object not found: " << header.source_obj_id
+               << (ec ? ": " + ec.message() : "");
     SendErrorResponse(client_fd, header.task_id, header.source_obj_id);
     return;
-  }
-
-  // Send ACK to confirm request is accepted, before async data transfer
-  ObjInfoHeader ack_header;
-  ack_header.type = MessageType::kAck;
-  snprintf(ack_header.task_id, sizeof(ack_header.task_id), "%s",
-           header.task_id);
-  if (!SendAll(client_fd, &ack_header, kHeaderSize).ok()) {
-    LOG(ERROR) << "Failed to send ACK for GET request " << header.source_obj_id;
-    return;  // Don't proceed if we can't even ACK
   }
 
   auto metric_container = std::make_shared<RespondToGetTaskMetricContainer>();
@@ -1009,18 +1157,11 @@ void TransferService::HandleGetObjRequest(int client_fd,
   }
   metric_container->submit_time = absl::Now();
 
-  auto task = std::make_unique<RespondToGetTask>(
-      header.task_id, header.source_obj_id, header.dest_obj_id,
-      header.source_address, header.dest_address, metric_container);
-
-  {
-    std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
-    // We don't have a promise for RespondToGetTask as it's triggered
-    // remotely, but we want to track it.
-    pending_tasks_[task->GetTaskId()] = {nullptr, metric_container};
-  }
-
-  task_queue_.enqueue(std::move(task));
+  RespondToGetTask task(header.task_id, header.source_obj_id,
+                        header.dest_obj_id, client_fd, metric_container);
+  // Not registered in pending_tasks_: the task_id is the peer's and could
+  // name a local task. ExecuteRespondToGetTask logs its own outcome.
+  task.Execute(this);
 }
 
 void TransferService::UpdateTaskMetrics(

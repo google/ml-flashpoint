@@ -52,6 +52,21 @@ absl::Status SendAll(int sockfd, const void* data_ptr, ssize_t data_size);
 //   absl::OkStatus() on success, or an error status on failure.
 absl::Status RecvAll(int sockfd, void* data_ptr, ssize_t data_size);
 
+// Receives and discards exactly data_size bytes from the socket.
+//
+// Call this when the peer is already sending a payload that the receiver
+// cannot store (for example, the destination file cannot be created). Reading
+// the payload keeps the message stream in sync, so the connection can be
+// reused. This matters because the pool never replaces a closed connection.
+//
+// Args:
+//   sockfd: The socket file descriptor.
+//   data_size: The number of bytes to discard.
+//
+// Returns:
+//   absl::OkStatus() on success, or an error status on failure.
+absl::Status RecvAndDiscard(int sockfd, ssize_t data_size);
+
 // Receives an ObjInfoHeader from the socket and ensures its string fields are
 // null-terminated.
 absl::Status RecvHeader(int sockfd, ObjInfoHeader& header);

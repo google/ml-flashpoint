@@ -259,3 +259,28 @@ class MLFlashpointMegatronAsyncSaveStrategy(AsyncSaveShardedStrategy):
             },
             finalize_fns=finalize_fns,
         )
+
+    @override
+    @log_execution_time(logger=_LOGGER, name="save", level=logging.INFO)
+    def save(self, sharded_state_dict: ShardedStateDict, checkpoint_dir: Union[str, Path]):
+        """Trivial sync implementation that does not spin up a new process."""
+        async_request = self.async_save(sharded_state_dict, checkpoint_dir)
+
+        async_fn_args = list(async_request.async_fn_args)
+        if async_request.preload_fn is not None:
+            preload_result = async_request.preload_fn()
+            if len(async_fn_args) > 1:
+                async_fn_args[1] = preload_result
+
+        # Ensure all async D2H copies are finished before writing
+        if torch.cuda.is_initialized():
+            torch.cuda.synchronize()
+
+        if async_request.async_fn is not None:
+            async_request.async_fn(*async_fn_args, **async_request.async_fn_kwargs)
+
+        for finalize_fn in async_request.finalize_fns:
+            finalize_fn()
+
+        if torch.distributed.is_initialized():
+            torch.distributed.barrier()

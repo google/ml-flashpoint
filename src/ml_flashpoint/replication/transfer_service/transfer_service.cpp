@@ -82,9 +82,9 @@ TransferService::~TransferService() {
   absl::RemoveLogSink(mlf_log_sink_.get());
 }
 
-int TransferService::Initialize(int listen_port, int threads,
-                                int conn_pool_size_per_peer, int global_rank,
-                                const std::string& base_dir) {
+int TransferService::Initialize(const std::string& base_dir, int listen_port,
+                                int threads, int conn_pool_size_per_peer,
+                                int global_rank) {
   std::lock_guard<std::mutex> lock(init_mutex_);
   if (running_.load()) {
     LOG(INFO) << "Transfer service is already running.";
@@ -101,18 +101,18 @@ int TransferService::Initialize(int listen_port, int threads,
   mlf_log_sink_ = std::make_unique<MLFLogSink>(global_rank);
   absl::AddLogSink(mlf_log_sink_.get());
 
-  // Resolve the directory that confines every object id. canonical() follows
-  // symlinks and needs the directory to exist, so object ids are compared
-  // against the directory's real location.
-  std::error_code ec;
-  std::filesystem::path base = base_dir.empty()
-                                   ? std::filesystem::current_path(ec)
-                                   : std::filesystem::path(base_dir);
-  if (!ec && !base_dir.empty()) {
-    std::filesystem::create_directories(base, ec);
+  // Resolve the directory that confines every object id. There is no default
+  // on purpose: a service that is not told where it may read and write must
+  // not start. canonical() follows symlinks and needs the directory to exist,
+  // so object ids are compared against the directory's real location.
+  if (base_dir.empty()) {
+    LOG(ERROR) << "base_dir must not be empty";
+    return -1;
   }
+  std::error_code ec;
+  std::filesystem::create_directories(base_dir, ec);
   if (!ec) {
-    base_dir_ = std::filesystem::canonical(base, ec);
+    base_dir_ = std::filesystem::canonical(base_dir, ec);
   }
   if (!ec && !std::filesystem::is_directory(base_dir_, ec)) {
     ec = std::make_error_code(std::errc::not_a_directory);

@@ -27,7 +27,7 @@ from ml_flashpoint.replication.transfer_service import transfer_service_ext
 
 def run_service(service, port_container, rank, base_dir):
     """Target function for running a TransferService in a thread."""
-    port = service.initialize(0, global_rank=rank, base_dir=base_dir)
+    port = service.initialize(base_dir, global_rank=rank)
     port_container.append(port)
 
 

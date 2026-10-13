@@ -239,9 +239,9 @@ class ReplicationManager:
             _LOGGER.info("No TransferService provided, initializing a new one...")
             self._transfer_service = transfer_service_ext.TransferService()
             bound_listen_port = self._transfer_service.initialize(
-                listen_port,
+                os.fspath(base_dir),
+                listen_port=listen_port,
                 global_rank=dist.get_rank(),
-                base_dir=os.fspath(base_dir),
             )
             if bound_listen_port <= 0:
                 _LOGGER.error("Failed to initialize C++ TransferService")

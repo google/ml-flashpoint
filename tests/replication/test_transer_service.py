@@ -89,8 +89,8 @@ def fixture_transfer_services(
     addr1 = f"127.0.0.1:{port1}"
     addr2 = f"127.0.0.1:{port2}"
 
-    service1.initialize(listen_port=port1, base_dir=str(tmp_path))
-    service2.initialize(listen_port=port2, base_dir=str(tmp_path))
+    service1.initialize(str(tmp_path), listen_port=port1)
+    service2.initialize(str(tmp_path), listen_port=port2)
 
     yield service1, service2, addr1, addr2
 

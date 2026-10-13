@@ -67,25 +67,26 @@ class TransferService final {
   // Initializes the transfer service.
   //
   // Args:
+  //   base_dir: The directory that confines every object id this service
+  //             reads (kGetObj from a peer) or writes (kPutObj from a peer,
+  //             and the local destination of AsyncGet). An id that resolves
+  //             outside it, after following symlinks, is rejected with
+  //             kError. Must not be empty. The directory is created if it
+  //             does not exist. Relative object ids are resolved against the
+  //             process's current working directory, not against base_dir.
   //   listen_port: The port to listen on. If 0, an ephemeral port is chosen.
   //   threads: The number of worker threads in *each* of the two thread pools
   //            (outbound tasks and inbound epoll events), i.e. 2 * threads
   //            workers in total.
   //   conn_pool_per_peer: The size of the connection pool for each peer.
   //   global_rank: The global rank of the process.
-  //   base_dir: The directory that confines every object id this service
-  //             reads (kGetObj from a peer) or writes (kPutObj from a peer,
-  //             and the local destination of AsyncGet). An id that resolves
-  //             outside it, after following symlinks, is rejected with
-  //             kError. The directory is created if it does not exist. Empty
-  //             means the current working directory; relative object ids are
-  //             resolved against the current working directory either way.
   //
   // Returns:
-  //   The port the service is listening on, or -1 on failure.
-  int Initialize(int listen_port = 0, int threads = 16,
-                 int conn_pool_per_peer = 16, int global_rank = -1,
-                 const std::string& base_dir = "");
+  //   The port the service is listening on, or -1 on failure, including an
+  //   empty base_dir or one that cannot be created or is not a directory.
+  int Initialize(const std::string& base_dir, int listen_port = 0,
+                 int threads = 16, int conn_pool_per_peer = 16,
+                 int global_rank = -1);
 
   // Shuts down the transfer service gracefully.
   void Shutdown();

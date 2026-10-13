@@ -59,7 +59,7 @@ def test_initialize_binds_port_success(replication_manager, mocker):
 
     # Then
     assert replication_manager._listen_port == 12345
-    mock_transfer_service_instance.initialize.assert_called_once_with(0, global_rank=0, base_dir="/flashpoint/base")
+    mock_transfer_service_instance.initialize.assert_called_once_with("/flashpoint/base", listen_port=0, global_rank=0)
 
 
 def test_initialize_binds_port_failure(replication_manager, mocker):

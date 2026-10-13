@@ -15,11 +15,12 @@
 import abc
 import concurrent.futures
 import logging
+import os
 import socket
 import threading
 import time
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Union
 
 import torch
 import torch.distributed as dist
@@ -192,6 +193,7 @@ class ReplicationManager:
         retry_config: ReplicationRetryConfig = get_default_retry_config(),
         replication_transfer_service: Optional[transfer_service_ext.TransferService] = None,
         repl_strategy: Optional[ReplicationStrategy] = None,
+        base_dir: Optional[Union[str, os.PathLike]] = None,
     ) -> None:
         """Initializes the ReplicationManager and underlying services.
 
@@ -208,7 +210,24 @@ class ReplicationManager:
                 created.
             repl_strategy: An optional replication strategy. If not provided, a
                 default PairwiseReplicationStrategy will be used.
+            base_dir: The ML Flashpoint base directory. The TransferService
+                only reads and writes checkpoint objects inside it: a peer that
+                asks for, or sends, an object id that resolves outside it (after
+                following symlinks) gets an error. Required unless
+                `replication_transfer_service` is provided, in which case that
+                service's own base directory applies and this argument is
+                ignored.
+
+        Raises:
+            ValueError: If `base_dir` is missing and no
+                `replication_transfer_service` is provided.
+            RuntimeError: If the TransferService fails to initialize.
         """
+        if replication_transfer_service is None and not base_dir:
+            raise ValueError(
+                "base_dir is required when no replication_transfer_service is provided: "
+                "the TransferService only transfers objects inside it."
+            )
         self._checkpoint_object_manager = checkpoint_object_manager
         self._listen_port = listen_port
         self._retry_config = retry_config
@@ -220,7 +239,8 @@ class ReplicationManager:
             _LOGGER.info("No TransferService provided, initializing a new one...")
             self._transfer_service = transfer_service_ext.TransferService()
             bound_listen_port = self._transfer_service.initialize(
-                listen_port,
+                os.fspath(base_dir),
+                listen_port=listen_port,
                 global_rank=dist.get_rank(),
             )
             if bound_listen_port <= 0:

@@ -15,9 +15,17 @@
 #include "transfer_helpers.h"
 
 #include <array>
+#include <filesystem>
 #include <iomanip>
 #include <random>
 #include <sstream>
+#include <string>
+#include <string_view>
+#include <system_error>
+
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 
 namespace ml_flashpoint::replication::transfer_service {
 
@@ -47,6 +55,39 @@ std::string GenerateUuid() {
     i++;
   }
   return ss.str();
+}
+
+absl::StatusOr<std::string> ResolvePathWithinBaseDir(
+    std::string_view object_id, const std::filesystem::path& base_dir) {
+  if (object_id.empty()) {
+    return absl::InvalidArgumentError("Object id is empty");
+  }
+  std::error_code ec;
+  // weakly_canonical leaves a relative path relative when none of its
+  // components exist yet, so make it absolute first.
+  const std::filesystem::path absolute =
+      std::filesystem::absolute(std::filesystem::path(object_id), ec);
+  if (ec) {
+    return absl::InternalError(absl::StrCat("Cannot resolve object id '",
+                                            object_id, "': ", ec.message()));
+  }
+  // Follows symlinks in the existing prefix, then normalizes the rest, so a
+  // destination that does not exist yet is handled too.
+  const std::filesystem::path resolved =
+      std::filesystem::weakly_canonical(absolute, ec);
+  if (ec) {
+    return absl::InternalError(absl::StrCat("Cannot resolve object id '",
+                                            object_id, "': ", ec.message()));
+  }
+  // Component-wise comparison: a string prefix check would accept
+  // "/base2/x" for the base "/base".
+  const std::filesystem::path relative = resolved.lexically_relative(base_dir);
+  if (relative.empty() || relative == "." || *relative.begin() == "..") {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Object id '", object_id, "' resolves to '", resolved.native(),
+        "', outside the base directory '", base_dir.native(), "'"));
+  }
+  return resolved.native();
 }
 
 }  // namespace ml_flashpoint::replication::transfer_service

@@ -34,6 +34,7 @@
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 
 #include "absl/log/check.h"
 #include "absl/log/globals.h"
@@ -81,8 +82,9 @@ TransferService::~TransferService() {
   absl::RemoveLogSink(mlf_log_sink_.get());
 }
 
-int TransferService::Initialize(int listen_port, int threads,
-                                int conn_pool_size_per_peer, int global_rank) {
+int TransferService::Initialize(const std::string& base_dir, int listen_port,
+                                int threads, int conn_pool_size_per_peer,
+                                int global_rank) {
   std::lock_guard<std::mutex> lock(init_mutex_);
   if (running_.load()) {
     LOG(INFO) << "Transfer service is already running.";
@@ -98,6 +100,28 @@ int TransferService::Initialize(int listen_port, int threads,
   absl::RemoveLogSink(mlf_log_sink_.get());
   mlf_log_sink_ = std::make_unique<MLFLogSink>(global_rank);
   absl::AddLogSink(mlf_log_sink_.get());
+
+  // Resolve the directory that confines every object id. There is no default
+  // on purpose: a service that is not told where it may read and write must
+  // not start. canonical() follows symlinks and needs the directory to exist,
+  // so object ids are compared against the directory's real location.
+  if (base_dir.empty()) {
+    LOG(ERROR) << "base_dir must not be empty";
+    return -1;
+  }
+  std::error_code ec;
+  std::filesystem::create_directories(base_dir, ec);
+  if (!ec) {
+    base_dir_ = std::filesystem::canonical(base_dir, ec);
+  }
+  if (!ec && !std::filesystem::is_directory(base_dir_, ec)) {
+    ec = std::make_error_code(std::errc::not_a_directory);
+  }
+  if (ec) {
+    LOG(ERROR) << "Failed to resolve base_dir '" << base_dir
+               << "': " << ec.message();
+    return -1;
+  }
 
   // Get listener fd and bind to listen port
   absl::StatusOr<int> listener_fd_or = SetupListeningSocket(listen_port);
@@ -154,7 +178,8 @@ int TransferService::Initialize(int listen_port, int threads,
   LOG(INFO) << "TransferService initialized and listening on port "
             << listen_port_ << " with threads=" << threads_
             << ", conn_pool_per_peer=" << conn_pool_size_per_peer_
-            << ", global_rank=" << global_rank_;
+            << ", global_rank=" << global_rank_
+            << ", base_dir=" << base_dir_.native();
   return listen_port_;
 }
 
@@ -397,6 +422,17 @@ std::future<TransferResult> TransferService::AsyncGet(
   {
     std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
     pending_tasks_[task_id] = {promise, metric_container};
+  }
+
+  // Check the local destination now, before anything is sent, so that a bad
+  // id fails fast instead of after a full transfer. HandleDataReceive checks
+  // it again when the data arrives: that is the one place every write goes
+  // through.
+  if (absl::StatusOr<std::string> dest =
+          ResolvePathWithinBaseDir(dest_obj_id, base_dir_);
+      !dest.ok()) {
+    ReportResult(task_id, false, std::string(dest.status().message()));
+    return future;
   }
 
   task_queue_.enqueue(std::move(task));
@@ -801,6 +837,18 @@ void TransferService::HandleDataReceive(int client_fd,
     fail("Invalid obj_size received: " + std::to_string(header.obj_size));
     return;
   }
+  // The destination id comes from the peer for a Put, and from the local
+  // caller for a Get. Either way it must resolve into base_dir_. From here on
+  // the resolved path is the one used, so what was checked is what is
+  // written. The sender is already streaming obj_size bytes, so drain them,
+  // as the other early failures do, to keep the connection usable.
+  absl::StatusOr<std::string> dest_path =
+      ResolvePathWithinBaseDir(header.dest_obj_id, base_dir_);
+  if (!dest_path.ok()) {
+    RecvAndDiscard(client_fd, header.obj_size).IgnoreError();
+    fail(std::string(dest_path.status().message()));
+    return;
+  }
   if (is_respond_get_task) {
     UpdateTaskMetrics(
         header.task_id, [obj_size = header.obj_size](TaskMetricContainer& ts) {
@@ -810,8 +858,7 @@ void TransferService::HandleDataReceive(int client_fd,
           }
         });
   }
-  std::string tmp_obj_id =
-      std::string(header.dest_obj_id) + std::string(kTempFileSuffix);
+  std::string tmp_obj_id = *dest_path + std::string(kTempFileSuffix);
   // BufferObject's constructor throws when it cannot create the file.
   std::optional<BufferObject> buffer_obj;
   // Every failure from here on removes the temporary file. obj_size is the
@@ -849,11 +896,11 @@ void TransferService::HandleDataReceive(int client_fd,
   buffer_obj->close();
 
   // Rename the temporary file to the final destination.
-  if (rename(tmp_obj_id.c_str(), header.dest_obj_id) != 0) {
+  if (rename(tmp_obj_id.c_str(), dest_path->c_str()) != 0) {
     const std::string rename_error = std::strerror(errno);
     remove_tmp();
-    fail("Failed to rename temporary file " + tmp_obj_id + " to " +
-         header.dest_obj_id + ": " + rename_error);
+    fail("Failed to rename temporary file " + tmp_obj_id + " to " + *dest_path +
+         ": " + rename_error);
     return;
   }
   if (is_respond_get_task) {
@@ -993,8 +1040,9 @@ void TransferService::ExecuteRespondToGetTask(RespondToGetTask* task) {
   }
   metric_container.connection_acquired_time = absl::Now();
 
-  // Open the file as a buffer object. The constructor throws if the object
-  // cannot be opened (unreadable, a directory, or an empty file). The
+  // Open the file as a buffer object. The path was resolved and checked
+  // against base_dir_ by HandleGetObjRequest. The constructor throws if the
+  // object cannot be opened (unreadable, a directory, or an empty file). The
   // requester is blocked waiting for our response on this socket, so we must
   // tell it about the failure.
   std::optional<BufferObject> buffer_obj;
@@ -1134,11 +1182,23 @@ void TransferService::HandleGetObjRequest(int client_fd,
   LOG(INFO) << "Handling get object request for requested_obj_id: "
             << header.source_obj_id;
 
+  // The id comes from the peer. Refuse anything that resolves outside
+  // base_dir_, and hand the resolved path to the task so that what was
+  // checked is what gets opened.
+  absl::StatusOr<std::string> source_path =
+      ResolvePathWithinBaseDir(header.source_obj_id, base_dir_);
+  if (!source_path.ok()) {
+    LOG(ERROR) << "Rejecting get request for '" << header.source_obj_id
+               << "': " << source_path.status().message();
+    SendErrorResponse(client_fd, header.task_id, header.source_obj_id);
+    return;
+  }
+
   // Use the non-throwing overload. A stat error other than "not found" (for
   // example, a name that is too long) must also send kError to the requester
   // instead of throwing and dropping the socket.
   std::error_code ec;
-  if (!std::filesystem::exists(header.source_obj_id, ec)) {
+  if (!std::filesystem::exists(*source_path, ec)) {
     LOG(ERROR) << "Object not found: " << header.source_obj_id
                << (ec ? ": " + ec.message() : "");
     SendErrorResponse(client_fd, header.task_id, header.source_obj_id);
@@ -1149,16 +1209,15 @@ void TransferService::HandleGetObjRequest(int client_fd,
   metric_container->task_id = header.task_id;
   metric_container->task_type = TaskMetricContainer::TaskType::kRespondToGet;
   try {
-    metric_container->data_size =
-        std::filesystem::file_size(header.source_obj_id);
+    metric_container->data_size = std::filesystem::file_size(*source_path);
   } catch (const std::filesystem::filesystem_error& e) {
     LOG(WARNING) << "Failed to get file size for metrics: " << e.what();
     metric_container->data_size = 0;
   }
   metric_container->submit_time = absl::Now();
 
-  RespondToGetTask task(header.task_id, header.source_obj_id,
-                        header.dest_obj_id, client_fd, metric_container);
+  RespondToGetTask task(header.task_id, *source_path, header.dest_obj_id,
+                        client_fd, metric_container);
   // Not registered in pending_tasks_: the task_id is the peer's and could
   // name a local task. ExecuteRespondToGetTask logs its own outcome.
   task.Execute(this);

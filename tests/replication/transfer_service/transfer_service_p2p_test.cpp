@@ -42,6 +42,7 @@
 #include "gtest/gtest.h"
 #include "net_util.h"
 #include "protocol.h"
+#include "transfer_helpers.h"
 #include "transfer_service.h"
 
 namespace ml_flashpoint::replication::transfer_service {
@@ -111,13 +112,17 @@ void VerifyFileContentAndRemove(const std::string& file_path,
   std::remove(file_path.c_str());
 }
 
+// Base directory for the services in these tests: the working directory, in
+// which the tests create and clean up their object files by relative name.
+std::string CwdBaseDir() { return std::filesystem::current_path().native(); }
+
 TEST(TransferServiceP2PTest, SimplePut) {
   TransferService service1;
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2;
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   std::string data = "Hello, world!";
@@ -137,11 +142,11 @@ TEST(TransferServiceP2PTest, SimplePut) {
 
 TEST(TransferServiceP2PTest, PutLargeObject) {
   TransferService service1;
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2;
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   // Create a large string (5MB)
@@ -167,11 +172,11 @@ TEST(TransferServiceP2PTest, PutLargeObject) {
 
 TEST(TransferServiceP2PTest, ShutdownInterruptsTransfer) {
   TransferService service1;
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2;
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   // Create a large string (100MB) to make sure it takes time to send
@@ -209,11 +214,11 @@ TEST(TransferServiceP2PTest, ShutdownInterruptsTransfer) {
 
 TEST(TransferServiceP2PTest, AsyncPutLargeMmapData) {
   TransferService service1;
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2;
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   const size_t large_size = 1UL * 1024 * 1024 * 1024;  // 1 GB
@@ -267,11 +272,11 @@ TEST(TransferServiceP2PTest, AsyncPutLargeMmapData) {
 
 TEST(TransferServiceP2PTest, PutEmptyObjectShouldFail) {
   TransferService service1;
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2;
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   std::string data = "";
@@ -303,11 +308,11 @@ TEST(TransferServiceP2PTest, PutEmptyObjectShouldFail) {
 
 TEST(TransferServiceP2PTest, PutZeroSizeObjectShouldFail) {
   TransferService service1;
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2;
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   std::string data = "some data";
@@ -329,11 +334,11 @@ TEST(TransferServiceP2PTest, PutZeroSizeObjectShouldFail) {
 
 TEST(TransferServiceP2PTest, ConcurrentPut) {
   TransferService service1;
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2;
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   const int num_threads = 8;
@@ -370,11 +375,11 @@ TEST(TransferServiceP2PTest, ConcurrentPut) {
 
 TEST(TransferServiceP2PTest, SimpleGet) {
   TransferService service1(std::optional<std::string>("127.0.0.1"));
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2(std::optional<std::string>("127.0.0.1"));
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   std::string data = "Hello, world!";
@@ -402,11 +407,11 @@ TEST(TransferServiceP2PTest, SimpleGet) {
 
 TEST(TransferServiceP2PTest, GetLargeObject) {
   TransferService service1(std::optional<std::string>("127.0.0.1"));
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2(std::optional<std::string>("127.0.0.1"));
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   const size_t large_size = 5 * 1024 * 1024;
@@ -442,11 +447,11 @@ TEST(TransferServiceP2PTest, GetLargeObject) {
 
 TEST(TransferServiceP2PTest, ConcurrentGet) {
   TransferService service1(std::optional<std::string>("127.0.0.1"));
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2(std::optional<std::string>("127.0.0.1"));
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   const int num_threads = 8;
@@ -492,11 +497,11 @@ TEST(TransferServiceP2PTest, ConcurrentGet) {
 
 TEST(TransferServiceP2PTest, GetNonExistentObjectShouldFail) {
   TransferService service1(std::optional<std::string>("127.0.0.1"));
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2(std::optional<std::string>("127.0.0.1"));
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   std::string obj_id = "non_existent_object";
@@ -528,11 +533,11 @@ TEST(TransferServiceP2PTest, GetNonExistentObjectShouldFail) {
 
 TEST(TransferServiceP2PTest, PutCreatesTemporaryFileAndRenames) {
   TransferService service1;
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2;
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   std::string data = "Temporary file test data.";
@@ -562,11 +567,11 @@ TEST(TransferServiceP2PTest, PutCreatesTemporaryFileAndRenames) {
 
 TEST(TransferServiceP2PTest, GetCreatesTemporaryFileAndRenames) {
   TransferService service1(std::optional<std::string>("127.0.0.1"));
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2(std::optional<std::string>("127.0.0.1"));
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   std::string data = "Temporary file test data for GET.";
@@ -605,11 +610,11 @@ TEST(TransferServiceP2PTest, GetCreatesTemporaryFileAndRenames) {
 
 TEST(TransferServiceP2PTest, PutOverwritesEmptyTempFile) {
   TransferService service1;
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2;
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   std::string data = "some data here";
@@ -631,11 +636,11 @@ TEST(TransferServiceP2PTest, PutOverwritesEmptyTempFile) {
 
 TEST(TransferServiceP2PTest, PutOverwritesNonEmptyTempFile) {
   TransferService service1;
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2;
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   std::string old_data = "old data";
@@ -658,11 +663,11 @@ TEST(TransferServiceP2PTest, PutOverwritesNonEmptyTempFile) {
 
 TEST(TransferServiceP2PTest, PutReplacesExistingFile) {
   TransferService service1;
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2;
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   std::string obj_id = "existing_object";
@@ -687,11 +692,11 @@ TEST(TransferServiceP2PTest, PutReplacesExistingFile) {
 
 TEST(TransferServiceP2PTest, PutFailsInRenameWhenTargetExistAsADirectory) {
   TransferService service1;
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2;
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   std::string data = "some data";
@@ -721,11 +726,11 @@ TEST(TransferServiceP2PTest, PutFailsInRenameWhenTargetExistAsADirectory) {
 
 TEST(TransferServiceP2PTest, GetOverwritesEmptyTempFile) {
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2("127.0.0.1");
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   std::string data = "some data here";
@@ -752,11 +757,11 @@ TEST(TransferServiceP2PTest, GetOverwritesEmptyTempFile) {
 
 TEST(TransferServiceP2PTest, GetOverwritesNonEmptyTempFile) {
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2("127.0.0.1");
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   std::string old_data = "old data";
@@ -784,11 +789,11 @@ TEST(TransferServiceP2PTest, GetOverwritesNonEmptyTempFile) {
 
 TEST(TransferServiceP2PTest, GetReplacesExistingFile) {
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2("127.0.0.1");
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   std::string old_data = "old data";
@@ -816,11 +821,11 @@ TEST(TransferServiceP2PTest, GetReplacesExistingFile) {
 
 TEST(TransferServiceP2PTest, GetFailsInRenameWhenTargetExistAsADirectory) {
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2("127.0.0.1");
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   std::string data = "some data";
@@ -858,11 +863,11 @@ TEST(TransferServiceP2PTest, TimestampsAreRecorded) {
   absl::AddLogSink(&sink);
 
   TransferService service1;
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2;
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   // Perform a Put
@@ -1153,7 +1158,7 @@ class FakeGetResponder {
 TEST(TransferServiceP2PTest, GetObjDoesNotConnectToDestAddress) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   std::string expected_data = "ssrf_test_payload";
@@ -1227,8 +1232,9 @@ class SpoofedDestAddressTest : public ::testing::TestWithParam<std::string> {};
 TEST_P(SpoofedDestAddressTest, GetResponseGoesBackOnRequestSocket) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   const std::string expected_data = "spoofed_dest_payload";
   const std::string source_obj_id = "spoofed_dest_source_obj";
@@ -1279,8 +1285,9 @@ INSTANTIATE_TEST_SUITE_P(
 TEST(TransferServiceP2PTest, GetRequestWithUnterminatedAddressFieldsIsServed) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   const std::string expected_data = "unterminated_payload";
   const std::string source_obj_id = "unterminated_source_obj";
@@ -1314,8 +1321,9 @@ TEST(TransferServiceP2PTest,
      GetRequestForUnopenableObjectReturnsErrorOnSameSocket) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   const std::string empty_obj_id = "unopenable_empty_obj";
   const std::string dir_obj_id = "unopenable_dir_obj";
@@ -1362,8 +1370,9 @@ TEST(TransferServiceP2PTest,
      UnsolicitedRespondToGetObjClosesConnectionWithoutWritingFile) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   const std::string dest_obj_id = "unsolicited_dest_obj";
   std::remove(dest_obj_id.c_str());
@@ -1396,8 +1405,9 @@ TEST(TransferServiceP2PTest,
 TEST(TransferServiceP2PTest, UnknownMessageTypeClosesConnection) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   int client_fd = ConnectToLocalPort(port1);
   ASSERT_GE(client_fd, 0);
@@ -1420,8 +1430,9 @@ TEST(TransferServiceP2PTest, UnknownMessageTypeClosesConnection) {
 TEST(TransferServiceP2PTest, UnsolicitedAckOnListenerClosesConnection) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   int client_fd = ConnectToLocalPort(port1);
   ASSERT_GE(client_fd, 0);
@@ -1452,8 +1463,9 @@ TEST(TransferServiceP2PTest, UnsolicitedErrorOnListenerDoesNotFailLocalTask) {
   int peer_listener = ListenOnLocalEphemeralPort(&peer_port);
   ASSERT_GE(peer_listener, 0);
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/2,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/2,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   std::future<TransferResult> actual_future = service1.AsyncGet(
       "any_source_obj", "127.0.0.1:" + std::to_string(peer_port), dest_obj_id);
@@ -1518,8 +1530,9 @@ TEST(TransferServiceP2PTest, GetRequestNamingLocalTaskIdDoesNotTouchLocalTask) {
   int peer_listener = ListenOnLocalEphemeralPort(&peer_port);
   ASSERT_GE(peer_listener, 0);
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/2,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/2,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   std::future<TransferResult> actual_future = service1.AsyncGet(
       "any_source_obj", "127.0.0.1:" + std::to_string(peer_port), dest_obj_id);
@@ -1575,8 +1588,9 @@ TEST(TransferServiceP2PTest, GetRequestNamingLocalTaskIdDoesNotTouchLocalTask) {
 TEST(TransferServiceP2PTest, ShutdownWhileResponderWaitsForAckIsSafe) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   const std::string expected_data = "shutdown_no_ack_payload";
   const std::string source_obj_id = "shutdown_no_ack_source_obj";
@@ -1605,7 +1619,7 @@ TEST(TransferServiceP2PTest, ShutdownWhileResponderWaitsForAckIsSafe) {
     close(client_fd);
   }
   TransferService service2("127.0.0.1");
-  EXPECT_GT(service2.Initialize(), 0);
+  EXPECT_GT(service2.Initialize(CwdBaseDir()), 0);
   service2.Shutdown();
   std::remove(source_obj_id.c_str());
 }
@@ -1616,8 +1630,9 @@ TEST(TransferServiceP2PTest, ShutdownWhileResponderWaitsForAckIsSafe) {
 TEST(TransferServiceP2PTest, ShutdownWhilePeerIsNotReadingGetResponseIsSafe) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   // Large enough to exceed any socket buffer autotuning on loopback.
   const std::string large_data(16 * 1024 * 1024, 'L');
@@ -1651,10 +1666,10 @@ TEST(TransferServiceP2PTest, ShutdownWhilePeerIsNotReadingGetResponseIsSafe) {
 TEST(TransferServiceP2PTest, GetSucceedsWhenRequesterAdvertisesUnreachableIp) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
   TransferService service2("203.0.113.5");
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
   const std::string expected_data = "reachable after all";
   const std::string source_obj_id = "unreachable_requester_source_obj";
@@ -1683,8 +1698,9 @@ TEST(TransferServiceP2PTest, GetSucceedsWhenRequesterAdvertisesUnreachableIp) {
 TEST(TransferServiceP2PTest, SequentialGetRequestsOnOneSocketAreServedInOrder) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   const int kNumRequests = 3;
   std::vector<std::string> source_obj_ids;
@@ -1731,8 +1747,9 @@ TEST(TransferServiceP2PTest, SequentialGetRequestsOnOneSocketAreServedInOrder) {
 TEST(TransferServiceP2PTest, ConcurrentGetRequestsBeyondThreadCountAreServed) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/2,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/2,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   const int kNumClients = 8;
   std::vector<std::string> source_obj_ids(kNumClients);
@@ -1788,8 +1805,9 @@ TEST(TransferServiceP2PTest, ConcurrentGetRequestsBeyondThreadCountAreServed) {
 TEST(TransferServiceP2PTest, ResponderSurvivesClientDisconnectMidResponse) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/1,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/1,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   // Large enough to exceed any socket buffer autotuning on loopback.
   const std::string large_data(16 * 1024 * 1024, 'L');
@@ -1837,8 +1855,9 @@ TEST(TransferServiceP2PTest, ResponderSurvivesClientDisconnectMidResponse) {
 TEST(TransferServiceP2PTest, ResponderSurvivesClientClosingInsteadOfAck) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/1,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/1,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   const std::string expected_data = "no_ack_then_next_payload";
   const std::string source_obj_id = "no_ack_next_source_obj";
@@ -1884,8 +1903,9 @@ class InvalidGetRequestTest : public ::testing::TestWithParam<std::string> {};
 TEST_P(InvalidGetRequestTest, RepliesWithErrorAndKeepsSocketUsable) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   const std::string expected_data = "valid_after_invalid_request";
   const std::string valid_obj_id = "invalid_request_valid_source_obj";
@@ -1930,8 +1950,9 @@ INSTANTIATE_TEST_SUITE_P(TransferServiceP2PTest, InvalidGetRequestTest,
 TEST(TransferServiceP2PTest, ReplyHeadersCarryNoBytesAfterTerminators) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/2,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/2,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   const std::string source_obj_id = "clean_header_source_obj";
   WriteTestFile(source_obj_id, "clean header payload");
@@ -1971,8 +1992,9 @@ TEST(TransferServiceP2PTest, ReplyHeadersCarryNoBytesAfterTerminators) {
 TEST(TransferServiceP2PTest, TruncatedPutLeavesNoTemporaryFile) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/2,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/2,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   const std::string dest_obj_id = "truncated_put_dest_obj";
   const std::string tmp_obj_id = dest_obj_id + ".tmp";
@@ -2010,8 +2032,9 @@ TEST(TransferServiceP2PTest,
      PutToUncreatableDestinationRepliesWithErrorAndKeepsSocketUsable) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   const std::string undeliverable_payload(256 * 1024, 'U');
   // A regular file as a path component makes the destination impossible to
@@ -2065,12 +2088,14 @@ TEST(TransferServiceP2PTest,
      PutFailsCleanlyAndReusesConnectionWhenDestinationCannotBeCreated) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   TransferService service2("127.0.0.1");
-  int port2 = service2.Initialize(/*listen_port=*/0, /*threads=*/4,
-                                  /*conn_pool_per_peer=*/1);
+  int port2 =
+      service2.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port2, 0);
   const std::string peer1_addr = "127.0.0.1:" + std::to_string(port1);
   std::string undeliverable_payload(256 * 1024, 'U');
@@ -2111,12 +2136,14 @@ TEST(TransferServiceP2PTest,
      GetFailsCleanlyAndReusesConnectionWhenDestinationCannotBeCreated) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   TransferService service2("127.0.0.1");
-  int port2 = service2.Initialize(/*listen_port=*/0, /*threads=*/4,
-                                  /*conn_pool_per_peer=*/1);
+  int port2 =
+      service2.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port2, 0);
   const std::string peer1_addr = "127.0.0.1:" + std::to_string(port1);
   const std::string large_obj_id = "api_get_uncreatable_large_source_obj";
@@ -2185,8 +2212,9 @@ TEST_P(MalformedGetResponseTest, RequesterFutureFailsInsteadOfHanging) {
     }
   });
   TransferService service2("127.0.0.1");
-  int port2 = service2.Initialize(/*listen_port=*/0, /*threads=*/2,
-                                  /*conn_pool_per_peer=*/1);
+  int port2 =
+      service2.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/2,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port2, 0);
 
   // When
@@ -2242,8 +2270,9 @@ TEST(TransferServiceP2PTest, GetWritesToLocalDestinationNotToPeerNamedPath) {
                               : MessageType::kError);
   });
   TransferService service2("127.0.0.1");
-  int port2 = service2.Initialize(/*listen_port=*/0, /*threads=*/2,
-                                  /*conn_pool_per_peer=*/1);
+  int port2 =
+      service2.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/2,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port2, 0);
 
   // When
@@ -2270,11 +2299,13 @@ TEST(TransferServiceP2PTest,
      GetReusesSinglePooledConnectionAfterSuccessAndError) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(0, /*threads=*/4, /*conn_pool_per_peer=*/1);
+  int port1 = service1.Initialize(CwdBaseDir(), 0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
 
   TransferService service2("127.0.0.1");
-  int port2 = service2.Initialize(0, /*threads=*/4, /*conn_pool_per_peer=*/1);
+  int port2 = service2.Initialize(CwdBaseDir(), 0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1);
   ASSERT_GT(port2, 0);
 
   std::string peer1_addr = "127.0.0.1:" + std::to_string(port1);
@@ -2315,11 +2346,11 @@ TEST(TransferServiceP2PTest,
 TEST(TransferServiceP2PTest, BidirectionalConcurrentGetAndPut) {
   // Given
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize();
+  int port1 = service1.Initialize(CwdBaseDir());
   ASSERT_GT(port1, 0);
 
   TransferService service2("127.0.0.1");
-  int port2 = service2.Initialize();
+  int port2 = service2.Initialize(CwdBaseDir());
   ASSERT_GT(port2, 0);
 
   std::string addr1 = "127.0.0.1:" + std::to_string(port1);
@@ -2393,8 +2424,9 @@ TEST(TransferServiceP2PTest,
   int silent_listener = ListenOnLocalEphemeralPort(&silent_port);
   ASSERT_GE(silent_listener, 0);
   TransferService service1("127.0.0.1");
-  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/2,
-                                  /*conn_pool_per_peer=*/1);
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/2,
+                          /*conn_pool_per_peer=*/1);
   ASSERT_GT(port1, 0);
   const std::string silent_addr = "127.0.0.1:" + std::to_string(silent_port);
   constexpr int kNumTasks = 6;  // More than the 2 workers, so 4 stay queued.
@@ -2418,6 +2450,273 @@ TEST(TransferServiceP2PTest,
     EXPECT_THROW(future.get(), std::runtime_error);
   }
   if (silent_listener >= 0) close(silent_listener);
+}
+
+// A throwaway directory tree for the base-directory tests:
+//   <tmp>/<unique>/        root(), canonical
+//   <tmp>/<unique>/base/   base(), the directory a service is confined to
+// Removed with everything in it when the object goes out of scope.
+class ScopedTestTree {
+ public:
+  ScopedTestTree() {
+    root_ = std::filesystem::temp_directory_path() /
+            ("transfer_service_base_dir_" + GenerateUuid());
+    std::filesystem::create_directories(root_ / "base");
+    root_ = std::filesystem::canonical(root_);
+  }
+  ~ScopedTestTree() { std::filesystem::remove_all(root_); }
+
+  std::filesystem::path root() const { return root_; }
+  std::filesystem::path base() const { return root_ / "base"; }
+
+ private:
+  std::filesystem::path root_;
+};
+
+// Sends one kPutObj with `payload` for `dest_obj_id` on `client_fd` and returns
+// the type of the reply, or kGetObj (never a reply type) when none arrives. A
+// kError reply must name the request's task; an ACK carries no task_id.
+MessageType PutOverRawSocket(int client_fd, const std::string& task_id,
+                             const std::string& dest_obj_id,
+                             const std::string& payload) {
+  ObjInfoHeader request = BuildPutRequest(task_id, dest_obj_id, payload.size());
+  EXPECT_TRUE(SendAll(client_fd, &request, kHeaderSize).ok());
+  EXPECT_TRUE(SendAll(client_fd, payload.data(), payload.size()).ok());
+  ObjInfoHeader response;
+  if (!RecvHeaderWithin(client_fd, &response, /*timeout_ms=*/10000)) {
+    return MessageType::kGetObj;
+  }
+  if (response.type == MessageType::kError) {
+    EXPECT_STREQ(response.task_id, task_id.c_str());
+  }
+  return response.type;
+}
+
+// A kPutObj whose destination resolves outside the service's base directory,
+// whether by an absolute path or by "..", is answered with kError, writes
+// nothing, and leaves the connection usable for a destination inside it.
+TEST(TransferServiceP2PTest, PutOutsideBaseDirIsRejectedAndSocketStaysUsable) {
+  // Given
+  ScopedTestTree tree;
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(tree.base().native(), /*listen_port=*/0,
+                                  /*threads=*/4, /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const std::string payload(64 * 1024, 'P');
+  const std::string absolute_outside = (tree.root() / "outside.obj").native();
+  const std::string traversal_outside =
+      (tree.base() / ".." / "traversal.obj").native();
+  const std::string inside = (tree.base() / "inside.obj").native();
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When
+  const MessageType actual_absolute_reply =
+      PutOverRawSocket(client_fd, "absolute_task", absolute_outside, payload);
+  const MessageType actual_traversal_reply =
+      PutOverRawSocket(client_fd, "traversal_task", traversal_outside, payload);
+  const MessageType actual_inside_reply =
+      PutOverRawSocket(client_fd, "inside_task", inside, payload);
+
+  // Then
+  EXPECT_EQ(MessageType::kError, actual_absolute_reply);
+  EXPECT_EQ(MessageType::kError, actual_traversal_reply);
+  EXPECT_EQ(MessageType::kAck, actual_inside_reply);
+  EXPECT_FALSE(std::filesystem::exists(absolute_outside));
+  EXPECT_FALSE(std::filesystem::exists(absolute_outside + ".tmp"));
+  EXPECT_FALSE(std::filesystem::exists(tree.root() / "traversal.obj"));
+  EXPECT_FALSE(std::filesystem::exists(tree.root() / "traversal.obj.tmp"));
+  VerifyFileContentAndRemove(inside, payload);
+
+  close(client_fd);
+  service1.Shutdown();
+}
+
+// A kGetObj for a file outside the base directory is answered with kError,
+// whether it names the file directly, through "..", or through a symlink
+// planted inside the base directory. The same socket still serves a file that
+// is inside.
+TEST(TransferServiceP2PTest, GetOutsideBaseDirIsRejectedAndSocketStaysUsable) {
+  // Given
+  ScopedTestTree tree;
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(tree.base().native(), /*listen_port=*/0,
+                                  /*threads=*/4, /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const std::string secret = (tree.root() / "secret.obj").native();
+  WriteTestFile(secret, "outside the base directory");
+  const std::string expected_inside_data = "inside the base directory";
+  const std::string inside = (tree.base() / "inside.obj").native();
+  WriteTestFile(inside, expected_inside_data);
+  const std::filesystem::path link = tree.base() / "link_to_secret.obj";
+  std::filesystem::create_symlink(secret, link);
+  const std::string requester_addr = "127.0.0.1:1";  // Unused by the service.
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When
+  const ObjInfoHeader actual_absolute_reply = SendRequestAndRecvResponse(
+      client_fd,
+      BuildGetRequest("absolute_task", secret, "dest.obj", requester_addr));
+  const ObjInfoHeader actual_traversal_reply = SendRequestAndRecvResponse(
+      client_fd, BuildGetRequest("traversal_task",
+                                 (tree.base() / ".." / "secret.obj").native(),
+                                 "dest.obj", requester_addr));
+  const ObjInfoHeader actual_symlink_reply = SendRequestAndRecvResponse(
+      client_fd, BuildGetRequest("symlink_task", link.native(), "dest.obj",
+                                 requester_addr));
+  const ObjInfoHeader actual_inside_reply = SendRequestAndRecvResponse(
+      client_fd,
+      BuildGetRequest("inside_task", inside, "dest.obj", requester_addr));
+  const std::string actual_inside_data =
+      RecvGetPayloadAndAck(client_fd, actual_inside_reply);
+
+  // Then
+  EXPECT_EQ(MessageType::kError, actual_absolute_reply.type);
+  EXPECT_STREQ(actual_absolute_reply.task_id, "absolute_task");
+  EXPECT_EQ(MessageType::kError, actual_traversal_reply.type);
+  EXPECT_STREQ(actual_traversal_reply.task_id, "traversal_task");
+  EXPECT_EQ(MessageType::kError, actual_symlink_reply.type);
+  EXPECT_STREQ(actual_symlink_reply.task_id, "symlink_task");
+  EXPECT_EQ(MessageType::kRespondToGetObj, actual_inside_reply.type);
+  EXPECT_EQ(expected_inside_data, actual_inside_data);
+
+  close(client_fd);
+  service1.Shutdown();
+}
+
+// An AsyncGet whose local destination is outside the base directory fails at
+// once, with the reason, and nothing is sent to the peer.
+TEST(TransferServiceP2PTest,
+     GetWithLocalDestinationOutsideBaseDirFailsBeforeContactingPeer) {
+  // Given
+  ScopedTestTree tree;
+  int peer_port = 0;
+  int peer_listener = ListenOnLocalEphemeralPort(&peer_port);
+  ASSERT_GE(peer_listener, 0);
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(tree.base().native(), /*listen_port=*/0,
+                                  /*threads=*/4, /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const std::string outside_dest = (tree.root() / "outside_dest.obj").native();
+
+  // When
+  std::future<TransferResult> future = service1.AsyncGet(
+      "any_source_obj", "127.0.0.1:" + std::to_string(peer_port), outside_dest);
+  const bool actual_ready = FutureReadyWithin(future, std::chrono::seconds(5));
+  const bool actual_peer_idle = ListenerStaysIdle(peer_listener, 300);
+
+  // Then
+  ASSERT_TRUE(actual_ready) << "AsyncGet did not fail fast";
+  EXPECT_THROW(
+      {
+        try {
+          future.get();
+        } catch (const std::runtime_error& e) {
+          EXPECT_THAT(e.what(),
+                      testing::HasSubstr("outside the base directory"));
+          throw;
+        }
+      },
+      std::runtime_error);
+  EXPECT_TRUE(actual_peer_idle) << "a request was sent for a rejected Get";
+  EXPECT_FALSE(std::filesystem::exists(outside_dest));
+
+  close(peer_listener);
+  service1.Shutdown();
+}
+
+// Relative object ids are resolved against the working directory and then
+// confined like any other: with the working directory as the base, "../x" is
+// rejected and "x" is served. Every other test in this file relies on this.
+TEST(TransferServiceP2PTest, RelativeIdsAreConfinedToWorkingDirectoryBase) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 =
+      service1.Initialize(CwdBaseDir(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const std::string payload = "stays in the working directory";
+  const std::string escaped = "../cwd_escape_" + GenerateUuid() + ".obj";
+  const std::string inside = "cwd_inside_" + GenerateUuid() + ".obj";
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When
+  const MessageType actual_escaped_reply =
+      PutOverRawSocket(client_fd, "escaped_task", escaped, payload);
+  const MessageType actual_inside_reply =
+      PutOverRawSocket(client_fd, "inside_task", inside, payload);
+
+  // Then
+  EXPECT_EQ(MessageType::kError, actual_escaped_reply);
+  EXPECT_FALSE(std::filesystem::exists(escaped));
+  EXPECT_FALSE(std::filesystem::exists(escaped + ".tmp"));
+  EXPECT_EQ(MessageType::kAck, actual_inside_reply);
+  VerifyFileContentAndRemove(inside, payload);
+
+  close(client_fd);
+  service1.Shutdown();
+}
+
+// The base directory is compared by its real location: a service configured
+// with a symlink to the directory accepts ids spelled either way.
+TEST(TransferServiceP2PTest, BaseDirGivenAsSymlinkIsResolved) {
+  // Given
+  ScopedTestTree tree;
+  const std::filesystem::path base_link = tree.root() / "base_link";
+  std::filesystem::create_directory_symlink(tree.base(), base_link);
+  TransferService service1("127.0.0.1");
+  int port1 =
+      service1.Initialize(base_link.native(), /*listen_port=*/0, /*threads=*/4,
+                          /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const std::string payload = "reachable through either spelling";
+  const std::string via_real = (tree.base() / "via_real.obj").native();
+  const std::string via_link = (base_link / "via_link.obj").native();
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When
+  const MessageType actual_real_reply =
+      PutOverRawSocket(client_fd, "real_task", via_real, payload);
+  const MessageType actual_link_reply =
+      PutOverRawSocket(client_fd, "link_task", via_link, payload);
+
+  // Then
+  EXPECT_EQ(MessageType::kAck, actual_real_reply);
+  EXPECT_EQ(MessageType::kAck, actual_link_reply);
+  VerifyFileContentAndRemove(via_real, payload);
+  VerifyFileContentAndRemove((tree.base() / "via_link.obj").native(), payload);
+
+  close(client_fd);
+  service1.Shutdown();
+}
+
+// Initialize() creates a missing base directory and refuses one that exists
+// but is not a directory.
+TEST(TransferServiceP2PTest, InitializeCreatesBaseDirAndRejectsNonDirectory) {
+  // Given
+  ScopedTestTree tree;
+  const std::filesystem::path missing = tree.root() / "not" / "yet" / "there";
+  const std::string regular_file = (tree.root() / "a_file").native();
+  WriteTestFile(regular_file, "not a directory");
+  TransferService service_missing("127.0.0.1");
+  TransferService service_file("127.0.0.1");
+
+  // When
+  const int actual_missing_port =
+      service_missing.Initialize(missing.native(), /*listen_port=*/0,
+                                 /*threads=*/4, /*conn_pool_per_peer=*/1);
+  const int actual_file_port = service_file.Initialize(
+      regular_file, /*listen_port=*/0, /*threads=*/4, /*conn_pool_per_peer=*/1);
+
+  // Then
+  EXPECT_GT(actual_missing_port, 0);
+  EXPECT_TRUE(std::filesystem::is_directory(missing));
+  EXPECT_EQ(-1, actual_file_port);
+
+  service_missing.Shutdown();
 }
 
 }  // namespace

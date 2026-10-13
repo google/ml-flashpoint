@@ -25,28 +25,34 @@ from ml_flashpoint.replication.replication_manager import PairwiseReplicationStr
 from ml_flashpoint.replication.transfer_service import transfer_service_ext
 
 
-def run_service(service, port_container, rank):
+def run_service(service, port_container, rank, base_dir):
     """Target function for running a TransferService in a thread."""
-    port = service.initialize(0, global_rank=rank)
+    port = service.initialize(base_dir, global_rank=rank)
     port_container.append(port)
 
 
 @pytest.fixture
-def services():
-    """Fixture to set up and tear down sender and receiver TransferServices."""
+def services(tmp_path):
+    """Fixture to set up and tear down sender and receiver TransferServices.
+
+    Both services are confined to `tmp_path`, where the tests place their objects.
+    """
     sender_service = transfer_service_ext.TransferService()
     receiver_service = transfer_service_ext.TransferService()
 
     sender_port_container = []
     receiver_port_container = []
+    base_dir = str(tmp_path)
 
     # Start receiver service to get its port
-    receiver_thread = threading.Thread(target=run_service, args=(receiver_service, receiver_port_container, 1))
+    receiver_thread = threading.Thread(
+        target=run_service, args=(receiver_service, receiver_port_container, 1, base_dir)
+    )
     receiver_thread.daemon = True
     receiver_thread.start()
 
     # Start sender service
-    sender_thread = threading.Thread(target=run_service, args=(sender_service, sender_port_container, 0))
+    sender_thread = threading.Thread(target=run_service, args=(sender_service, sender_port_container, 0, base_dir))
     sender_thread.daemon = True
     sender_thread.start()
 

@@ -188,7 +188,9 @@ Also create an `MLFlashpointCheckpointLoader` with those dependencies, and use t
 # Initialize dependencies (shared singletons)
 checkpoint_object_manager = CheckpointObjectManager()
 replication_manager = ReplicationManager()
-replication_manager.initialize(checkpoint_object_manager)
+# base_dir confines replication to the ML Flashpoint base path: peers can only
+# read and write checkpoint objects inside it.
+replication_manager.initialize(checkpoint_object_manager, base_dir=mlflashpoint_base_path)
 
 checkpoint_loader = DefaultMLFlashpointCheckpointLoader(
     checkpoint_object_manager=checkpoint_object_manager,
@@ -262,7 +264,9 @@ from ml_flashpoint.replication.replication_manager import ReplicationManager
 # Initialize dependencies (shared singletons)
 checkpoint_object_manager = CheckpointObjectManager()
 replication_manager = ReplicationManager()
-replication_manager.initialize(checkpoint_object_manager)
+# base_dir confines replication to the ML Flashpoint base path: peers can only
+# read and write checkpoint objects inside it.
+replication_manager.initialize(checkpoint_object_manager, base_dir=mlflashpoint_base_path)
 
 # Instantiate the StorageWriter
 memory_storage_writer = MemoryStorageWriter(

@@ -98,7 +98,7 @@ def wrap_trainer_and_auto_resume_with_mlflashpoint(
 
     ckpt_obj_manager = CheckpointObjectManager(pool_config=pool_config)
     replication_manager = ReplicationManager()
-    replication_manager.initialize(checkpoint_object_manager=ckpt_obj_manager)
+    replication_manager.initialize(checkpoint_object_manager=ckpt_obj_manager, base_dir=str(flashpoint_base_container))
 
     ckpt_loader = NeMoMLFlashpointCheckpointLoader(
         checkpoint_object_manager=ckpt_obj_manager,

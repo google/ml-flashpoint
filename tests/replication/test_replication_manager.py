@@ -55,11 +55,11 @@ def test_initialize_binds_port_success(replication_manager, mocker):
     replication_manager._gather_replication_service_addresses = mocker.MagicMock(side_effect=mock_gather)
 
     # When
-    replication_manager.initialize(mock_checkpoint_manager, listen_port=0)
+    replication_manager.initialize(mock_checkpoint_manager, listen_port=0, base_dir="/flashpoint/base")
 
     # Then
     assert replication_manager._listen_port == 12345
-    mock_transfer_service_instance.initialize.assert_called_once_with(0, global_rank=0)
+    mock_transfer_service_instance.initialize.assert_called_once_with(0, global_rank=0, base_dir="/flashpoint/base")
 
 
 def test_initialize_binds_port_failure(replication_manager, mocker):
@@ -78,7 +78,42 @@ def test_initialize_binds_port_failure(replication_manager, mocker):
 
     # When/Then
     with pytest.raises(RuntimeError, match="Failed to initialize TransferService"):
+        replication_manager.initialize(mock_checkpoint_manager, base_dir="/flashpoint/base")
+
+
+def test_initialize_requires_base_dir_when_creating_transfer_service(replication_manager, mocker):
+    """Tests that initialize refuses to create a TransferService without a base directory to confine it to."""
+    # Given
+    replication_manager._transfer_service = None
+    mock_transfer_service_cls = mocker.patch(
+        "ml_flashpoint.replication.transfer_service.transfer_service_ext.TransferService"
+    )
+    mock_checkpoint_manager = mocker.MagicMock()
+
+    # When/Then
+    with pytest.raises(ValueError, match="base_dir is required"):
         replication_manager.initialize(mock_checkpoint_manager)
+    mock_transfer_service_cls.assert_not_called()
+
+
+def test_initialize_accepts_preconfigured_transfer_service_without_base_dir(replication_manager, mocker):
+    """Tests that a pre-configured TransferService is used as-is, without requiring a base directory."""
+    # Given
+    expected_transfer_service = mocker.MagicMock()
+    mock_checkpoint_manager = mocker.MagicMock()
+    replication_manager._initialize_address = mocker.MagicMock()
+    repl_strategy = mocker.MagicMock(spec=["get_destination_addresses"])
+
+    # When
+    replication_manager.initialize(
+        mock_checkpoint_manager,
+        replication_transfer_service=expected_transfer_service,
+        repl_strategy=repl_strategy,
+    )
+
+    # Then
+    assert replication_manager._transfer_service is expected_transfer_service
+    expected_transfer_service.initialize.assert_not_called()
 
 
 def test_async_replicate_no_strategy(replication_manager, mocker):

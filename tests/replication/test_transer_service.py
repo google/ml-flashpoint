@@ -57,7 +57,9 @@ def safe_remove_file(filepath: str) -> None:
 
 
 @pytest.fixture(name="transfer_services")
-def fixture_transfer_services() -> tuple[
+def fixture_transfer_services(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[
     transfer_service_ext.TransferService,
     transfer_service_ext.TransferService,
     str,
@@ -66,7 +68,10 @@ def fixture_transfer_services() -> tuple[
     """Initializes and yields two TransferService instances for testing.
 
     This fixture handles the lifecycle of two services, ensuring they are
-    properly initialized before a test runs and shut down afterward.
+    properly initialized before a test runs and shut down afterward. Both
+    services use `tmp_path` as their base directory, and the working directory
+    is switched to it, so the relative object ids the tests use resolve inside
+    the base directory and no test files are left in the repository.
 
     Yields:
         A tuple containing:
@@ -75,6 +80,7 @@ def fixture_transfer_services() -> tuple[
             - The network address (host:port) of the first service.
             - The network address (host:port) of the second service.
     """
+    monkeypatch.chdir(tmp_path)
     service1 = transfer_service_ext.TransferService()
     service2 = transfer_service_ext.TransferService()
 
@@ -83,8 +89,8 @@ def fixture_transfer_services() -> tuple[
     addr1 = f"127.0.0.1:{port1}"
     addr2 = f"127.0.0.1:{port2}"
 
-    service1.initialize(listen_port=port1)
-    service2.initialize(listen_port=port2)
+    service1.initialize(listen_port=port1, base_dir=str(tmp_path))
+    service2.initialize(listen_port=port2, base_dir=str(tmp_path))
 
     yield service1, service2, addr1, addr2
 
@@ -351,6 +357,82 @@ def test_async_get_non_existent_object(
     # Then
     with pytest.raises(RuntimeError, match="Received error message"):
         get_future.result(timeout=10)
+
+
+def test_async_put_outside_base_dir_is_rejected(
+    transfer_services: tuple[
+        transfer_service_ext.TransferService,
+        transfer_service_ext.TransferService,
+        str,
+        str,
+    ],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Verifies that the receiving service rejects a destination outside its base directory and writes nothing."""
+    # Given
+    service1, _, _, addr2 = transfer_services
+    outside_dir = tmp_path_factory.mktemp("outside_put")
+    dest_object_id = str(outside_dir / "escaped.object")
+    data_to_send = np.arange(20, dtype=np.int64)
+
+    # When
+    put_future = service1.async_put(data_to_send.ctypes.data, data_to_send.nbytes, addr2, dest_object_id)
+
+    # Then
+    with pytest.raises(RuntimeError, match="Received error from destination"):
+        put_future.result(timeout=10)
+    assert not pathlib.Path(dest_object_id).exists()
+    assert not pathlib.Path(dest_object_id + ".tmp").exists()
+
+
+def test_async_get_of_object_outside_peer_base_dir_is_rejected(
+    transfer_services: tuple[
+        transfer_service_ext.TransferService,
+        transfer_service_ext.TransferService,
+        str,
+        str,
+    ],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Verifies that a peer refuses to serve a readable file that lies outside its base directory."""
+    # Given
+    _, service2, addr1, _ = transfer_services
+    outside_dir = tmp_path_factory.mktemp("outside_get")
+    secret_path = outside_dir / "secret.object"
+    secret_path.write_bytes(b"not for peers")
+    dest_object_id = "fetched_secret.object"
+
+    # When
+    get_future = service2.async_get(str(secret_path), addr1, dest_object_id)
+
+    # Then
+    with pytest.raises(RuntimeError, match="Received error message"):
+        get_future.result(timeout=10)
+    assert not pathlib.Path(dest_object_id).exists()
+
+
+def test_async_get_with_local_destination_outside_base_dir_fails_fast(
+    transfer_services: tuple[
+        transfer_service_ext.TransferService,
+        transfer_service_ext.TransferService,
+        str,
+        str,
+    ],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Verifies that async_get fails with the reason when the local destination is outside the base directory."""
+    # Given
+    _, service2, addr1, _ = transfer_services
+    outside_dir = tmp_path_factory.mktemp("outside_dest")
+    dest_object_id = str(outside_dir / "escaped.object")
+
+    # When
+    get_future = service2.async_get("any_source.object", addr1, dest_object_id)
+
+    # Then
+    with pytest.raises(RuntimeError, match="outside the base directory"):
+        get_future.result(timeout=10)
+    assert not pathlib.Path(dest_object_id).exists()
 
 
 def test_concurrent_and_repeated_async_get(

@@ -17,6 +17,7 @@
 #ifndef ML_FLASHPOINT_REPLICATION_TRANSFER_SERVICE_H_
 #define ML_FLASHPOINT_REPLICATION_TRANSFER_SERVICE_H_
 
+#include <filesystem>
 #include <future>
 #include <optional>
 #include <string>
@@ -72,11 +73,19 @@ class TransferService final {
   //            workers in total.
   //   conn_pool_per_peer: The size of the connection pool for each peer.
   //   global_rank: The global rank of the process.
+  //   base_dir: The directory that confines every object id this service
+  //             reads (kGetObj from a peer) or writes (kPutObj from a peer,
+  //             and the local destination of AsyncGet). An id that resolves
+  //             outside it, after following symlinks, is rejected with
+  //             kError. The directory is created if it does not exist. Empty
+  //             means the current working directory; relative object ids are
+  //             resolved against the current working directory either way.
   //
   // Returns:
   //   The port the service is listening on, or -1 on failure.
   int Initialize(int listen_port = 0, int threads = 16,
-                 int conn_pool_per_peer = 16, int global_rank = -1);
+                 int conn_pool_per_peer = 16, int global_rank = -1,
+                 const std::string& base_dir = "");
 
   // Shuts down the transfer service gracefully.
   void Shutdown();
@@ -88,7 +97,8 @@ class TransferService final {
   //   data_size: Size of the data in bytes.
   //   dest_address: The destination service address, expected in "host:port"
   //                 format (e.g., "127.0.0.1:12345").
-  //   dest_obj_id: A unique identifier for the object at the destination.
+  //   dest_obj_id: A unique identifier for the object at the destination. The
+  //                destination checks it against its own base directory.
   //
   // Returns:
   //   A `std::future<TransferResult>` that will be set when the transfer
@@ -100,10 +110,13 @@ class TransferService final {
   // Asynchronously requests an object from the specified peer.
   //
   // Args:
-  //   source_obj_id: The ID of the object to request from the remote peer.
+  //   source_obj_id: The ID of the object to request from the remote peer. The
+  //                  peer checks it against its own base directory.
   //   source_address: The source service address, expected in "host:port"
   //                   format (e.g., "127.0.0.1:12345").
-  //   dest_obj_id: The ID to assign to the received object locally.
+  //   dest_obj_id: The ID to assign to the received object locally. It must
+  //                be inside this service's base directory; otherwise the
+  //                returned future fails before anything is sent.
   //
   // Returns:
   //   A `std::future<TransferResult>` that will be set when the transfer
@@ -167,6 +180,9 @@ class TransferService final {
       local_ip_address_;  // User input local ip address, only used for testing.
   std::string local_address_;  // Local address used in data transfer.
   int global_rank_ = -1;
+  // Absolute, canonical directory that every object id must resolve into. Set
+  // by Initialize() before running_ becomes true and read-only afterwards.
+  std::filesystem::path base_dir_;
 
   // Two separate pools are required. An outbound task (Put/Get) blocks a
   // worker for the whole transfer, including the wait for the peer's

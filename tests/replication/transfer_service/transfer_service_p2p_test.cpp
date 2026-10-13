@@ -42,6 +42,7 @@
 #include "gtest/gtest.h"
 #include "net_util.h"
 #include "protocol.h"
+#include "transfer_helpers.h"
 #include "transfer_service.h"
 
 namespace ml_flashpoint::replication::transfer_service {
@@ -2418,6 +2419,275 @@ TEST(TransferServiceP2PTest,
     EXPECT_THROW(future.get(), std::runtime_error);
   }
   if (silent_listener >= 0) close(silent_listener);
+}
+
+// A throwaway directory tree for the base-directory tests:
+//   <tmp>/<unique>/        root(), canonical
+//   <tmp>/<unique>/base/   base(), the directory a service is confined to
+// Removed with everything in it when the object goes out of scope.
+class ScopedTestTree {
+ public:
+  ScopedTestTree() {
+    root_ = std::filesystem::temp_directory_path() /
+            ("transfer_service_base_dir_" + GenerateUuid());
+    std::filesystem::create_directories(root_ / "base");
+    root_ = std::filesystem::canonical(root_);
+  }
+  ~ScopedTestTree() { std::filesystem::remove_all(root_); }
+
+  std::filesystem::path root() const { return root_; }
+  std::filesystem::path base() const { return root_ / "base"; }
+
+ private:
+  std::filesystem::path root_;
+};
+
+// Sends one kPutObj with `payload` for `dest_obj_id` on `client_fd` and returns
+// the type of the reply, or kGetObj (never a reply type) when none arrives. A
+// kError reply must name the request's task; an ACK carries no task_id.
+MessageType PutOverRawSocket(int client_fd, const std::string& task_id,
+                             const std::string& dest_obj_id,
+                             const std::string& payload) {
+  ObjInfoHeader request = BuildPutRequest(task_id, dest_obj_id, payload.size());
+  EXPECT_TRUE(SendAll(client_fd, &request, kHeaderSize).ok());
+  EXPECT_TRUE(SendAll(client_fd, payload.data(), payload.size()).ok());
+  ObjInfoHeader response;
+  if (!RecvHeaderWithin(client_fd, &response, /*timeout_ms=*/10000)) {
+    return MessageType::kGetObj;
+  }
+  if (response.type == MessageType::kError) {
+    EXPECT_STREQ(response.task_id, task_id.c_str());
+  }
+  return response.type;
+}
+
+// A kPutObj whose destination resolves outside the service's base directory,
+// whether by an absolute path or by "..", is answered with kError, writes
+// nothing, and leaves the connection usable for a destination inside it.
+TEST(TransferServiceP2PTest, PutOutsideBaseDirIsRejectedAndSocketStaysUsable) {
+  // Given
+  ScopedTestTree tree;
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1, /*global_rank=*/-1,
+                                  tree.base().native());
+  ASSERT_GT(port1, 0);
+  const std::string payload(64 * 1024, 'P');
+  const std::string absolute_outside = (tree.root() / "outside.obj").native();
+  const std::string traversal_outside =
+      (tree.base() / ".." / "traversal.obj").native();
+  const std::string inside = (tree.base() / "inside.obj").native();
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When
+  const MessageType actual_absolute_reply =
+      PutOverRawSocket(client_fd, "absolute_task", absolute_outside, payload);
+  const MessageType actual_traversal_reply =
+      PutOverRawSocket(client_fd, "traversal_task", traversal_outside, payload);
+  const MessageType actual_inside_reply =
+      PutOverRawSocket(client_fd, "inside_task", inside, payload);
+
+  // Then
+  EXPECT_EQ(MessageType::kError, actual_absolute_reply);
+  EXPECT_EQ(MessageType::kError, actual_traversal_reply);
+  EXPECT_EQ(MessageType::kAck, actual_inside_reply);
+  EXPECT_FALSE(std::filesystem::exists(absolute_outside));
+  EXPECT_FALSE(std::filesystem::exists(absolute_outside + ".tmp"));
+  EXPECT_FALSE(std::filesystem::exists(tree.root() / "traversal.obj"));
+  EXPECT_FALSE(std::filesystem::exists(tree.root() / "traversal.obj.tmp"));
+  VerifyFileContentAndRemove(inside, payload);
+
+  close(client_fd);
+  service1.Shutdown();
+}
+
+// A kGetObj for a file outside the base directory is answered with kError,
+// whether it names the file directly, through "..", or through a symlink
+// planted inside the base directory. The same socket still serves a file that
+// is inside.
+TEST(TransferServiceP2PTest, GetOutsideBaseDirIsRejectedAndSocketStaysUsable) {
+  // Given
+  ScopedTestTree tree;
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1, /*global_rank=*/-1,
+                                  tree.base().native());
+  ASSERT_GT(port1, 0);
+  const std::string secret = (tree.root() / "secret.obj").native();
+  WriteTestFile(secret, "outside the base directory");
+  const std::string expected_inside_data = "inside the base directory";
+  const std::string inside = (tree.base() / "inside.obj").native();
+  WriteTestFile(inside, expected_inside_data);
+  const std::filesystem::path link = tree.base() / "link_to_secret.obj";
+  std::filesystem::create_symlink(secret, link);
+  const std::string requester_addr = "127.0.0.1:1";  // Unused by the service.
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When
+  const ObjInfoHeader actual_absolute_reply = SendRequestAndRecvResponse(
+      client_fd,
+      BuildGetRequest("absolute_task", secret, "dest.obj", requester_addr));
+  const ObjInfoHeader actual_traversal_reply = SendRequestAndRecvResponse(
+      client_fd, BuildGetRequest("traversal_task",
+                                 (tree.base() / ".." / "secret.obj").native(),
+                                 "dest.obj", requester_addr));
+  const ObjInfoHeader actual_symlink_reply = SendRequestAndRecvResponse(
+      client_fd, BuildGetRequest("symlink_task", link.native(), "dest.obj",
+                                 requester_addr));
+  const ObjInfoHeader actual_inside_reply = SendRequestAndRecvResponse(
+      client_fd,
+      BuildGetRequest("inside_task", inside, "dest.obj", requester_addr));
+  const std::string actual_inside_data =
+      RecvGetPayloadAndAck(client_fd, actual_inside_reply);
+
+  // Then
+  EXPECT_EQ(MessageType::kError, actual_absolute_reply.type);
+  EXPECT_STREQ(actual_absolute_reply.task_id, "absolute_task");
+  EXPECT_EQ(MessageType::kError, actual_traversal_reply.type);
+  EXPECT_STREQ(actual_traversal_reply.task_id, "traversal_task");
+  EXPECT_EQ(MessageType::kError, actual_symlink_reply.type);
+  EXPECT_STREQ(actual_symlink_reply.task_id, "symlink_task");
+  EXPECT_EQ(MessageType::kRespondToGetObj, actual_inside_reply.type);
+  EXPECT_EQ(expected_inside_data, actual_inside_data);
+
+  close(client_fd);
+  service1.Shutdown();
+}
+
+// An AsyncGet whose local destination is outside the base directory fails at
+// once, with the reason, and nothing is sent to the peer.
+TEST(TransferServiceP2PTest,
+     GetWithLocalDestinationOutsideBaseDirFailsBeforeContactingPeer) {
+  // Given
+  ScopedTestTree tree;
+  int peer_port = 0;
+  int peer_listener = ListenOnLocalEphemeralPort(&peer_port);
+  ASSERT_GE(peer_listener, 0);
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1, /*global_rank=*/-1,
+                                  tree.base().native());
+  ASSERT_GT(port1, 0);
+  const std::string outside_dest = (tree.root() / "outside_dest.obj").native();
+
+  // When
+  std::future<TransferResult> future = service1.AsyncGet(
+      "any_source_obj", "127.0.0.1:" + std::to_string(peer_port), outside_dest);
+  const bool actual_ready = FutureReadyWithin(future, std::chrono::seconds(5));
+  const bool actual_peer_idle = ListenerStaysIdle(peer_listener, 300);
+
+  // Then
+  ASSERT_TRUE(actual_ready) << "AsyncGet did not fail fast";
+  EXPECT_THROW(
+      {
+        try {
+          future.get();
+        } catch (const std::runtime_error& e) {
+          EXPECT_THAT(e.what(),
+                      testing::HasSubstr("outside the base directory"));
+          throw;
+        }
+      },
+      std::runtime_error);
+  EXPECT_TRUE(actual_peer_idle) << "a request was sent for a rejected Get";
+  EXPECT_FALSE(std::filesystem::exists(outside_dest));
+
+  close(peer_listener);
+  service1.Shutdown();
+}
+
+// Without an explicit base directory the service is confined to its current
+// working directory, which is what every other test in this file relies on.
+TEST(TransferServiceP2PTest, DefaultBaseDirIsCurrentWorkingDirectory) {
+  // Given
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1);
+  ASSERT_GT(port1, 0);
+  const std::string payload = "stays in the working directory";
+  const std::string escaped = "../cwd_escape_" + GenerateUuid() + ".obj";
+  const std::string inside = "cwd_inside_" + GenerateUuid() + ".obj";
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When
+  const MessageType actual_escaped_reply =
+      PutOverRawSocket(client_fd, "escaped_task", escaped, payload);
+  const MessageType actual_inside_reply =
+      PutOverRawSocket(client_fd, "inside_task", inside, payload);
+
+  // Then
+  EXPECT_EQ(MessageType::kError, actual_escaped_reply);
+  EXPECT_FALSE(std::filesystem::exists(escaped));
+  EXPECT_FALSE(std::filesystem::exists(escaped + ".tmp"));
+  EXPECT_EQ(MessageType::kAck, actual_inside_reply);
+  VerifyFileContentAndRemove(inside, payload);
+
+  close(client_fd);
+  service1.Shutdown();
+}
+
+// The base directory is compared by its real location: a service configured
+// with a symlink to the directory accepts ids spelled either way.
+TEST(TransferServiceP2PTest, BaseDirGivenAsSymlinkIsResolved) {
+  // Given
+  ScopedTestTree tree;
+  const std::filesystem::path base_link = tree.root() / "base_link";
+  std::filesystem::create_directory_symlink(tree.base(), base_link);
+  TransferService service1("127.0.0.1");
+  int port1 = service1.Initialize(/*listen_port=*/0, /*threads=*/4,
+                                  /*conn_pool_per_peer=*/1, /*global_rank=*/-1,
+                                  base_link.native());
+  ASSERT_GT(port1, 0);
+  const std::string payload = "reachable through either spelling";
+  const std::string via_real = (tree.base() / "via_real.obj").native();
+  const std::string via_link = (base_link / "via_link.obj").native();
+  int client_fd = ConnectToLocalPort(port1);
+  ASSERT_GE(client_fd, 0);
+
+  // When
+  const MessageType actual_real_reply =
+      PutOverRawSocket(client_fd, "real_task", via_real, payload);
+  const MessageType actual_link_reply =
+      PutOverRawSocket(client_fd, "link_task", via_link, payload);
+
+  // Then
+  EXPECT_EQ(MessageType::kAck, actual_real_reply);
+  EXPECT_EQ(MessageType::kAck, actual_link_reply);
+  VerifyFileContentAndRemove(via_real, payload);
+  VerifyFileContentAndRemove((tree.base() / "via_link.obj").native(), payload);
+
+  close(client_fd);
+  service1.Shutdown();
+}
+
+// Initialize() creates a missing base directory and refuses one that exists
+// but is not a directory.
+TEST(TransferServiceP2PTest, InitializeCreatesBaseDirAndRejectsNonDirectory) {
+  // Given
+  ScopedTestTree tree;
+  const std::filesystem::path missing = tree.root() / "not" / "yet" / "there";
+  const std::string regular_file = (tree.root() / "a_file").native();
+  WriteTestFile(regular_file, "not a directory");
+  TransferService service_missing("127.0.0.1");
+  TransferService service_file("127.0.0.1");
+
+  // When
+  const int actual_missing_port = service_missing.Initialize(
+      /*listen_port=*/0, /*threads=*/4, /*conn_pool_per_peer=*/1,
+      /*global_rank=*/-1, missing.native());
+  const int actual_file_port = service_file.Initialize(
+      /*listen_port=*/0, /*threads=*/4, /*conn_pool_per_peer=*/1,
+      /*global_rank=*/-1, regular_file);
+
+  // Then
+  EXPECT_GT(actual_missing_port, 0);
+  EXPECT_TRUE(std::filesystem::is_directory(missing));
+  EXPECT_EQ(-1, actual_file_port);
+
+  service_missing.Shutdown();
 }
 
 }  // namespace

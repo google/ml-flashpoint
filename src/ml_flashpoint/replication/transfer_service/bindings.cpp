@@ -35,13 +35,24 @@ PYBIND11_MODULE(transfer_service_ext, m) {
       .def(py::init<>())
 
       // Synchronous methods remain unchanged (still blocking)
-      .def("initialize", &TransferService::Initialize, py::arg("listen_port"),
-           py::arg("threads") = 16, py::arg("conn_pool_per_peer") = 16,
-           py::arg("global_rank") = -1,
-           "Initializes and starts the C++ transfer service. `threads` is the "
-           "size of each of the two worker pools, one for outbound tasks "
-           "(async_put/async_get) and one for inbound requests from peers, so "
-           "the service runs 2 * threads worker threads.")
+      .def(
+          "initialize",
+          [](TransferService& self, int listen_port,
+             const std::string& base_dir, int threads, int conn_pool_per_peer,
+             int global_rank) {
+            return self.Initialize(listen_port, threads, conn_pool_per_peer,
+                                   global_rank, base_dir);
+          },
+          py::arg("listen_port"), py::arg("base_dir"), py::arg("threads") = 16,
+          py::arg("conn_pool_per_peer") = 16, py::arg("global_rank") = -1,
+          "Initializes and starts the C++ transfer service. `base_dir` is the "
+          "directory that confines every object id the service reads for a "
+          "peer or writes on its behalf: an id that resolves outside it, after "
+          "following symlinks, is rejected with an error. It is created if it "
+          "does not exist. `threads` is the size of each of the two worker "
+          "pools, one for outbound tasks (async_put/async_get) and one for "
+          "inbound requests from peers, so the service runs 2 * threads worker "
+          "threads.")
 
       .def("shutdown", &TransferService::Shutdown,
            "Stops the C++ transer service.")
